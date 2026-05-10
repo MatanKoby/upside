@@ -1,19 +1,24 @@
 # Upside — Build Queue
 
 Reference spec: UPSIDE_MVP_SPEC.md
+Collaboration protocol (claim, hand-off, commit conventions): AGENTS.md
 
 ## How this works
-- Each batch is a self-contained unit of work for Claude Code
+- Each batch is a self-contained unit of work for an agent (Claude Code or Cursor)
 - Process in FIFO order unless noted otherwise
 - A batch can be amended BEFORE the agent starts it (add items under the batch)
-- Once a batch is IN PROGRESS, it's locked — further changes go into a new batch
-- Mark batches as DONE when complete
+- Once a batch is IN PROGRESS, it's locked — further scope changes go into a new batch
+- Each batch carries four state fields: `Status`, `Owner`, `Started`, `Finished`
+- Claim a batch by following the claim protocol in AGENTS.md (pull → flip Status/Owner/Started → commit). Finish by moving it under `## Completed` with `Status: DONE`.
 
 ---
 
 ## Batch 1: Portfolio home screen [READY]
 
-**Status:** READY — agent can start this now
+**Status:** READY
+**Owner:** none
+**Started:** —
+**Finished:** —
 
 **Scope:** Build the complete Portfolio Home screen with mock data.
 
@@ -48,13 +53,21 @@ Read `UPSIDE_MVP_SPEC.md`, specifically:
 
 ## Batch 2: Ticker detail screen [PENDING]
 
-**Status:** PENDING — design in progress, do not start
+**Status:** PENDING
+**Owner:** none
+**Started:** —
+**Finished:** —
 
-**Scope:** TBD — being designed in planning conversation
+**Scope:** TBD — being designed in planning conversation. Do not start.
 
 ---
 
 ## Batch 3: (unassigned) [PENDING]
+
+**Status:** PENDING
+**Owner:** none
+**Started:** —
+**Finished:** —
 
 ---
 
