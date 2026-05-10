@@ -13,11 +13,11 @@ Collaboration protocol (claim, hand-off, commit conventions): AGENTS.md
 
 ---
 
-## Batch 1: Portfolio home screen [READY]
+## Batch 1: Portfolio home screen [IN PROGRESS]
 
-**Status:** READY
-**Owner:** none
-**Started:** —
+**Status:** IN PROGRESS
+**Owner:** claude
+**Started:** 2026-05-10 18:36
 **Finished:** —
 
 **Scope:** Build the complete Portfolio Home screen with mock data.
