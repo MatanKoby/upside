@@ -1,0 +1,58 @@
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === Agent session state ===
+.claude/
+.cursor/
+
+# === Node / npm / yarn / pnpm ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+.yarn/cache
+.yarn/install-state.gz
+
+# === Build output (Vite client + Node server) ===
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# === Test / coverage ===
+coverage/
+.nyc_output/
+
+# === Logs ===
+logs/
+*.log
+
+# === Environment / secrets ===
+# Track .env.example with placeholders; never commit real values.
+.env
+.env.local
+.env.*.local
+*.pem
+
+# === Vercel (frontend deploy) ===
+.vercel
+
+# === Supabase CLI (local dev) ===
+.supabase/
+
+# === IB Client Portal Gateway (local runs) ===
+clientportal.gw/
+ibgateway/
+*.session
