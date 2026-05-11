@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 2 — Ticker detail - layout & static components
 - Owner: cursor
 - Started: 2026-05-11 10:07
-
-## Completed
+- Finished: 2026-05-11 10:13
+- Commit: 49f8740
 
 ### Batch 1 — Portfolio home screen
 - Owner: claude
