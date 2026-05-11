@@ -1,0 +1,73 @@
+:root {
+  /* Color RGB triplets — used as `rgb(var(--gain-rgb) / <alpha>)` */
+  --gain-rgb: 99 153 34;
+  --loss-rgb: 226 75 74;
+  --neutral-rgb: 136 135 128;
+
+  /* Surface + text (light) */
+  --bg: #ffffff;
+  --bg-elevated: #fafaf8;
+  --text-primary: #1a1a1a;
+  --text-secondary: #4a4a45;
+  --text-tertiary: #888780;
+  --border: rgba(0, 0, 0, 0.08);
+
+  /* Signal pills (light) */
+  --pill-sell-bg: #FCEBEB;
+  --pill-sell-text: #791F1F;
+  --pill-buy-bg: #EAF3DE;
+  --pill-buy-text: #27500A;
+  --pill-event-bg: #E6F1FB;
+  --pill-event-text: #0C447C;
+  --pill-watch-bg: #FAEEDA;
+  --pill-watch-text: #633806;
+
+  /* Market period dot colors */
+  --period-pre-market: #f5b500;
+  --period-regular: rgb(var(--gain-rgb));
+  --period-after-hours: #2570c3;
+  --period-closed: rgb(var(--neutral-rgb));
+
+  /* Typography */
+  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace;
+  --fs-18: 18px;
+  --fs-14: 14px;
+  --fs-13: 13px;
+  --fs-12: 12px;
+  --fs-11: 11px;
+  --fs-10: 10px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+
+  /* Spacing */
+  --sp-2: 2px;
+  --sp-4: 4px;
+  --sp-6: 6px;
+  --sp-8: 8px;
+  --sp-10: 10px;
+  --sp-12: 12px;
+  --sp-14: 14px;
+
+  /* Radii */
+  --radius-md: 8px;
+  --radius-pill: 999px;
+}
+
+[data-theme='dark'] {
+  --bg: #0f0f0f;
+  --bg-elevated: #1a1a1a;
+  --text-primary: #f5f5f3;
+  --text-secondary: #b5b5af;
+  --text-tertiary: #888780;
+  --border: rgba(255, 255, 255, 0.08);
+
+  --pill-sell-bg: #501313;
+  --pill-sell-text: #F09595;
+  --pill-buy-bg: #173404;
+  --pill-buy-text: #97C459;
+  --pill-event-bg: #042C53;
+  --pill-event-text: #85B7EB;
+  --pill-watch-bg: #412402;
+  --pill-watch-text: #FAC775;
+}

@@ -1,0 +1,12 @@
+{
+  "name": "upside",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.0.9",
+  "scripts": {
+    "dev": "pnpm --filter client dev",
+    "build": "pnpm --filter client build",
+    "preview": "pnpm --filter client preview",
+    "typecheck": "pnpm --filter client typecheck"
+  }
+}
