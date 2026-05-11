@@ -486,16 +486,35 @@
 .td-chart-shell {
   padding: var(--sp-10) var(--sp-12);
 }
-.td-chart-placeholder {
+.price-chart-main {
+  width: 100%;
   height: 220px;
+}
+.price-chart-rsi-wrap {
+  margin-top: var(--sp-8);
+  position: relative;
   border-radius: var(--radius-md);
-  border: 0.5px dashed var(--border);
-  background: linear-gradient(180deg, rgb(var(--neutral-rgb) / 0.1), rgb(var(--neutral-rgb) / 0.05));
-  color: var(--text-tertiary);
-  font-size: var(--fs-11);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
+}
+.price-chart-rsi {
+  width: 100%;
+  height: 90px;
+}
+.price-chart-rsi-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+.price-chart-rsi-band.overbought {
+  top: 0;
+  height: 26%;
+  background: rgb(var(--loss-rgb) / 0.08);
+}
+.price-chart-rsi-band.oversold {
+  bottom: 0;
+  height: 26%;
+  background: rgb(var(--gain-rgb) / 0.08);
 }
 .td-chart-controls {
   margin-top: var(--sp-10);

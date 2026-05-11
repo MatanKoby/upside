@@ -1,20 +1,29 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconArrowLeft } from '@tabler/icons-react';
 import { getPnlColor } from '../../utils/calculations';
 import { formatCurrency, formatSignedCurrency, formatSignedPercent } from '../../utils/formatters';
 import type { TickerDetailData } from '../../types';
+import type { ChartTimeframe } from '../../data/mockChartData';
 import { TodayRange } from './TodayRange';
 import { MarketStats } from './MarketStats';
-import { ChartControls } from './ChartControls';
+import { ChartControls, type ChartMode, type OverlayKey } from './ChartControls';
 import { TimeframeBar } from './TimeframeBar';
 import { SignalSection } from './SignalSection';
 import { PositionStats } from './PositionStats';
 import { IndicatorsSection } from './IndicatorsSection';
 import { CollapsibleSection } from '../common/CollapsibleSection';
+import { PriceChart } from './PriceChart';
 
 export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<ChartMode>('line');
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('1D');
+  const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>({
+    vwap: true,
+    volume: true,
+    rsi: false,
+  });
   const tone = useMemo(() => getPnlColor(detail.todayChangePercent), [detail.todayChangePercent]);
 
   return (
@@ -39,9 +48,16 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
       <MarketStats initialStats={detail.marketStats} />
 
       <section className="td-chart-shell" aria-label="Chart placeholder">
-        <div className="td-chart-placeholder">Chart surface reserved for Batch 3</div>
-        <ChartControls />
-        <TimeframeBar />
+        <PriceChart timeframe={timeframe} mode={mode} overlays={overlays} />
+        <ChartControls
+          mode={mode}
+          overlays={overlays}
+          onModeChange={setMode}
+          onOverlayToggle={(overlay) => {
+            setOverlays((prev) => ({ ...prev, [overlay]: !prev[overlay] }));
+          }}
+        />
+        <TimeframeBar active={timeframe} onChange={setTimeframe} />
       </section>
 
       <CollapsibleSection title="Signal">

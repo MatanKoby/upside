@@ -1,7 +1,5 @@
-import { useState } from 'react';
-
-type ChartMode = 'line' | 'candle';
-type OverlayKey = 'vwap' | 'volume' | 'rsi';
+export type ChartMode = 'line' | 'candle';
+export type OverlayKey = 'vwap' | 'volume' | 'rsi';
 
 const OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: 'vwap', label: 'VWAP' },
@@ -9,14 +7,17 @@ const OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: 'rsi', label: 'RSI' },
 ];
 
-export function ChartControls() {
-  const [mode, setMode] = useState<ChartMode>('line');
-  const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>({
-    vwap: true,
-    volume: true,
-    rsi: false,
-  });
-
+export function ChartControls({
+  mode,
+  overlays,
+  onModeChange,
+  onOverlayToggle,
+}: {
+  mode: ChartMode;
+  overlays: Record<OverlayKey, boolean>;
+  onModeChange: (mode: ChartMode) => void;
+  onOverlayToggle: (overlay: OverlayKey) => void;
+}) {
   return (
     <div className="td-chart-controls">
       <div className="td-control-group">
@@ -25,7 +26,7 @@ export function ChartControls() {
             key={item}
             type="button"
             className={mode === item ? 'td-control-pill is-active' : 'td-control-pill'}
-            onClick={() => setMode(item)}
+            onClick={() => onModeChange(item)}
           >
             {item === 'line' ? 'Line' : 'Candle'}
           </button>
@@ -38,9 +39,7 @@ export function ChartControls() {
             key={overlay.key}
             type="button"
             className={overlays[overlay.key] ? 'td-control-pill is-active' : 'td-control-pill'}
-            onClick={() => {
-              setOverlays((prev) => ({ ...prev, [overlay.key]: !prev[overlay.key] }));
-            }}
+            onClick={() => onOverlayToggle(overlay.key)}
           >
             {overlay.label}
           </button>
