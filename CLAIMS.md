@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 3 — Ticker detail - chart integration
 - Owner: cursor
 - Started: 2026-05-11 10:14
-
-## Completed
+- Finished: 2026-05-11 10:18
+- Commit: 41162b4
 
 ### Batch 2 — Ticker detail - layout & static components
 - Owner: cursor
