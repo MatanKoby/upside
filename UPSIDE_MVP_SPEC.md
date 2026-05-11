@@ -13,18 +13,62 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 - **Backend**: Node.js + Express (or Fastify), running on Oracle Cloud Always Free VPS
 - **Database**: Supabase (PostgreSQL + Auth + Realtime) — free tier (500 MB DB, 50K MAUs)
 - **Broker API**: IB Client Portal API (REST), gateway runs on same Oracle VPS
-- **Market Data**: IB API (primary — positions, prices, VWAP), Finnhub (news, sentiment, fundamentals — free 60 calls/min), Alpha Vantage (technical indicators — free 25 calls/day)
-- **AI/LLM**: Anthropic Claude API (Sonnet for reasoning, Haiku for classification) — ~$5-10/mo
-- **Caching**: Upstash Redis (free tier — 10K commands/day)
-- **Hosting**: Vercel (frontend, free), Oracle Cloud (backend + IB gateway, free)
-- **CI/CD**: GitHub + GitHub Actions (free)
+- **Market Data**: IB API (all prices, OHLCV bars, VWAP, fundamentals), Finnhub (news, sentiment, insider trades, earnings — free 60 calls/min)
+- **Technical Indicators**: Computed locally from IB price data using `technicalindicators` npm library (RSI, MACD, Bollinger, SMA/EMA, Stochastic, support/resistance, volume profile)
+- **AI/LLM**: Gemini free tier via Google AI Studio (initially). Provider-agnostic abstraction layer — swap to Claude/OpenAI via env var. No vendor lock-in.
+- **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
+- **Hosting**: Vercel (frontend, free *.vercel.app subdomain), Oracle Cloud (backend + IB gateway + Redis, free)
+- **CI/CD**: GitHub (private repo) + manual deploy initially, GitHub Actions later
+- **Total monthly cost**: $0 (Gemini free tier). Upgrade path: ~$5-10/mo if switching to Claude API.
 
-### Infrastructure Notes
-- Oracle Cloud Always Free: 4 ARM OCPUs, 24 GB RAM, 200 GB storage — runs backend + IB gateway + Redis
-- IB Gateway requires manual browser login ~every 24h (user opens IB/TWS daily anyway)
-- No Playwright/automated login — IB prohibits it for individual accounts, risk of account flagging
-- Cloudflare Tunnel (free) to expose IB gateway if needed
-- All prices are live during trading sessions (pre-market 4:00 AM - after-hours 8:00 PM ET), showing last close only on weekends
+### Infrastructure — Oracle Cloud VPS (US-Ashburn)
+- Oracle Cloud Always Free: 4 ARM OCPUs, 24 GB RAM, 200 GB storage
+- Docker Compose runs 3 containers:
+  1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on localhost:5000
+  2. **Upside Node.js app** (Express + WebSocket + cron jobs + signal engine) — the brain
+  3. **Redis** — local caching for IB rate-limit buffering and data deduplication
+- All 3 containers communicate via Docker internal network (localhost)
+
+### IB Authentication Flow
+- Manual login via Upside UI: enter IB username/password → approve 2FA on IB Key phone app
+- No automated login (IBeam/Playwright) — IB prohibits it for individual accounts, risk of account flagging
+- Session maintained via tickle endpoint every 30s, lasts until IB's nightly forced logout (~11:45 PM ET)
+- On session expiry: app shows cached data + amber "Reconnect" banner, one-tap re-auth
+- Daily ritual: open app → tap reconnect → approve 2FA → live data (~10 seconds)
+- User's IB Israel account (U-prefix) works with Client Portal API
+
+### Data Sources (simplified)
+- **IB API provides**: real-time prices, OHLCV bars (any interval/timeframe), VWAP, volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data
+- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, VWAP divergence, support/resistance, volume profile
+- **Finnhub provides**: company news + sentiment scores, insider transactions, earnings calendar + estimates, basic financials (supplementary)
+- **Alpha Vantage**: DROPPED — 25 calls/day too limiting, all technicals computed locally instead
+- **Sparklines**: fetched live from IB (7 daily bars per ticker), current day updates in real-time. No overnight batch needed.
+
+### IB API Rate Limits
+- Global: 10 requests/second via Client Portal API
+- Historical data: no hard limit for bars ≥1 min, but soft pacing — avoid >60 requests/10 min
+- With <10 positions, rate limits are not a concern. Redis cache prevents redundant calls.
+
+### Signal Engine Filters
+- Skip positions with market value < $200 (configurable threshold)
+- Skip positions where user has manually disabled signal generation
+- Skip positions opened less than configurable hours ago (avoid noise on new entries)
+- Filters checked before any API calls, saving LLM tokens and Finnhub quota
+
+### Supabase Keepalive
+- Backend pings Supabase with a lightweight query every few hours to prevent 7-day inactivity pause
+- Not an issue with daily trading, but insurance for vacations/breaks
+
+### Architecture Pattern
+- NOT microservices — monolith Node.js app with external integrations
+- Single Node.js process handles: API endpoints, WebSocket connections, IB gateway communication, signal engine cron, Finnhub/LLM calls
+- IB Gateway is a separate container only because it's IB's Java software with its own lifecycle
+- Can decompose later if needed (e.g., Python ML service), but unnecessary for MVP
+
+### Three Loops in the Node.js App
+1. **Real-time loop** (every 5-15s during market hours): Poll IB → cache in Redis → write to Supabase → Supabase Realtime pushes to client
+2. **Signal loop** (every 15-30 min during market hours): For each eligible position → fetch IB bars → compute technicals → fetch Finnhub news → send to LLM → write signal to Supabase → client pulls on Realtime notification → push notification if above threshold
+3. **Keepalive loop** (every few hours): Supabase ping + IB session tickle
 
 ---
 
@@ -161,51 +205,96 @@ Four tabs with icons + labels:
 
 ### Screen 2: Ticker Detail
 
-Opens when tapping a position card (not the signal row). Full-screen view for one position.
+Opens as a full-screen slide-in from the right when tapping a position card. Route: `/ticker/:symbol`
+
+#### Navigation
+- Slide-in animation from right (CSS transform)
+- Back arrow (ti-arrow-left) returns to portfolio home
 
 #### Header
-- Back arrow (ti-arrow-left) + ticker symbol + company name
-- Current price + today's change (colored)
+- Left: back arrow + ticker symbol (18px, weight 500) + company name (11px, muted)
+- Right: current price (18px, weight 500) + today's change in $ and % (12px, colored)
+
+#### Today's Range (above chart)
+- Label: "Today's range" (left) + "Open $139.20" (right, muted)
+- Visual range bar: horizontal track with colored dot showing current price position
+- Low price in red (left), high price in green (right)
+- Blue dot position = (currentPrice - dayLow) / (dayHigh - dayLow) * 100%
+
+#### Market Stats (above chart, below today's range)
+Dense, customizable stats panel:
+- Two rows of four stats each, very compact layout
+- Each stat: tiny label (10px, muted) + value (11px, weight 500)
+- Row 1 default: Vol | P/E | Prev close | Beta
+- Row 2 default: Open | EPS | MktCap | AvgVol
+- 52-week range bar below stat rows (smaller version of today's range bar)
+  - Dot position = (currentPrice - fiftyTwoWeekLow) / (fiftyTwoWeekHigh - fiftyTwoWeekLow) * 100%
+- "Edit" link (top-right of section) opens inline customization panel:
+  - Separated into "Visible" and "Hidden" groups
+  - Each stat: drag handle (ti-grip-vertical) for reordering + toggle switch for visibility
+  - Available stats pool: Volume, Forward P/E, Prior close, Beta, 52-week range, Open, EPS, Market cap, Dividend amount, Dividend date, Put/call interest, Put/call volume, Tweet volume, Avg volume (30d)
+  - User's stat selection/order persisted (local state initially, Supabase later)
+
+#### Chart Controls (between stats and chart)
+- Left side: Line / Candle toggle buttons
+- Right side: VWAP / Vol / RSI indicator toggle buttons
+- Small pill-style buttons, active state = filled
 
 #### Price Chart
-- Interactive candlestick or line chart (use Lightweight Charts by TradingView — free, open source)
-- Timeframe selector: 1D, 1W, 1M, 3M, 1Y
-- User's entry price(s) marked as horizontal dashed lines on chart
-- VWAP line overlaid on chart during intraday views
+- Library: Lightweight Charts by TradingView (free, open source)
+- Candlestick mode and line mode, toggled by chart controls
+- Entry price: horizontal dashed amber line at user's avg cost basis, labeled "Avg $XX.XX"
+- Entry date: vertical dashed amber marker at purchase date, labeled "Entry [date]"
+- VWAP overlay: purple line, toggleable
+- Volume bars: at bottom of main chart area, subtle gray, toggleable
+- RSI subchart: separate pane below main chart, toggleable
+  - Overbought zone (>70) shaded faintly red
+  - Oversold zone (<30) shaded faintly green
+  - Current RSI value displayed
+- Touch-friendly: pinch to zoom, drag to pan
+- Dark mode compatible
 
-#### Position Stats
-- Shares held
-- Average cost basis
-- Current value
-- Unrealized P&L ($ and %)
-- Today's change ($ and %)
-- %/day return: total % gain divided by trading days held (e.g. "+0.79%/day")
-- Portfolio contribution: weighted return showing impact on total portfolio (e.g. "Contributing +5.0% to portfolio" for a position that's +10% and is 50% of portfolio)
-- Portfolio weight: "44% of portfolio"
+#### Timeframe Bar (below chart)
+- Horizontally scrollable pills: 30m, 2h, 1D, 2D, 1W, 1M, 3M, 1Y, 5Y, All
+- Active pill = filled dark, inactive = outlined muted
 
-#### Active Signals Section
-- If any signals exist for this ticker, show the full Style A analytical breakdown inline
-- If no signals, show "No active signals" with muted text
+#### Below-Chart Sections (all collapsible, using shared CollapsibleSection component)
 
-#### Signal Detail (Style A — Analytical Breakdown)
-This is the expanded view of a signal. Shows either inline on ticker detail or as a modal when tapping a signal pill on the home screen.
+**Signal Section** (only if active signal exists):
+- Icon: ti-alert-triangle (colored by signal type)
+- Header: signal type + confidence (e.g. "Sell · 82%")
+- Body contains:
+  - Signal summary text (1-2 sentences)
+  - "Full signal breakdown" expandable section
+  - Full breakdown (Style A):
+    - Confidence bar (0-100%, colored fill)
+    - Timeframe: "3-7 days" / "Intraday" / "1-2 weeks"
+    - Target price range: "$136-138"
+    - Risk/reward ratio: "1:2.4"
+    - Indicator table: each row = Indicator name | Current value | Status badge (Bullish green / Bearish red / Neutral gray)
+    - Summary count: "5 of 6 indicators bearish"
+    - AI reasoning: 2-3 sentence explanation citing specific data points
+    - "Ask about this signal" button → post-MVP hook for AI chat
 
-Layout:
-- Signal type badge + confidence bar (0-100%, colored fill)
-- Timeframe: "3-7 days" / "Intraday" / "1-2 weeks"
-- Target price range: "$186-189"
-- Risk/reward ratio: "1:2.4"
+**Position Stats:**
+- Icon: ti-wallet
+- Header: shows total unrealized P&L as right-side value (colored)
+- Body rows:
+  - Shares held
+  - Avg cost basis
+  - Current value
+  - Unrealized P&L ($ and %)
+  - Today's change ($ and %)
+  - Return per day: totalPnlPercent / tradingDaysHeld → displayed as "+0.79%/day"
+  - Portfolio weight: positionValue / totalPortfolioValue → "44.0%"
+  - Portfolio contribution: positionPnlPercent * positionWeight → "+8.0% to portfolio"
+  - Days held (trading days count)
 
-Indicator breakdown (table of rows):
-- Each row: Indicator name | Current value | Status badge (Bullish/Bearish/Neutral)
-- Indicators: RSI (14), VWAP divergence, MACD, Volume trend, Bollinger Band position, Support/Resistance levels, and any others relevant
-- Status badges: green for bullish, red for bearish, gray for neutral
-
-Summary counts: "5 of 6 indicators bearish"
-
-AI reasoning text: 2-3 sentence natural language explanation of why this signal was generated, citing the specific data points.
-
-"Ask about this signal" button → opens AI chat (post-MVP: just save as a feature hook)
+**Indicators:**
+- Icon: ti-activity
+- Header: bearish/bullish summary count (e.g. "5/6 bearish" colored red)
+- Body: rows for RSI (14), VWAP divergence, MACD, Volume trend, Bollinger, Earnings date
+- Each row: indicator name | current value | colored status badge
 
 ---
 
@@ -283,32 +372,43 @@ Must be fully supported. All colors must work in both modes. Use CSS variables t
 
 ## Data Flow
 
-### IB API → Backend
-1. Backend runs IB Client Portal Gateway (Java) on Oracle VPS
-2. Node.js proxy layer wraps gateway REST endpoints
-3. Key endpoints used:
+### IB API → Backend (Container 2 → Container 1)
+1. Node.js app communicates with IB Client Portal Gateway via localhost:5000
+2. Key endpoints used:
    - `GET /portfolio/{accountId}/positions` — current positions
    - `GET /portfolio/{accountId}/summary` — account summary (total value, P&L)
    - `GET /iserver/marketdata/snapshot` — live quotes (price, VWAP, volume)
-   - `GET /iserver/marketdata/history` — historical bars for sparklines/charts
+   - `GET /iserver/marketdata/history` — historical bars for sparklines/charts/technicals
    - `GET /portfolio/{accountId}/ledger` — P&L breakdown
+   - `POST /tickle` — session keepalive (every 30s)
+   - `POST /iserver/auth/ssodh/init` — re-initialize session after expiry
 
-### Backend → Frontend
+### Backend → Frontend (Oracle VPS → Vercel)
 - REST API for initial data load
-- WebSocket (or SSE) for real-time price updates during market hours
-- Polling fallback (every 5-15s) when WebSocket isn't available
+- Supabase Realtime for live updates: backend writes to Supabase → Supabase pushes change notification to client → client pulls updated data from Supabase (source of truth)
+- Push notifications (PWA) as a separate alert channel when app is not open
 
 ### Backend → Supabase
-- Store position snapshots (daily) for historical tracking
-- Store user preferences (sort order, confidence threshold, etc.)
-- Store generated signals and their outcomes (for future accuracy tracking)
+- Position data (latest state + historical snapshots)
+- User preferences (sort order, confidence threshold, stat customization, signal suppression per position)
+- Generated signals and their outcomes (for future accuracy tracking)
+- Auth (user session, JWT tokens)
 
-### Signal Engine (Sprint 3)
-1. Collect: IB price data + Finnhub news/sentiment + computed technicals
-2. Analyze: Calculate RSI, MACD, Bollinger, VWAP divergence, support/resistance
-3. Synthesize: Feed indicator states + news context into Claude API
-4. Output: Signal type, confidence score (0-100), reasoning text, timeframe, target price range
-5. Store: Save signal in Supabase, push to frontend via WebSocket
+### Backend → Redis (Container 2 → Container 3)
+- Cache IB market data responses (TTL: 5-15s) to prevent redundant calls within polling interval
+- Cache Finnhub responses (TTL: 5-15 min) to avoid hitting 60 calls/min limit
+- Cache computed technicals per position (TTL: matches signal loop interval)
+- Session data if needed
+
+### Signal Engine Flow (runs every 15-30 min during market hours)
+1. **Filter**: Check each position against signal filters (market value ≥ $200, not suppressed, not too new)
+2. **Collect**: Fetch OHLCV bars from IB for each eligible position (from Redis cache if fresh, else from IB)
+3. **Compute**: Calculate RSI, MACD, Bollinger, VWAP divergence, support/resistance, volume profile using `technicalindicators` library
+4. **Enrich**: Fetch news + sentiment + insider trades + earnings from Finnhub for each position
+5. **Synthesize**: Send structured indicator state + news context to LLM (Gemini free tier) via provider-agnostic abstraction layer
+6. **Output**: LLM returns signal type (sell/buy/watch/event), confidence score (0-100), reasoning text, timeframe, target price range
+7. **Store**: Write signal to Supabase signals table
+8. **Notify**: Supabase Realtime notifies client of signals table change → client pulls new signal data → signal pill appears on position card. If confidence > user threshold and app is not open, send PWA push notification.
 6. Notify: If confidence > user threshold, trigger push notification
 
 ---
@@ -326,7 +426,7 @@ Must be fully supported. All colors must work in both modes. Use CSS variables t
 
 ```
 upside/
-├── client/                 # React frontend (Vite)
+├── client/                 # React frontend (Vite) — deploys to Vercel
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── PortfolioHome/
@@ -336,17 +436,27 @@ upside/
 │   │   │   │   ├── MarketPeriodBadge.tsx
 │   │   │   │   └── Sparkline.tsx
 │   │   │   ├── TickerDetail/
-│   │   │   ├── SignalDetail/
+│   │   │   │   ├── TickerDetail.tsx
+│   │   │   │   ├── TodayRange.tsx
+│   │   │   │   ├── MarketStats.tsx
+│   │   │   │   ├── ChartControls.tsx
+│   │   │   │   ├── PriceChart.tsx
+│   │   │   │   ├── TimeframeBar.tsx
+│   │   │   │   ├── SignalSection.tsx
+│   │   │   │   ├── PositionStats.tsx
+│   │   │   │   └── IndicatorsSection.tsx
 │   │   │   ├── AlertsFeed/
 │   │   │   ├── Settings/
+│   │   │   │   └── IBLoginFlow.tsx
 │   │   │   └── common/
+│   │   │       └── CollapsibleSection.tsx
 │   │   ├── hooks/
 │   │   │   ├── usePositions.ts
 │   │   │   ├── useRealtimePrices.ts
 │   │   │   └── useSignals.ts
 │   │   ├── services/
-│   │   │   ├── ibApi.ts
-│   │   │   └── supabase.ts
+│   │   │   ├── supabase.ts
+│   │   │   └── api.ts           # REST calls to backend
 │   │   ├── types/
 │   │   │   └── index.ts
 │   │   ├── utils/
@@ -357,20 +467,31 @@ upside/
 │   ├── public/
 │   │   └── manifest.json
 │   └── index.html
-├── server/                 # Node.js backend
+├── server/                 # Node.js backend — runs in Docker on Oracle VPS
 │   ├── src/
 │   │   ├── routes/
 │   │   │   ├── portfolio.ts
 │   │   │   ├── marketdata.ts
-│   │   │   └── signals.ts
+│   │   │   ├── signals.ts
+│   │   │   └── auth.ts          # IB login proxy
 │   │   ├── services/
-│   │   │   ├── ibGateway.ts     # IB API wrapper
-│   │   │   ├── finnhub.ts
-│   │   │   ├── alphaVantage.ts
-│   │   │   └── signalEngine.ts  # Sprint 3
+│   │   │   ├── ibGateway.ts     # IB Client Portal API wrapper
+│   │   │   ├── finnhub.ts       # News, sentiment, earnings
+│   │   │   ├── signalEngine.ts  # Technical analysis + LLM synthesis
+│   │   │   ├── technicals.ts    # RSI, MACD, Bollinger computation
+│   │   │   ├── llm.ts           # Provider-agnostic LLM abstraction layer
+│   │   │   ├── redis.ts         # Redis cache wrapper
+│   │   │   └── supabase.ts      # Supabase client for server-side writes
+│   │   ├── cron/
+│   │   │   ├── pricePoller.ts   # Real-time loop (5-15s)
+│   │   │   ├── signalRunner.ts  # Signal loop (15-30 min)
+│   │   │   └── keepalive.ts     # Supabase + IB session keepalive
 │   │   ├── middleware/
 │   │   └── index.ts
+│   ├── Dockerfile
 │   └── package.json
+├── docker-compose.yml       # 3 containers: IB Gateway, Node.js, Redis
+├── .env.example             # LLM_PROVIDER, FINNHUB_KEY, SUPABASE_URL, etc.
 ├── package.json
 └── README.md
 ```
