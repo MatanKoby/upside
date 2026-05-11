@@ -24,20 +24,25 @@ Single source of truth for how the two AI agents collaborate on this project. Bo
 
 ## The work queue
 
-`BUILD_QUEUE.md` declares each batch with a `[READY]` or `[PENDING]` tag in its heading:
-- `[READY]` — designed; eligible to be claimed.
-- `[PENDING]` — still being designed; do not start.
+`BUILD_QUEUE.md` declares each batch. Eligibility is read from the tag in the batch heading:
+
+- **No tag** — claimable, subject to the dependency check below.
+- `[MANUAL]` — the user will execute this batch (e.g., infrastructure provisioning). Agents skip entirely: don't claim, don't log, don't propose changes unless asked.
+- `[NOT READY]` — blocked on external work or design that isn't done yet. Don't claim.
+- Any other tag you don't recognize — treat as exclusionary and ask the user before acting.
+
+Each batch may also list `Depends on: Batch X[, Batch Y]`. A batch is only eligible to claim once **every** listed dependency appears in `CLAIMS.md` `## Completed`.
 
 The queue itself carries **no** Owner / Started / Finished / Status fields — those live in `CLAIMS.md`. The user may overwrite `BUILD_QUEUE.md` at any time without breaking agent state.
 
-Multiple batches can be in progress simultaneously when their "Files this batch creates/edits" + "Does NOT touch" declarations confirm they don't overlap. When two batches do touch overlapping files, run them sequentially.
+Multiple batches can run simultaneously when their "Files this batch creates/edits" + "Does NOT touch" declarations confirm they don't overlap. When two batches do touch overlapping files, run them sequentially.
 
 ## The claims file
 
 `CLAIMS.md` has two sections:
 
 - `## In progress` — one entry per actively claimed batch.
-- `## Completed` — log of finished batches, newest at the top.
+- `## Completed` — log of finished batches, newest at the top. This **is** the project's completion log; if `BUILD_QUEUE.md` references a `COMPLETION_LOG.md`, that role is served here.
 
 Entry format:
 
@@ -53,15 +58,17 @@ Entry format:
 ## Claim protocol
 
 1. `git pull --ff-only origin dev`. If it fails, resolve before claiming.
-2. Open `BUILD_QUEUE.md` and pick a batch tagged `[READY]` that is not already listed in `CLAIMS.md` `## In progress` or `## Completed`. If you're considering working in parallel with the other agent, confirm "Files this batch creates/edits" doesn't overlap with any in-progress batch.
-3. Edit `CLAIMS.md`: add an entry under `## In progress`:
+2. **Eligibility.** Open `BUILD_QUEUE.md` and pick a candidate batch — one with no exclusionary tag (`[MANUAL]`, `[NOT READY]`, or any tag you don't recognize) and not already listed in `CLAIMS.md` `## In progress` or `## Completed`.
+3. **Dependency check.** If the candidate lists `Depends on: Batch X[, Batch Y]`, verify each listed batch appears in `CLAIMS.md` `## Completed`. If any are missing, pick a different candidate.
+4. **Parallelism check.** If any batch is currently in `## In progress`, compare your candidate's "Files this batch creates/edits" against that batch's same field. If they overlap, pick a different candidate or wait.
+5. Edit `CLAIMS.md`: add an entry under `## In progress`:
    ```
    ### Batch N — <title>
    - Owner: claude   (or cursor)
    - Started: YYYY-MM-DD HH:MM
    ```
-4. Commit `meta: claim batch-N (claude)` and `git push origin dev`.
-5. Do the work. Commit incrementally with `batch-N: <imperative description>` messages and push at sensible checkpoints.
+6. Commit `meta: claim batch-N (claude)` and `git push origin dev`. If the push is rejected as non-fast-forward, follow **Push race recovery** below — do not force-push.
+7. Do the work. Commit incrementally with `batch-N: <imperative description>` messages and push at sensible checkpoints. (Same rule on a rejected push: pull-rebase, resolve, push again — never force.)
 
 ## Finish protocol
 
@@ -70,7 +77,20 @@ Entry format:
    - `Finished: YYYY-MM-DD HH:MM`
    - `Commit: <short SHA of the final work commit>`
 3. Commit `meta: complete batch-N` and push.
-4. Decide: claim the next `[READY]` batch (re-run claim protocol) or stop. Either is fine.
+4. Decide: claim the next eligible batch (re-run the claim protocol) or stop. Either is fine.
+
+## Push race recovery
+
+If `git push` after your claim commit (step 6 of the claim protocol) is rejected as non-fast-forward, the other agent committed to `dev` first. Recover without force-pushing:
+
+1. `git fetch origin dev`.
+2. `git reset --hard origin/dev` — drops your local claim commit. Safe because the only change in it was the `CLAIMS.md` edit.
+3. Re-read `CLAIMS.md`. If your target batch is now in `## In progress`, the other agent has it — pick a different claimable batch and re-run the claim protocol.
+4. If your target batch is still unclaimed (the other agent raced for a *different* batch), re-run the claim protocol from step 1 with the same target.
+
+For a rejected push on a *work* commit (`batch-N: ...`), don't reset — pull-rebase instead: `git pull --rebase origin dev`, resolve any conflicts, push again.
+
+**Never** resolve a rejected push with `git push --force` or `git push -f`. Force-pushing to `dev` clobbers the other agent's commits and breaks the shared history. The only acceptable response to a non-fast-forward rejection is to incorporate the remote's commits first.
 
 ## Mid-batch handoff (rare)
 
