@@ -1,4 +1,4 @@
-import type { AccountSummary, Position } from '../types';
+import type { AccountSummary, Position, TickerDetailData } from '../types';
 
 export const mockAccount: AccountSummary = {
   portfolioValue: 81695.5,
@@ -114,3 +114,126 @@ export const mockPositions: Position[] = [
     },
   },
 ];
+
+export const mockTickerDetails: Record<string, TickerDetailData> = {
+  NVDA: {
+    symbol: 'NVDA',
+    company: 'NVIDIA Corp',
+    price: 140.4,
+    todayChange: 1.82,
+    todayChangePercent: 1.3,
+    dayLow: 137.7,
+    dayHigh: 141.2,
+    currentInRange: 0.77,
+    marketStats: [
+      { key: 'volume', label: 'Volume', value: '43.1M', enabled: true },
+      { key: 'fwdPE', label: 'Fwd P/E', value: '35.6', enabled: true },
+      { key: 'priorClose', label: 'Prior close', value: '$138.58', enabled: true },
+      { key: 'beta', label: 'Beta', value: '1.72', enabled: true },
+      { key: 'range52w', label: '52w range', value: '$78.22 - $153.13', enabled: true },
+      { key: 'open', label: 'Open', value: '$139.20', enabled: true },
+      { key: 'eps', label: 'EPS', value: '$3.95', enabled: true },
+      { key: 'marketCap', label: 'Market cap', value: '$3.45T', enabled: false },
+      { key: 'dividend', label: 'Dividend', value: '$0.04', enabled: false },
+      { key: 'putCall', label: 'Put/call', value: '0.89', enabled: false },
+      { key: 'tweetVolume', label: 'Tweet volume', value: 'High', enabled: false },
+      { key: 'avgVolume', label: 'Avg volume', value: '39.7M', enabled: false },
+    ],
+    signal: {
+      type: 'sell',
+      confidence: 82,
+      summary: 'Resistance at $141 with momentum fading.',
+      rationale: [
+        'RSI holds above 70 for a third session.',
+        'Price tagged upper Bollinger band twice intraday.',
+        'Short-term volume tapers while breadth weakens.',
+      ],
+      styleABreakdown: 'Trend +25, Momentum -10, Volatility -8, Sentiment -5, Catalyst -2',
+    },
+    positionStats: {
+      shares: 150,
+      avgCost: 118.8,
+      marketValue: 21060,
+      unrealizedPnL: 3240,
+      unrealizedPnLPercent: 18.2,
+      dayPnL: 270,
+      dayPnLPercent: 1.3,
+      portfolioWeightPercent: 25.8,
+      contributionPercent: 1.2,
+      daysHeld: 96,
+    },
+    indicators: [
+      { name: 'RSI (14)', value: '74.1', status: 'bearish', note: 'Overbought' },
+      { name: 'VWAP', value: '$139.30', status: 'bullish' },
+      { name: 'MACD', value: '+0.42', status: 'bullish' },
+      { name: 'Volume', value: '1.08x avg', status: 'neutral' },
+      { name: 'Bollinger', value: 'Upper band test', status: 'bearish' },
+      { name: 'Earnings', value: 'Aug 22', status: 'event', note: '11 days' },
+    ],
+  },
+};
+
+export function getTickerDetail(symbol: string): TickerDetailData | null {
+  const fallbackPosition = mockPositions.find((position) => position.symbol === symbol.toUpperCase());
+  const detail = mockTickerDetails[symbol.toUpperCase()];
+  if (detail) {
+    return detail;
+  }
+  if (!fallbackPosition) {
+    return null;
+  }
+
+  return {
+    symbol: fallbackPosition.symbol,
+    company: fallbackPosition.name,
+    price: fallbackPosition.currentPrice,
+    todayChange: fallbackPosition.todayChange,
+    todayChangePercent: fallbackPosition.todayChangePercent,
+    dayLow: fallbackPosition.currentPrice * 0.985,
+    dayHigh: fallbackPosition.currentPrice * 1.015,
+    currentInRange: 0.5,
+    marketStats: [
+      { key: 'volume', label: 'Volume', value: '-', enabled: true },
+      { key: 'fwdPE', label: 'Fwd P/E', value: '-', enabled: true },
+      { key: 'priorClose', label: 'Prior close', value: '-', enabled: true },
+      { key: 'beta', label: 'Beta', value: '-', enabled: true },
+      { key: 'range52w', label: '52w range', value: '-', enabled: true },
+      { key: 'open', label: 'Open', value: '-', enabled: true },
+      { key: 'eps', label: 'EPS', value: '-', enabled: false },
+      { key: 'marketCap', label: 'Market cap', value: '-', enabled: false },
+      { key: 'dividend', label: 'Dividend', value: '-', enabled: false },
+      { key: 'putCall', label: 'Put/call', value: '-', enabled: false },
+      { key: 'tweetVolume', label: 'Tweet volume', value: '-', enabled: false },
+      { key: 'avgVolume', label: 'Avg volume', value: '-', enabled: false },
+    ],
+    signal: {
+      type: fallbackPosition.signal?.type ?? 'watch',
+      confidence: fallbackPosition.signal?.confidence ?? 50,
+      summary: fallbackPosition.signal?.summary ?? 'No active recommendation.',
+      rationale: ['No detailed thesis in current mock set.'],
+      styleABreakdown: 'No score data available.',
+    },
+    positionStats: {
+      shares: fallbackPosition.shares,
+      avgCost: fallbackPosition.avgCost,
+      marketValue: fallbackPosition.marketValue,
+      unrealizedPnL: fallbackPosition.unrealizedPnL,
+      unrealizedPnLPercent: fallbackPosition.unrealizedPnLPercent,
+      dayPnL: fallbackPosition.todayChange * fallbackPosition.shares,
+      dayPnLPercent: fallbackPosition.todayChangePercent,
+      portfolioWeightPercent: (fallbackPosition.marketValue / mockAccount.portfolioValue) * 100,
+      contributionPercent: mockAccount.mtdReturn === 0
+        ? 0
+        : (fallbackPosition.unrealizedPnL / mockAccount.mtdReturn) * 100,
+      daysHeld: 0,
+    },
+    indicators: [
+      { name: 'RSI (14)', value: '-', status: 'neutral' },
+      { name: 'VWAP', value: '-', status: 'neutral' },
+      { name: 'MACD', value: '-', status: 'neutral' },
+      { name: 'Volume', value: '-', status: 'neutral' },
+      { name: 'Bollinger', value: '-', status: 'neutral' },
+      { name: 'Earnings', value: '-', status: 'event' },
+    ],
+  };
+}
