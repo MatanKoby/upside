@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 2 — Ticker detail - layout & static components
+- Owner: cursor
+- Started: 2026-05-11 10:07
 
 ## Completed
 
