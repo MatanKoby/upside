@@ -303,4 +303,42 @@ type SessionStatus = 'connected' | 'disconnected' | 'expired'
 
 **Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components, `client/src/types/index.ts`, `server/src/types/index.ts`
 
+---
+
+## Batch 7: Raw IB Client Portal data capture
+
+**Scope:** Capture real Interactive Brokers data from a live account, locally, so we can validate every type/schema we've written so far against IB reality before building Batch 6 (the live wiring) on potentially-wrong assumptions.
+
+**Why this exists:** The `Position`, `Signal`, `MarketSnapshot`, `OhlcBar` types in `server/src/types/index.ts` + `client/src/types/index.ts`, the `positions`/`signals` columns in `supabase/migrations/001_initial.sql`, and the field-code list in `server/src/services/ibGateway.ts` were all derived from spec assumptions about IB's API shapes. We don't actually know what IB returns until we look. This batch makes us look.
+
+**Approach — local, no infrastructure:**
+1. Run IB Client Portal Gateway (Java zip from interactivebrokers.com, NOT Docker — our compose image is wrong for REST anyway) on the dev laptop.
+2. Authenticate via the gateway's web UI at `https://localhost:5000` with **live** IBKR Pro credentials + 2FA push.
+3. Run `scripts/captureIb.ts` to sweep every IB endpoint our backend code expects to use, one call per endpoint per parameter set, each call writing its own JSON file to `captures/` (gitignored). Errors captured to `*.error.json` so we learn what we can't yet get.
+4. Claude reads the captured JSON files, produces a field-by-field gap analysis between our current types/schema and IB reality.
+
+**Out of scope (deferred to a later batch):**
+- Migration 002, type updates, IB mappers — those are downstream of the analysis.
+- Fixture layer for the FE — also downstream.
+- Fixing `docker-compose.yml` which currently references `ghcr.io/gnzsnz/ib-gateway` (TWS Socket API, ports 4001-4004) instead of a Client Portal Gateway image. Track this as a server-side followup.
+
+**Deliverables:**
+1. `scripts/captureIb.ts` — Node + tsx script targeting `https://localhost:5000`, no env vars needed. Captures: `/v1/api/iserver/accounts`, `/v1/api/portfolio/<acctId>/positions/0`, `/v1/api/iserver/secdef/search?symbol=<SYM>` per held symbol, `/v1/api/iserver/marketdata/snapshot?conids=<id>&fields=...` per conid, `/v1/api/iserver/marketdata/history?conid=<id>&period=<p>&bar=<b>` per (conid, timeframe), `/v1/api/iserver/contract/<conid>/info` per conid, `/v1/api/tickle`, `/v1/api/iserver/auth/status`. One file per call. Errors written as `<name>.error.json`. Doesn't stop on errors.
+2. `captures/` directory at repo root, gitignored.
+3. `.gitignore` entry — `captures/`.
+4. **Manual step:** user downloads clientportal.gw zip from IB, unzips, runs `bin/run.sh root/conf.yaml`, logs in via browser. Requires `default-jre` installed on WSL2.
+5. **Manual step:** after capture, user pastes `ls captures/ | wc -l` and any error file names back into the conversation so Claude can pull the relevant files and analyze.
+
+**Files this batch creates/edits:** `scripts/captureIb.ts`, `.gitignore` (add `captures/`).
+
+**Does NOT touch:** `server/`, `client/`, `supabase/`, `docker-compose.yml`, types, or any production code path. Pure capture + analysis.
+
+**Verification:**
+- `java --version` succeeds in WSL2.
+- `bin/run.sh root/conf.yaml` boots without errors.
+- `curl -sk https://localhost:5000/v1/api/iserver/auth/status` returns `{ "authenticated": true, "connected": true, ... }`.
+- After running `pnpm tsx scripts/captureIb.ts`: `ls captures/` shows >N files where N = number of held symbols.
+- `grep -r "<your-live-username>" captures/` returns nothing (credentials never written).
+- Claude produces a written gap analysis in conversation.
+
 
