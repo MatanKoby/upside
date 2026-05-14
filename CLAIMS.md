@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 5 — Docker Compose + Supabase schema + Node.js API scaffold
+- Owner: claude
+- Started: 2026-05-14 10:14
 
 ## Completed
 
