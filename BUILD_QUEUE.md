@@ -214,94 +214,45 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
 ---
 
-## Batch 6: Real-time price loop + frontend wiring
+## Batch 6: Schema reconciliation + IB mappers + snapshot fix
 
-**Depends on:** Batch 1 + Batch 5
+**Depends on:** Batch 5 (initial schema + scaffold) + Batch 7 (raw IB captures)
 
-**Scope:** Implement real-time polling, connect frontend to live Supabase data instead of mock data.
+**Scope:** Align our schema, types, and IB gateway code with what IB actually returns. Code-only — no live wiring, no Supabase project required at this stage. Driven by the gap analysis produced from Batch 7's `captures/` directory.
+
+**Why this is its own batch:** the original Batch 6 ("real-time price loop + frontend wiring") assumed our schema and types were correct. The Batch 7 captures showed several material gaps (missing `conid` column, wrong snapshot field codes, missing subscribe-wait-fetch pattern, missing company_name source). Building the live-wiring batch on top of those assumptions would force a painful rewrite. This batch fixes the foundation first.
 
 **Deliverables:**
 
-### Backend:
-1. `cron/pricePoller.ts` — full implementation: poll IB every 5-15s during market hours, cache Redis, write Supabase only on change, handle rate limits + session expiry
-2. `cron/keepalive.ts` — IB tickle every 30s, Supabase ping every 4h
-3. `utils/marketHours.ts` — detect pre-market/regular/after-hours/closed based on ET, weekends, US market holidays
+1. **`supabase/migrations/002_align_with_ib.sql`** — adjustments to existing tables:
+   - `positions`: add `conid bigint not null`, `account_id text not null`, `currency text not null default 'USD'`, `asset_class text not null default 'STK'`, `industry text`, `category text`, `realized_pnl numeric`, `underlying_conid bigint`.
+   - `signals`: add `conid bigint` (store at analysis time, avoid re-resolving).
+   - Optional: new `contracts` cache table keyed by `conid` with `company_name`, `industry`, `category`, `currency`, `exchange`, etc. — populated lazily, refreshed periodically.
 
-### Frontend:
-4. `services/supabase.ts` — client initialization
-5. `hooks/usePositions.ts` — replace mock data with REST fetch + Supabase Realtime subscription. When Supabase notifies positions changed → pull fresh data from Supabase (source of truth)
-6. `hooks/useSignals.ts` — Supabase Realtime on signals table → pull updated signal on change
-7. `hooks/useMarketSession.ts` — polls `/api/auth/status` every 30s, returns `{ session: 'connected' | 'expired' | 'disconnected', marketPeriod: 'pre-market' | 'regular' | 'after-hours' | 'closed' }`
-8. Update PositionCard, SummaryStrip, Sparkline to accept real data props
-9. Sparkline fetches 7-day bars from `/api/marketdata/history/:symbol`
+2. **`server/src/types/index.ts` + `client/src/types/index.ts`** — extend `Position` with `conid`, `accountId`, `currency`, `assetClass`, `industry`, `category`. Adjust which fields are nullable based on what's computable vs. what's only available after snapshot. Add `RawIbPosition`, `RawIbContractInfo`, `RawIbSnapshot`, `RawIbHistoryBar` types reflecting IB's actual response shapes.
 
-### Connection status in header (always visible):
-- A small status dot in the header (next to the market period badge) shows IB connection state at all times
-- `connected` → green dot, no text
-- `disconnected` → amber dot + "Reconnecting..." text, retrying silently in background
-- `expired` → red dot + "Session expired" text
-- On reconnect success → dot returns to green automatically
+3. **`server/src/services/ibMappers.ts`** — typed transformers:
+   - `ibPositionToPosition(raw, contractInfo, snapshot, portfolioTotal) → Position`
+   - `ibSnapshotToMarketSnapshot(raw) → MarketSnapshot`
+   - `ibHistoryToOhlcBars(raw) → OhlcBar[]` (rename `o/h/l/c/v/t` → standard fields, divide `t` by 1000)
+   - `pickPrimarySecdefResult(results) → { conid }` — heuristic for symbol→conid disambiguation, preferring NYSE/SMART/NASDAQ.
 
-### Session expired — full UI block:
-- When app opens and IB session is expired, the entire UI is replaced with a full-screen reconnect prompt (not a banner)
-- Shows: Upside logo, "Your IB session has expired" message, "Reconnect" button
-- On tap: proxies credentials to IB gateway → waits for 2FA approval on IB Key app → animated "Waiting for approval..." state → on success, dismisses block and loads portfolio
-- Cached data is NOT shown beneath the block — session must be restored before portfolio is visible
+4. **`server/src/services/ibGateway.ts`** rewrite of `ibSnapshot`:
+   - First call to `/snapshot` subscribes (returns only `{ conidEx, conid }`).
+   - Wait ~1s (or poll until populated, max 5 retries).
+   - Return the populated response.
+   - Re-verify field codes against IB docs; correct ones for: last price (31), today high (70), today low (71), today change % (82), today change $ (83), bid (84), open (85), ask (86), volume (87), prior close (88). VWAP isn't in standard snapshot; document how to obtain it (likely from `/iserver/marketdata/snapshot` with a different field code OR computed from history bars).
 
-### Mid-session IB failure (hiccup):
-- Real-time loop retries silently up to 3 times with exponential backoff
-- Header dot changes to amber "Reconnecting..." immediately on first failure
-- If restored within retries → dot returns to green, no disruption to UI
-- If all retries fail → dot turns red "Session expired" → user taps dot to trigger reconnect flow (same flow as above but as a non-blocking side sheet, not full-screen block, since user already has data loaded)
+5. **Re-run capture** (`pnpm --filter server capture`) after the snapshot fix to verify fields are actually populated. Should produce a second batch of `snapshot-*.json` files with real data.
 
-**TypeScript interfaces (`server/src/types/index.ts` and `client/src/types/index.ts`):**
-```typescript
-interface Position {
-  symbol: string
-  companyName: string
-  shares: number
-  avgCost: number
-  currentPrice: number
-  marketValue: number
-  unrealizedPnl: number
-  unrealizedPnlPct: number
-  todayChange: number
-  todayChangePct: number
-  vwap: number | null
-  vwapDiffPct: number | null
-  portfolioWeight: number      // positionValue / totalPortfolioValue
-  portfolioContribution: number // unrealizedPnlPct * portfolioWeight
-  dailyReturn: number | null   // unrealizedPnlPct / tradingDaysHeld
-  tradingDaysHeld: number | null
-  updatedAt: string
-}
+**Verification:**
+- `pnpm -r typecheck` clean.
+- Migration `002_align_with_ib.sql` is reviewable; no execution against a Supabase project required here (deferred to Batch 8).
+- Re-capture confirms snapshot endpoints now return populated fields.
 
-interface Signal {
-  id: string
-  symbol: string
-  signalType: 'sell' | 'buy' | 'watch' | 'event'
-  confidence: number           // 0-100
-  reasoning: string
-  targetPriceLow: number | null
-  targetPriceHigh: number | null
-  timeframe: string | null
-  riskReward: string | null
-  indicators: IndicatorSnapshot[]
-  createdAt: string
-  expiresAt: string | null
-}
+**Files:** `supabase/migrations/002_align_with_ib.sql`, `server/src/types/index.ts`, `client/src/types/index.ts`, `server/src/services/ibMappers.ts`, `server/src/services/ibGateway.ts` (snapshot fix).
 
-interface IndicatorSnapshot {
-  name: string
-  value: string
-  status: 'bullish' | 'bearish' | 'neutral'
-}
-
-type MarketPeriod = 'pre-market' | 'regular' | 'after-hours' | 'closed'
-type SessionStatus = 'connected' | 'disconnected' | 'expired'
-```
-
-**Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components, `client/src/types/index.ts`, `server/src/types/index.ts`
+**Does NOT touch:** Any client/ UI components, `cron/*`, or `routes/*` (except indirect type updates). No FE wiring, no Supabase deploy.
 
 ---
 
@@ -340,5 +291,78 @@ type SessionStatus = 'connected' | 'disconnected' | 'expired'
 - After running `pnpm tsx scripts/captureIb.ts`: `ls captures/` shows >N files where N = number of held symbols.
 - `grep -r "<your-live-username>" captures/` returns nothing (credentials never written).
 - Claude produces a written gap analysis in conversation.
+
+---
+
+## Batch 8: Supabase project provisioning [MANUAL]
+
+**Scope:** Create the actual Supabase project, apply migrations, save credentials. You do this manually; no agent claim, no agent code.
+
+**Why MANUAL:** Same reason Batch 4 (Oracle VPS) is manual — it's infrastructure that requires an account, a UI, and one-time credential handling. Agents shouldn't be holding service-role keys.
+
+### Steps:
+1. Create Supabase account at https://supabase.com if not already.
+2. New project → name `upside-prod` (or whatever) → choose closest region to Oracle VPS (US East 1 / Virginia matches Ashburn well).
+3. In SQL Editor, paste and run `supabase/migrations/001_initial.sql`.
+4. In SQL Editor, paste and run `supabase/migrations/002_align_with_ib.sql` (from Batch 6).
+5. Project Settings → API → copy:
+   - `SUPABASE_URL` (Project URL)
+   - `SUPABASE_ANON_KEY` (anon / public key)
+   - `SUPABASE_SERVICE_KEY` (service_role key — secret)
+6. Authentication → Providers → enable Google OAuth (will need a Google Cloud OAuth client; defer until Batch 9 if you want).
+7. Save all three values somewhere I can read them when filling `.env` (NEVER commit them).
+8. Verify: SQL Editor → `select count(*) from positions, signals, user_preferences, position_history, analysis_locks, access_attempts;` returns 0s without error.
+
+**Output:** Live Supabase project, migrations applied, three credentials in hand.
+
+**Does NOT touch:** Any repo files. This is purely a Supabase Cloud setup.
+
+---
+
+## Batch 9: Real-time price loop + frontend wiring
+
+**Depends on:** Batch 1 + Batch 5 + Batch 6 + Batch 8
+
+**Scope:** Implement real-time polling, connect frontend to live Supabase data instead of mock data. Builds on the reconciled schema from Batch 6 and the provisioned Supabase project from Batch 8.
+
+**Deliverables:**
+
+### Backend:
+1. `cron/pricePoller.ts` — full implementation: poll IB every 5-15s during market hours, cache Redis, write Supabase only on change, handle rate limits + session expiry. Uses the fixed `ibSnapshot` (subscribe-wait-fetch) and the new `ibMappers.ts` from Batch 6.
+2. `cron/keepalive.ts` — IB tickle every 30s, Supabase ping every 4h.
+3. `utils/marketHours.ts` — detect pre-market/regular/after-hours/closed based on ET, weekends, US market holidays.
+
+### Frontend:
+4. `services/supabase.ts` — client initialization (uses anon key + `VITE_SUPABASE_URL` env).
+5. `hooks/usePositions.ts` — replace mock data with REST fetch + Supabase Realtime subscription. When Supabase notifies positions changed → pull fresh data from Supabase (source of truth).
+6. `hooks/useSignals.ts` — Supabase Realtime on signals table → pull updated signal on change.
+7. `hooks/useMarketSession.ts` — polls `/api/auth/status` every 30s, returns `{ session: 'connected' | 'expired' | 'disconnected', marketPeriod: 'pre-market' | 'regular' | 'after-hours' | 'closed' }`.
+8. Update PositionCard, SummaryStrip, Sparkline to accept real data props.
+9. Sparkline fetches 7-day bars from `/api/marketdata/history/:symbol`.
+
+### Connection status in header (always visible):
+- A small status dot in the header (next to the market period badge) shows IB connection state at all times.
+- `connected` → green dot, no text.
+- `disconnected` → amber dot + "Reconnecting..." text, retrying silently in background.
+- `expired` → red dot + "Session expired" text.
+- On reconnect success → dot returns to green automatically.
+
+### Session expired — full UI block:
+- When app opens and IB session is expired, the entire UI is replaced with a full-screen reconnect prompt (not a banner).
+- Shows: Upside logo, "Your IB session has expired" message, "Reconnect" button.
+- On tap: proxies credentials to IB gateway → waits for 2FA approval on IB Key app → animated "Waiting for approval..." state → on success, dismisses block and loads portfolio.
+- Cached data is NOT shown beneath the block — session must be restored before portfolio is visible.
+
+### Mid-session IB failure (hiccup):
+- Real-time loop retries silently up to 3 times with exponential backoff.
+- Header dot changes to amber "Reconnecting..." immediately on first failure.
+- If restored within retries → dot returns to green, no disruption to UI.
+- If all retries fail → dot turns red "Session expired" → user taps dot to trigger reconnect flow (same flow as above but as a non-blocking side sheet, not full-screen block, since user already has data loaded).
+
+**Note on shared types:** the `Position` / `Signal` / `IndicatorSnapshot` / `MarketPeriod` / `SessionStatus` types this batch consumes are already defined and reconciled with IB reality in Batch 6 (`server/src/types/index.ts`, `client/src/types/index.ts`). Don't redefine; import.
+
+**Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components.
+
+
 
 
