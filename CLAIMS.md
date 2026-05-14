@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 10 — Deploy BE compose stack to Oracle VPS
+- Owner: claude
+- Started: 2026-05-14 20:36
 
 ## Completed
 
