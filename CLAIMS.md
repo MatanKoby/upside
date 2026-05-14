@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 7 — Raw IB Client Portal data capture
 - Owner: claude
 - Started: 2026-05-14 13:35
-
-## Completed
+- Finished: 2026-05-14 16:26
+- Commit: babbca8
 
 ### Batch 5 — Docker Compose + Supabase schema + Node.js API scaffold
 - Owner: claude
