@@ -125,7 +125,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 **Deliverables:**
 
 1. **`docker-compose.yml`** — 3 containers:
-   - `ib-gateway`: image `ghcr.io/gnzsnz/ib-gateway:stable` — confirmed ARM64/aarch64 multi-arch support, Docker auto-selects correct variant. Port 5000 internal only. **DO NOT set `TWS_USERID` / `TWS_PASSWORD` env vars** — IB credentials NEVER live in server config per security model. We use the image purely as a Java gateway runner; auth happens via REST API calls from Node backend that proxies user-entered credentials from browser. Set `TRADING_MODE=live`. Restart unless-stopped.
+   - `ib-gateway`: image built from `infra/clientportal.gw/Dockerfile` (created in Batch 7) — wraps IB's official **Client Portal Gateway** (Java, REST API on port 5000). **NOT** the legacy TWS Socket API (ports 4001-4004); those are a different IB product with a different auth flow. **DO NOT set any IB credential env vars** — auth happens via REST calls from Node backend that proxies user-entered credentials from browser. Port 5000 internal only. Restart unless-stopped.
    - `api`: Node.js app built from server/Dockerfile, port 3001 internal, depends on ib-gateway + redis, restart unless-stopped
    - `redis`: redis:7-alpine (ARM64 compatible), port 6379 internal only, restart unless-stopped
 
