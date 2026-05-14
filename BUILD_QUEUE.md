@@ -185,8 +185,8 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
    # Supabase
    SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_ANON_KEY=your-anon-key
-   SUPABASE_SERVICE_KEY=your-service-role-key
+   SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+   SUPABASE_SECRET_KEY=your-secret-key
 
    # Google OAuth (Supabase handles, but client ID needed)
    GOOGLE_OAUTH_CLIENT_ID=...
@@ -327,8 +327,8 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 3. In SQL Editor, paste and run `supabase/migrations/001_initial.sql` (single baseline file post-Batch-7.5; if Batch 7.5 hasn't run yet, also apply `002_align_with_ib.sql` after).
 5. Project Settings → API → copy:
    - `SUPABASE_URL` (Project URL)
-   - `SUPABASE_ANON_KEY` (anon / public key)
-   - `SUPABASE_SERVICE_KEY` (service_role key — secret)
+   - `SUPABASE_PUBLISHABLE_KEY` (publishable / public key)
+   - `SUPABASE_SECRET_KEY` (secret key — keep private)
 6. Authentication → Providers → enable Google OAuth (will need a Google Cloud OAuth client; defer until Batch 9 if you want).
 7. Save all three values somewhere I can read them when filling `.env` (NEVER commit them).
 8. Verify: SQL Editor → `select count(*) from positions, signals, user_preferences, position_history, analysis_locks, access_attempts;` returns 0s without error.
@@ -476,7 +476,7 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 **Files this batch creates/edits:** `client/src/pages/Login.tsx`, `client/src/components/common/AuthGuard.tsx`, `client/src/routes.tsx` (mount AuthGuard), `client/src/services/supabase.ts` (already created in Batch 9), small additions to API call helpers to include auth header.
 
 **Verification:**
-- Vercel build of FE picks up env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
+- Vercel build of FE picks up env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY`.
 - Logging in with `matankoby88@gmail.com` lands you on the portfolio home.
 - Logging in with any other Gmail returns 403 from `/api/auth/google/callback` and the FE redirects to google.com.
 - `access_attempts` Supabase table shows a row per attempt (granted=true and granted=false).
@@ -498,7 +498,7 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 5. Environment variables:
    - `VITE_API_URL` = Cloudflare Tunnel URL from Batch 11 (e.g., `https://upside-api.<tunnel>.workers.dev`)
    - `VITE_SUPABASE_URL` = from Batch 8
-   - `VITE_SUPABASE_ANON_KEY` = from Batch 8
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` = from Batch 8
 6. Trigger first deploy. Should produce a `*.vercel.app` URL.
 7. Test on phone: Safari → open the Vercel URL → "Add to Home Screen" → PWA installs.
 

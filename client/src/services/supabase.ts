@@ -1,17 +1,17 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-if (!url || !anonKey) {
+if (!url || !publishableKey) {
   // Surface clearly in dev. In production the build fails earlier without env vars.
   console.error(
-    '[supabase] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. ' +
+    '[supabase] Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY. ' +
     'Set them in .env (local) or Vercel project settings (deploy).'
   );
 }
 
-export const supabase: SupabaseClient = createClient(url ?? '', anonKey ?? '', {
+export const supabase: SupabaseClient = createClient(url ?? '', publishableKey ?? '', {
   auth: {
     persistSession: true,
     autoRefreshToken: true,

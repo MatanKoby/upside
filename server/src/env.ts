@@ -20,8 +20,11 @@ export const env = {
     .filter(Boolean),
 
   supabaseUrl: required('SUPABASE_URL'),
-  supabaseAnonKey: required('SUPABASE_ANON_KEY'),
-  supabaseServiceKey: required('SUPABASE_SERVICE_KEY'),
+  // Supabase's new key system. "publishable" replaces the old "anon" key
+  // (safe to ship in the FE bundle). "secret" replaces "service_role"
+  // (server-only, bypasses RLS). Functionally identical to legacy keys.
+  supabasePublishableKey: required('SUPABASE_PUBLISHABLE_KEY'),
+  supabaseSecretKey: required('SUPABASE_SECRET_KEY'),
 
   googleOauthClientId: optional('GOOGLE_OAUTH_CLIENT_ID'),
 
