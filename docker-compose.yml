@@ -1,20 +1,19 @@
 # Upside — production compose stack.
-# Three containers on a private bridge network. Only the api is published.
+# Three containers on a private bridge network. Only the api is published,
+# and only to localhost (Cloudflare Tunnel terminates HTTPS upstream).
 
 services:
-  # ib-gateway is intentionally commented out until Batch 7 supplies the correct image.
-  # The previous reference (`ghcr.io/gnzsnz/ib-gateway:stable`) exposes the legacy
-  # TWS Socket API on ports 4001-4004 — NOT the Client Portal REST API on port 5000
-  # that our backend code (server/src/services/ibGateway.ts) is written against.
-  # Batch 7 will add `infra/clientportal.gw/Dockerfile` that packages IB's official
-  # Client Portal Gateway (clientportal.gw zip) and we'll wire it back in here.
-  #
-  # ib-gateway:
-  #   build:
-  #     context: ./infra/clientportal.gw
-  #   restart: unless-stopped
-  #   networks:
-  #     - upside
+  ib-gateway:
+    # Built from infra/clientportal.gw/Dockerfile — wraps IB's official
+    # Client Portal Gateway (Java REST API on port 5000). NOT the legacy
+    # TWS Socket API (that was the gnzsnz image, wrong product entirely).
+    # Credentials are NEVER set as env vars here — the api container
+    # proxies user-entered credentials at login time per the security model.
+    build:
+      context: ./infra/clientportal.gw
+    restart: unless-stopped
+    networks:
+      - upside
 
   redis:
     image: redis:7-alpine
@@ -34,8 +33,8 @@ services:
       IB_GATEWAY_URL: http://ib-gateway:5000
       REDIS_URL: redis://redis:6379
     depends_on:
+      - ib-gateway
       - redis
-    # depends_on ib-gateway re-added once Batch 7 supplies the Client Portal image.
     ports:
       - "127.0.0.1:3001:3001"
     restart: unless-stopped
