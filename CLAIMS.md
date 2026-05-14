@@ -12,6 +12,12 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Batch 4 — Oracle VPS + Docker setup
+- Owner: Me!
+- Started: 2026-05-14 08:07
+- Finished: 2026-05-14 10:07
+- Commit: 41162b4
+
 ### Batch 3 — Ticker detail - chart integration
 - Owner: cursor
 - Started: 2026-05-11 10:14
