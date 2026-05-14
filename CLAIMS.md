@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 7 — Raw IB Client Portal data capture
+- Owner: claude
+- Started: 2026-05-14 13:35
 
 ## Completed
 
