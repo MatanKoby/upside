@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 9 — Real-time price loop + frontend wiring
 - Owner: claude
 - Started: 2026-05-14 19:50
-
-## Completed
+- Finished: 2026-05-14 20:00
+- Commit: c90b33b
 
 ### Batch 7.5 — Collapse migrations into single baseline
 - Owner: claude
