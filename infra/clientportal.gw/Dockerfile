@@ -23,6 +23,17 @@ RUN curl -fSL "$CPG_URL" -o /tmp/cpg.zip \
  && unzip /tmp/cpg.zip \
  && rm /tmp/cpg.zip
 
+# IB ships conf.yaml with an `ips.allow` list of glob-style patterns
+# (192.*, 131.216.*, 127.0.0.1). When the gateway runs inside Docker, client
+# traffic arrives via the bridge network (default 172.17.0.0/16, Docker Desktop
+# on WSL2 sometimes 192.168.x.x) and is rejected with `404 Access Denied`. We
+# append entries for common Docker bridge ranges. Note: bare `.*` is rejected
+# by the gateway's IPv4Validator as too broad — must use the IB-style patterns.
+#
+# Safe because the host publishes port 5000 only on `127.0.0.1`; the gateway is
+# never reachable from outside the local machine.
+RUN sed -i 's|^      allow:$|      allow:\n        - 172.*\n        - 10.*|' root/conf.yaml
+
 EXPOSE 5000
 
 # `bin/run.sh` is IB's launcher. `root/conf.yaml` is the default config that
