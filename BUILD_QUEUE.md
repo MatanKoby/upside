@@ -262,33 +262,33 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
 **Why this exists:** The `Position`, `Signal`, `MarketSnapshot`, `OhlcBar` types in `server/src/types/index.ts` + `client/src/types/index.ts`, the `positions`/`signals` columns in `supabase/migrations/001_initial.sql`, and the field-code list in `server/src/services/ibGateway.ts` were all derived from spec assumptions about IB's API shapes. We don't actually know what IB returns until we look. This batch makes us look.
 
-**Approach — local, no infrastructure:**
-1. Run IB Client Portal Gateway (Java zip from interactivebrokers.com, NOT Docker — our compose image is wrong for REST anyway) on the dev laptop.
-2. Authenticate via the gateway's web UI at `https://localhost:5000` with **live** IBKR Pro credentials + 2FA push.
-3. Run `scripts/captureIb.ts` to sweep every IB endpoint our backend code expects to use, one call per endpoint per parameter set, each call writing its own JSON file to `captures/` (gitignored). Errors captured to `*.error.json` so we learn what we can't yet get.
+**Approach — local Docker, no infrastructure:**
+1. Build IB Client Portal Gateway image from `infra/clientportal.gw/Dockerfile` (wraps IB's official `clientportal.gw.zip`). `docker run --rm -p 127.0.0.1:5000:5000` on dev laptop.
+2. Authenticate via the gateway's web UI at `https://localhost:5000` (incognito tab, accept the IB self-signed cert) with **live** IBKR Pro credentials + 2FA push.
+3. Run `server/scripts/captureIb.ts` to sweep every IB endpoint our backend code expects to use, one call per endpoint per parameter set, each call writing its own JSON file to `captures/` (gitignored). Errors captured to `*.error.json` so we learn what we can't yet get.
 4. Claude reads the captured JSON files, produces a field-by-field gap analysis between our current types/schema and IB reality.
 
 **Out of scope (deferred to a later batch):**
-- Migration 002, type updates, IB mappers — those are downstream of the analysis.
+- Migration 002, type updates, IB mappers — those are downstream of the analysis (Batch 6).
 - Fixture layer for the FE — also downstream.
-- Fixing `docker-compose.yml` which currently references `ghcr.io/gnzsnz/ib-gateway` (TWS Socket API, ports 4001-4004) instead of a Client Portal Gateway image. Track this as a server-side followup.
 
 **Deliverables:**
-1. `scripts/captureIb.ts` — Node + tsx script targeting `https://localhost:5000`, no env vars needed. Captures: `/v1/api/iserver/accounts`, `/v1/api/portfolio/<acctId>/positions/0`, `/v1/api/iserver/secdef/search?symbol=<SYM>` per held symbol, `/v1/api/iserver/marketdata/snapshot?conids=<id>&fields=...` per conid, `/v1/api/iserver/marketdata/history?conid=<id>&period=<p>&bar=<b>` per (conid, timeframe), `/v1/api/iserver/contract/<conid>/info` per conid, `/v1/api/tickle`, `/v1/api/iserver/auth/status`. One file per call. Errors written as `<name>.error.json`. Doesn't stop on errors.
-2. `captures/` directory at repo root, gitignored.
-3. `.gitignore` entry — `captures/`.
-4. **Manual step:** user downloads clientportal.gw zip from IB, unzips, runs `bin/run.sh root/conf.yaml`, logs in via browser. Requires `default-jre` installed on WSL2.
-5. **Manual step:** after capture, user pastes `ls captures/ | wc -l` and any error file names back into the conversation so Claude can pull the relevant files and analyze.
+1. `infra/clientportal.gw/Dockerfile` — wraps IB's official `clientportal.gw.zip` (Java REST API on port 5000). Patches `conf.yaml` to allow Docker bridge IPs.
+2. `server/scripts/captureIb.ts` — Node + tsx script targeting `https://localhost:5000`, runs via `pnpm --filter server capture`. Captures: `/v1/api/iserver/accounts`, `/v1/api/portfolio/<acctId>/positions/0`, `/v1/api/iserver/secdef/search?symbol=<SYM>` per held symbol, `/v1/api/iserver/marketdata/snapshot?conids=<id>&fields=...` per conid, `/v1/api/iserver/marketdata/history?conid=<id>&period=<p>&bar=<b>` per (conid, timeframe), `/v1/api/iserver/contract/<conid>/info` per conid, `/v1/api/tickle`, `/v1/api/iserver/auth/status`. One file per call. Errors written as `<name>.error.json`. Doesn't stop on errors.
+3. `captures/` directory at repo root, gitignored.
+4. `.gitignore` entry — `captures/`.
+5. **Manual step:** `docker build -t upside/clientportal.gw infra/clientportal.gw && docker run --rm -p 127.0.0.1:5000:5000 --name cpg upside/clientportal.gw`, then browser login.
+6. **Manual step:** after capture, user pastes `ls captures/ | wc -l` and any error file names back into the conversation so Claude can pull the relevant files and analyze.
 
-**Files this batch creates/edits:** `scripts/captureIb.ts`, `.gitignore` (add `captures/`).
+**Files this batch creates/edits:** `infra/clientportal.gw/Dockerfile`, `infra/clientportal.gw/README.md`, `server/scripts/captureIb.ts`, `server/tsconfig.scripts.json`, `server/package.json` (capture script alias), `.gitignore` (add `captures/`, anchor `clientportal.gw/` to root).
 
-**Does NOT touch:** `server/`, `client/`, `supabase/`, `docker-compose.yml`, types, or any production code path. Pure capture + analysis.
+**Side effect — bug fix:** This batch's investigation revealed the existing `docker-compose.yml` referenced the wrong image (`ghcr.io/gnzsnz/ib-gateway-docker` is TWS Socket API on ports 4001-4004, NOT Client Portal REST on 5000 which our code targets). The wrong service was commented out and pointed at the new `infra/clientportal.gw/Dockerfile` for the eventual deploy. Spec was untouched (it was correct).
 
 **Verification:**
-- `java --version` succeeds in WSL2.
-- `bin/run.sh root/conf.yaml` boots without errors.
-- `curl -sk https://localhost:5000/v1/api/iserver/auth/status` returns `{ "authenticated": true, "connected": true, ... }`.
-- After running `pnpm tsx scripts/captureIb.ts`: `ls captures/` shows >N files where N = number of held symbols.
+- `docker build -t upside/clientportal.gw infra/clientportal.gw` succeeds.
+- `docker run --rm -p 127.0.0.1:5000:5000 --name cpg upside/clientportal.gw` runs without error.
+- `curl -sk https://localhost:5000/v1/api/iserver/auth/status` returns `{ "authenticated": true, "connected": true, ... }` after browser login.
+- After `pnpm --filter server capture`: `ls captures/` shows >N files where N = number of held symbols.
 - `grep -r "<your-live-username>" captures/` returns nothing (credentials never written).
 - Claude produces a written gap analysis in conversation.
 
@@ -382,6 +382,226 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 **Note on shared types:** the `Position` / `Signal` / `IndicatorSnapshot` / `MarketPeriod` / `SessionStatus` types this batch consumes are already defined and reconciled with IB reality in Batch 6 (`server/src/types/index.ts`, `client/src/types/index.ts`). Don't redefine; import.
 
 **Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components.
+
+---
+
+## Batch 10: Deploy BE compose stack to Oracle VPS [partly MANUAL]
+
+**Depends on:** Batch 8 (Supabase exists) + Batch 9 (pricePoller implemented).
+
+**Scope:** Get the production compose stack running on the Oracle VPS. This is the first time `docker compose up -d` runs in production.
+
+### Steps:
+1. SSH into VPS: `ssh upside-vps`.
+2. `cd ~/upside && git clone git@github.com:MatanKoby/upside.git .` (first deploy only), or `git pull origin dev` on subsequent deploys.
+3. Build the IB gateway image: `docker build -t upside/clientportal.gw infra/clientportal.gw`.
+4. Create `~/upside/.env` from `.env.example` with real values: Supabase URL/anon/service keys (from Batch 8), `UPSIDE_ALLOWED_EMAILS=matankoby88@gmail.com`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` (post-Batch-14), `FINNHUB_API_KEY` (post-Batch-14). NEVER commit this file.
+5. Edit `docker-compose.yml` to un-comment the `ib-gateway` service block (it was commented out in Batch 7 because the original image reference was wrong).
+6. `docker compose up -d --build`.
+7. Verify: `docker compose ps` shows 3 containers Up. `curl http://localhost:3001/healthz` returns `{"ok":true,"env":"production"}`. `docker compose logs api --tail 100` shows no errors.
+8. **Do not yet authenticate IB** — that happens on the FE once Batch 13 is live.
+
+**Output:** Stack running on VPS, healthcheck passes, no IB session yet (intentional — auth flow lives in FE).
+
+**Files this batch creates/edits:** `docker-compose.yml` (un-comment ib-gateway service).
+
+**Verification:**
+- `docker compose ps` on VPS shows `cpg`, `api`, `redis` all Up.
+- `curl http://localhost:3001/healthz` returns expected JSON.
+- Supabase Dashboard → SQL → `select count(*) from positions` returns 0 (table exists, BE can talk to it).
+
+---
+
+## Batch 11: Cloudflare Tunnel — public HTTPS for the BE [partly MANUAL]
+
+**Depends on:** Batch 10.
+
+**Scope:** Expose the api container over HTTPS to the public internet via Cloudflare Tunnel. No domain purchase, no inbound firewall changes.
+
+### Steps:
+1. Create a free Cloudflare account if not already.
+2. Install `cloudflared` on the Oracle VPS: `curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared`.
+3. `cloudflared tunnel login` — opens a URL, you authenticate via browser.
+4. `cloudflared tunnel create upside-api` — creates a tunnel, prints a tunnel UUID.
+5. Configure `~/.cloudflared/config.yml`:
+   ```yaml
+   tunnel: <UUID>
+   credentials-file: /root/.cloudflared/<UUID>.json
+   ingress:
+     - hostname: upside-api.<your-cf-subdomain>.workers.dev   # or custom
+       service: http://localhost:3001
+     - service: http_status:404
+   ```
+6. Install as systemd service: `sudo cloudflared service install` and `sudo systemctl start cloudflared`.
+7. Verify externally: `curl https://upside-api.<...>/healthz` from your laptop returns the healthcheck JSON.
+
+**Alternative:** add `cloudflared` as a fourth Docker Compose service instead of a host systemd service. Slightly cleaner; documented in `infra/cloudflared/README.md` (to be created).
+
+**Output:** Stable HTTPS URL for the BE, ready to be consumed by Vercel FE (Batch 13).
+
+**Files this batch creates/edits:** Optionally `infra/cloudflared/` for the compose-service variant. `docker-compose.yml` if going the compose route.
+
+**Verification:**
+- `curl https://<tunnel-url>/healthz` from anywhere returns `{"ok":true,"env":"production"}`.
+- TLS cert is valid (no `-k` needed).
+- Tunnel survives a `docker compose restart` (cloudflared is upstream of compose).
+
+---
+
+## Batch 12: Google OAuth end-to-end [MANUAL + code]
+
+**Depends on:** Batch 8 (Supabase Auth provider config requires the project) + Batch 11 (Vercel FE will call the public BE URL).
+
+**Scope:** Real Google sign-in works in the FE; whitelist enforcement bounces non-allowed emails to google.com; the BE `requireAuth` middleware exercises against actual Supabase JWTs.
+
+### Steps:
+1. Google Cloud Console → APIs & Services → Credentials → Create OAuth 2.0 Client ID. Type: Web. Authorized redirect URIs: `https://<your-supabase-ref>.supabase.co/auth/v1/callback`. Save Client ID + Client Secret.
+2. Supabase Dashboard → Authentication → Providers → Google → paste Client ID + Secret, enable.
+3. In Supabase → Authentication → URL Configuration → set Site URL and additional redirect URLs to the future Vercel URL (placeholder OK if not yet deployed; can be updated post-Batch-13).
+4. Client code:
+   - New `client/src/pages/Login.tsx` with single "Continue with Google" button → calls `supabase.auth.signInWithOAuth({ provider: 'google' })`.
+   - Wrap the app router in an `<AuthGuard>` that:
+     - Reads Supabase session from `client/src/services/supabase.ts`.
+     - If no session → render `<Login />`.
+     - If session present → call `POST /api/auth/google/callback` (existing route in `server/src/routes/auth.ts:14`) with the access token; on `not_whitelisted`, sign out + redirect to `https://google.com`.
+     - On success → render the protected app.
+   - Persist Supabase session via Supabase JS SDK defaults (localStorage with auto-refresh).
+   - All authenticated FE API calls include `Authorization: Bearer <access_token>` header.
+5. Test end-to-end: sign in with the whitelisted email → land on portfolio home. Sign in with any other Gmail → bounced to google.com.
+
+**Files this batch creates/edits:** `client/src/pages/Login.tsx`, `client/src/components/common/AuthGuard.tsx`, `client/src/routes.tsx` (mount AuthGuard), `client/src/services/supabase.ts` (already created in Batch 9), small additions to API call helpers to include auth header.
+
+**Verification:**
+- Vercel build of FE picks up env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
+- Logging in with `matankoby88@gmail.com` lands you on the portfolio home.
+- Logging in with any other Gmail returns 403 from `/api/auth/google/callback` and the FE redirects to google.com.
+- `access_attempts` Supabase table shows a row per attempt (granted=true and granted=false).
+- BE-protected routes (e.g. `GET /api/portfolio/positions`) return 401 without a Bearer token and 200 with a valid whitelisted one.
+
+---
+
+## Batch 13: Vercel FE deploy [MANUAL]
+
+**Depends on:** Batches 10, 11, 12.
+
+**Scope:** Deploy the React PWA to Vercel so the live app is reachable from your phone.
+
+### Steps:
+1. Create a Vercel account (Sign in with GitHub) if you don't have one.
+2. New Project → Import the `upside` repo.
+3. Root directory: `client`.
+4. Build settings should auto-detect Vite (`pnpm build`, output `dist`).
+5. Environment variables:
+   - `VITE_API_URL` = Cloudflare Tunnel URL from Batch 11 (e.g., `https://upside-api.<tunnel>.workers.dev`)
+   - `VITE_SUPABASE_URL` = from Batch 8
+   - `VITE_SUPABASE_ANON_KEY` = from Batch 8
+6. Trigger first deploy. Should produce a `*.vercel.app` URL.
+7. Test on phone: Safari → open the Vercel URL → "Add to Home Screen" → PWA installs.
+
+**Output:** Live Upside app reachable from any browser at the Vercel URL. PWA installable on iOS / Android.
+
+**Files this batch creates/edits:** Possibly a `vercel.json` in `client/` if any custom routing is needed (for SPA fallback to `index.html`). Likely Vercel auto-handles Vite SPAs.
+
+**Verification:**
+- Vercel URL loads on iPhone, shows Login screen.
+- Google sign-in flow completes; you land on portfolio home with real positions.
+- Open simultaneously on phone and laptop; both render same data; an updated position appears on both within seconds.
+
+**🎯 Milestone: Data-only live. Phone shows real portfolio.**
+
+---
+
+## Batch 14: LLM signals analysis pipeline
+
+**Depends on:** Batch 13 (full live stack working).
+
+**Scope:** Implement the user-triggered signal analysis end-to-end. After this, "Analyze" button on a TickerDetail produces a real signal with reasoning.
+
+### Backend deliverables:
+1. Provider implementations in `server/src/services/llm.ts`:
+   - Real `GeminiProvider.analyze()` using the Gemini API.
+   - Stub `ClaudeProvider` / `OpenAiProvider` that throw a clear error pointing to the env var name (lit later when needed).
+2. New `server/src/services/signalEngine.ts` orchestrating the pipeline:
+   - Acquire `analysis_locks` row (already in `routes/signals.ts:25`).
+   - Ensure `contracts` row exists for the conid; lazy-fetch if not.
+   - Pull intraday + daily history; compute RSI, MACD, Bollinger, VWAP via `technicals.ts`.
+   - Pull current snapshot via `ibGateway.ibSnapshot` (subscribe-then-poll already in place from Batch 6).
+   - Pull news (Finnhub), earnings calendar, insider transactions.
+   - Assemble structured LLM prompt with all signals + raw data.
+   - Call `llm.analyze()`.
+   - Parse LLM response into `Signal` shape; insert into `signals` table.
+   - Release lock.
+3. `server/src/routes/signals.ts` analyze route: replace the 501 with the engine call.
+4. Background cron remains the stale-lock cleanup only (already in `cron/signalRunner.ts`).
+
+### Frontend deliverables:
+5. On TickerDetail, "Analyze" button with two-step intentional friction (per spec: tap → grey out 1s → confirm).
+6. Disable button when an `analysis_locks` row exists for the (user, symbol) — subscribe to that table via Realtime.
+7. Render new signal in the Signal Section when it lands via Realtime.
+
+**Files this batch creates/edits:** `server/src/services/llm.ts`, `server/src/services/signalEngine.ts`, `server/src/services/finnhub.ts` (real implementations replacing stubs), `server/src/routes/signals.ts`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`.
+
+**Manual prerequisites (you):**
+- Get a Gemini API key at aistudio.google.com.
+- Get a Finnhub API key at finnhub.io.
+- Add both to `.env` on the VPS (`GEMINI_API_KEY`, `FINNHUB_API_KEY`), `docker compose restart api`.
+
+**Verification:**
+- Tap "Analyze" on BBAI → confirm → spinner → ~10-15s later a signal appears with `signalQuality`, `priceRangeLow/High`, `optimalPrice`, `reasoning`, indicator bullets.
+- Tap "Analyze" again immediately → button disabled (lock present) → user can't double-trigger.
+- After completion, lock row removed; button re-enabled.
+- `signals` Supabase table has the new row; `ib_api_metrics` shows several IB calls.
+
+---
+
+## Batch 15: Alerts feed (Screen 3) + Settings (Screen 4) wired
+
+**Depends on:** Batch 14.
+
+**Scope:** Replace the two `ComingSoon` placeholders with real screens.
+
+### Deliverables:
+1. **Alerts feed (`/alerts`):** chronological list of signal records, newest first. Confidence threshold slider at top (default 50%). Filter pills: All / Sell / no_signal. Empty state: "No signals yet. Tap Analyze on any position to generate one."
+2. **Settings (`/settings`):** app-level only (per spec).
+   - IB Connection status + Reconnect button (re-triggers the IB login flow).
+   - Signal threshold (slider 0-100, persists to `user_preferences.signal_threshold`).
+   - Signal min market value ($, persists).
+   - Suppressed symbols (text list, persists to `user_preferences.suppressed_symbols`).
+   - Theme toggle (Dark / Light / System, persists).
+   - LLM provider dropdown (Gemini / Claude / OpenAI, persists; takes effect on next analyze).
+   - Sign out button.
+
+**Files this batch creates/edits:** `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx` (replace ComingSoon imports).
+
+**Verification:**
+- Tap bell icon → Alerts list renders, shows signal generated in Batch 14.
+- Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
+- Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
+
+---
+
+## Batch 16: Polish — error / loading / empty states, mobile install, a11y pass
+
+**Depends on:** Batch 15.
+
+**Scope:** Final pre-MVP-completion sweep. Catches edge cases and rough edges discovered during real usage between Batches 13-15.
+
+### Deliverables:
+1. **Loading states** for every async surface (initial portfolio load, chart load, analyze in progress, settings save).
+2. **Error states**: BE unreachable, IB session expired mid-action, Supabase Realtime disconnect with reconnect.
+3. **Empty states** with helpful guidance (no positions: "Connect IB"; no signals yet: same as Batch 15).
+4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
+5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored.
+6. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
+
+**Files this batch creates/edits:** Scattered touches across `client/src/`.
+
+**Verification:**
+- Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
+- Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
+
+**🎯 Milestone: MVP per spec.**
+
 
 
 
