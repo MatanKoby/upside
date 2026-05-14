@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 6 — Schema reconciliation + IB mappers + snapshot fix
+- Owner: claude
+- Started: 2026-05-14 17:50
 
 ## Completed
 
