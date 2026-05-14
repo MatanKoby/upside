@@ -56,3 +56,5 @@ logs/
 clientportal.gw/
 ibgateway/
 *.session
+.ssh/*
+

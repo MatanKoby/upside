@@ -25,7 +25,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 1: Portfolio Home", "Design System", "Key Met
    - `SortBar.tsx` — Signals / P&L / Custom toggle pills
    - `MarketPeriodBadge.tsx` — tappable badge with exchange hours dropdown
    - `Sparkline.tsx` — inline 7-day SVG sparkline (44x20px)
-   - `BottomNav.tsx` — four-tab navigation
+   - `BottomNav.tsx` — bottom navigation (MVP tabs: Portfolio, Alerts, Settings — Watchlist and Chat removed per MVP scope)
 3. Mock data file with 5-6 realistic positions
 4. Dark mode via CSS variables
 5. Mobile-first layout (375-390px)
@@ -116,7 +116,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
 ---
 
-## Batch 5: Docker Compose + Supabase schema + Node.js API scaffold [NOT READY]
+## Batch 5: Docker Compose + Supabase schema + Node.js API scaffold
 
 **Depends on:** Batch 4 (VPS must exist for deployment, but code can be written before)
 
@@ -125,37 +125,88 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 **Deliverables:**
 
 1. **`docker-compose.yml`** — 3 containers:
-   - `ib-gateway`: IB Client Portal Gateway (Java), localhost:5000 internal only, restart unless-stopped
-   - `api`: Node.js app built from server/Dockerfile, port 3001, depends on ib-gateway + redis
-   - `redis`: redis:7-alpine, port 6379 internal only
+   - `ib-gateway`: image `ghcr.io/gnzsnz/ib-gateway:stable` — confirmed ARM64/aarch64 multi-arch support, Docker auto-selects correct variant. Port 5000 internal only. **DO NOT set `TWS_USERID` / `TWS_PASSWORD` env vars** — IB credentials NEVER live in server config per security model. We use the image purely as a Java gateway runner; auth happens via REST API calls from Node backend that proxies user-entered credentials from browser. Set `TRADING_MODE=live`. Restart unless-stopped.
+   - `api`: Node.js app built from server/Dockerfile, port 3001 internal, depends on ib-gateway + redis, restart unless-stopped
+   - `redis`: redis:7-alpine (ARM64 compatible), port 6379 internal only, restart unless-stopped
 
 2. **`server/Dockerfile`** — node:22-alpine, install deps, expose 3001
 
 3. **Node.js API scaffold (`server/src/`):**
    - `index.ts` — Express + CORS + JSON + error handling
-   - `routes/auth.ts` — IB login proxy (POST login, POST tickle, GET status, POST logout)
+   - `routes/auth.ts` — Upside auth + IB auth:
+     - `POST /api/auth/google/callback` — handle Supabase OAuth callback, check email against `UPSIDE_ALLOWED_EMAILS` whitelist, log to `access_attempts`, redirect to https://google.com if not whitelisted
+     - `POST /api/auth/ib/login` — proxy IB credentials to IB Gateway, store session token in Redis with 24h TTL keyed by user ID
+     - `POST /api/auth/ib/tickle` — keepalive
+     - `GET /api/auth/ib/status` — connection status
+     - `POST /api/auth/ib/logout` — clear Redis session
    - `routes/portfolio.ts` — GET positions, GET summary
    - `routes/marketdata.ts` — GET snapshot/:symbol, GET history/:symbol
+   - `routes/signals.ts` — POST /api/signals/analyze (with concurrency lock pattern using `analysis_locks` table)
+   - `middleware/auth.ts` — JWT verification + whitelist check on every request
    - `services/ibGateway.ts` — IB Client Portal API wrapper with rate limiting
    - `services/redis.ts` — Redis client with TTL helpers
-   - `services/supabase.ts` — server-side Supabase client
+   - `services/supabase.ts` — server-side Supabase client (using service key)
    - `services/llm.ts` — provider-agnostic abstraction (interface + gemini/claude/openai implementations, selected via LLM_PROVIDER env var)
    - `services/technicals.ts` — RSI, MACD, Bollinger computation using `technicalindicators` lib
    - `services/finnhub.ts` — news, sentiment, earnings, insider trades
    - `cron/pricePoller.ts` — skeleton
-   - `cron/signalRunner.ts` — skeleton
-   - `cron/keepalive.ts` — skeleton
-   - `types/index.ts` — Position, Signal, MarketData, UserPreferences types
+   - `cron/signalRunner.ts` — skeleton (in MVP, only triggered by user — but cron handles cleanup of stale `analysis_locks` older than 60s)
+   - `cron/keepalive.ts` — skeleton (IB tickle + Supabase ping)
+   - `types/index.ts` — Position, Signal, MarketData, UserPreferences, AnalysisLock types
 
 4. **Supabase schema (`supabase/migrations/001_initial.sql`):**
    - `positions` table (symbol, shares, avg_cost, current_price, market_value, pnl, vwap, etc.)
-   - `signals` table (symbol, type, confidence, reasoning, target_price, timeframe, indicators JSONB)
-   - `user_preferences` table (threshold, min_market_value, suppressed_symbols, sort order, stat config, notification settings)
+   - `signals` table — UPDATED: range-based with separate metrics:
+     - `signalType` ('sell' | 'no_signal') — MVP scope (BUY post-MVP)
+     - `signalQuality` (0-100, LLM confidence in analysis, stable per signal)
+     - `priceRangeLow`, `priceRangeHigh` (null if no_signal)
+     - `optimalPrice` (the HIGH of range for sell, LOW for buy post-MVP)
+     - `reasoning` (overall summary text)
+     - `indicatorBullets` (JSONB array of per-indicator short rationales)
+     - `indicatorSnapshot` (JSONB snapshot of all indicator values at analysis time)
+     - `actualMaxSinceAnalysis` / `actualMinSinceAnalysis` (live-updated for accuracy tracking)
+     - `enteredRangeAt`, `exitedRangeAt` (timestamps)
+     - `supersededByAnalysisId` (null if current, else points to newer analysis)
+     - `analyzedAt`, `expiresAt`
+   - `user_preferences` table (signal_threshold, signal_min_market_value default 1000, suppressed_symbols, sort order, stat config, theme, quiet hours start/end, llm_provider)
    - `position_history` table (daily snapshots)
-   - Realtime enabled on positions + signals
-   - Row Level Security on all tables
+   - `analysis_locks` table — for concurrency control:
+     - `{ id, symbol, user_id, started_at, status: 'running' | 'failed' }`
+     - Auto-cleanup cron deletes locks older than 60 seconds (assumed crashed)
+   - `access_attempts` table — for whitelist enforcement logging:
+     - `{ id, email, granted: bool, ip_address, user_agent, attempted_at }`
+   - Realtime enabled on `positions`, `signals`, `analysis_locks` tables
+   - Row Level Security on all user-data tables
 
-5. **`.env.example`** — all required env vars documented
+5. **`.env.example`** — all required env vars documented (NO actual values, only placeholders):
+   ```
+   # Upside auth whitelist
+   UPSIDE_ALLOWED_EMAILS=email1@gmail.com,email2@gmail.com
+
+   # Supabase
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_ANON_KEY=your-anon-key
+   SUPABASE_SERVICE_KEY=your-service-role-key
+
+   # Google OAuth (Supabase handles, but client ID needed)
+   GOOGLE_OAUTH_CLIENT_ID=...
+
+   # LLM provider (gemini | claude | openai)
+   LLM_PROVIDER=gemini
+   GEMINI_API_KEY=...
+   ANTHROPIC_API_KEY=
+   OPENAI_API_KEY=
+
+   # External data sources
+   FINNHUB_API_KEY=...
+
+   # Internal
+   IB_GATEWAY_URL=http://ib-gateway:5000
+   REDIS_URL=redis://redis:6379
+   PORT=3001
+   NODE_ENV=production
+   ```
+   NOTE: IB credentials are NEVER in env vars. They're entered by user in browser, stored only in user's password manager. Backend proxies them at login time, stores resulting session token in Redis with 24h TTL.
 
 **Files:** `docker-compose.yml`, `server/**`, `supabase/**`, `.env.example`
 
@@ -163,7 +214,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
 ---
 
-## Batch 6: Real-time price loop + frontend wiring [NOT READY]
+## Batch 6: Real-time price loop + frontend wiring
 
 **Depends on:** Batch 1 + Batch 5
 
@@ -174,14 +225,82 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 ### Backend:
 1. `cron/pricePoller.ts` — full implementation: poll IB every 5-15s during market hours, cache Redis, write Supabase only on change, handle rate limits + session expiry
 2. `cron/keepalive.ts` — IB tickle every 30s, Supabase ping every 4h
-3. `utils/marketHours.ts` — detect pre-market/regular/after-hours/closed based on ET, weekends, holidays
+3. `utils/marketHours.ts` — detect pre-market/regular/after-hours/closed based on ET, weekends, US market holidays
 
 ### Frontend:
 4. `services/supabase.ts` — client initialization
-5. `hooks/usePositions.ts` — replace mock data with REST fetch + Supabase Realtime subscription
-6. `hooks/useSignals.ts` — Supabase Realtime on signals table
-7. `hooks/useMarketSession.ts` — poll auth/status for session + market period
+5. `hooks/usePositions.ts` — replace mock data with REST fetch + Supabase Realtime subscription. When Supabase notifies positions changed → pull fresh data from Supabase (source of truth)
+6. `hooks/useSignals.ts` — Supabase Realtime on signals table → pull updated signal on change
+7. `hooks/useMarketSession.ts` — polls `/api/auth/status` every 30s, returns `{ session: 'connected' | 'expired' | 'disconnected', marketPeriod: 'pre-market' | 'regular' | 'after-hours' | 'closed' }`
 8. Update PositionCard, SummaryStrip, Sparkline to accept real data props
 9. Sparkline fetches 7-day bars from `/api/marketdata/history/:symbol`
 
-**Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components
+### Connection status in header (always visible):
+- A small status dot in the header (next to the market period badge) shows IB connection state at all times
+- `connected` → green dot, no text
+- `disconnected` → amber dot + "Reconnecting..." text, retrying silently in background
+- `expired` → red dot + "Session expired" text
+- On reconnect success → dot returns to green automatically
+
+### Session expired — full UI block:
+- When app opens and IB session is expired, the entire UI is replaced with a full-screen reconnect prompt (not a banner)
+- Shows: Upside logo, "Your IB session has expired" message, "Reconnect" button
+- On tap: proxies credentials to IB gateway → waits for 2FA approval on IB Key app → animated "Waiting for approval..." state → on success, dismisses block and loads portfolio
+- Cached data is NOT shown beneath the block — session must be restored before portfolio is visible
+
+### Mid-session IB failure (hiccup):
+- Real-time loop retries silently up to 3 times with exponential backoff
+- Header dot changes to amber "Reconnecting..." immediately on first failure
+- If restored within retries → dot returns to green, no disruption to UI
+- If all retries fail → dot turns red "Session expired" → user taps dot to trigger reconnect flow (same flow as above but as a non-blocking side sheet, not full-screen block, since user already has data loaded)
+
+**TypeScript interfaces (`server/src/types/index.ts` and `client/src/types/index.ts`):**
+```typescript
+interface Position {
+  symbol: string
+  companyName: string
+  shares: number
+  avgCost: number
+  currentPrice: number
+  marketValue: number
+  unrealizedPnl: number
+  unrealizedPnlPct: number
+  todayChange: number
+  todayChangePct: number
+  vwap: number | null
+  vwapDiffPct: number | null
+  portfolioWeight: number      // positionValue / totalPortfolioValue
+  portfolioContribution: number // unrealizedPnlPct * portfolioWeight
+  dailyReturn: number | null   // unrealizedPnlPct / tradingDaysHeld
+  tradingDaysHeld: number | null
+  updatedAt: string
+}
+
+interface Signal {
+  id: string
+  symbol: string
+  signalType: 'sell' | 'buy' | 'watch' | 'event'
+  confidence: number           // 0-100
+  reasoning: string
+  targetPriceLow: number | null
+  targetPriceHigh: number | null
+  timeframe: string | null
+  riskReward: string | null
+  indicators: IndicatorSnapshot[]
+  createdAt: string
+  expiresAt: string | null
+}
+
+interface IndicatorSnapshot {
+  name: string
+  value: string
+  status: 'bullish' | 'bearish' | 'neutral'
+}
+
+type MarketPeriod = 'pre-market' | 'regular' | 'after-hours' | 'closed'
+type SessionStatus = 'connected' | 'disconnected' | 'expired'
+```
+
+**Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components, `client/src/types/index.ts`, `server/src/types/index.ts`
+
+

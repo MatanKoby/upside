@@ -6,6 +6,42 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 
 ---
 
+## Security
+
+This spec is public. The repo is public. Security comes from proper secret isolation, authentication, and database access controls — NOT obscurity. Anyone reading this spec gains no advantage in attacking the system.
+
+### What MUST NEVER be committed to the repo:
+- `.env` files (use `.env.example` with placeholder values only)
+- Any API keys: Gemini, Finnhub, Anthropic, OpenAI, Supabase service key
+- IB account credentials (username, password, account number)
+- Whitelisted Gmail addresses for access control
+- The Oracle VPS public IP address
+- Custom domain names (if any used)
+- Supabase project URL or anon key
+- Any IB session tokens or auth cookies
+- Database dumps, backups, or actual user data
+- Screenshots showing real positions, real portfolio values, or real signal data (use mock data for screenshots)
+
+### What MUST be enforced:
+- `.gitignore` includes `.env`, `.env.local`, `.env.production`, `*.pem`, `*.key`, `secrets/`, `node_modules/`, build artifacts
+- GitHub secret scanning enabled (default for public repos) — auto-detects accidentally committed API keys
+- All secrets via environment variables on the Oracle VPS (`docker-compose` reads from `.env` file that's NOT committed)
+- Supabase Row Level Security (RLS) policies enforced on every user-data table
+- IB credentials stored ONLY in user's browser password manager — never in app code, server config, or database
+- IB session tokens stored ONLY in Redis with 24h TTL — never persisted to disk or DB
+- Google OAuth + email whitelist for Upside auth, with rejected attempts logged to `access_attempts` table
+- Rate limiting on all public endpoints (login, OAuth callback)
+- HTTPS only (Vercel handles for frontend, Oracle VPS needs Let's Encrypt for backend if direct access; otherwise route through Cloudflare Tunnel)
+- Dependency audit (`npm audit`) before any deploy
+- Secrets rotated if ever exposed accidentally — assume compromise
+
+### Repo visibility:
+- Spec repo: PUBLIC (this file)
+- Code repo: PUBLIC (proper secret isolation assumed)
+- Both public is acceptable; the security model assumes hostile reading
+
+---
+
 ## Architecture
 
 ### Tech Stack
@@ -18,7 +54,8 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 - **AI/LLM**: Gemini free tier via Google AI Studio (initially). Provider-agnostic abstraction layer — swap to Claude/OpenAI via env var. No vendor lock-in.
 - **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
 - **Hosting**: Vercel (frontend, free *.vercel.app subdomain), Oracle Cloud (backend + IB gateway + Redis, free)
-- **CI/CD**: GitHub (private repo) + manual deploy initially, GitHub Actions later
+- **CI/CD**: GitHub (PUBLIC repo, proper secret isolation) + manual deploy initially, GitHub Actions later
+- **Auth**: Google OAuth via Supabase Auth + hard-coded email whitelist (invite-only for MVP)
 - **Total monthly cost**: $0 (Gemini free tier). Upgrade path: ~$5-10/mo if switching to Claude API.
 
 ### Infrastructure — Oracle Cloud VPS (US-Ashburn)
@@ -30,12 +67,112 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 - All 3 containers communicate via Docker internal network (localhost)
 
 ### IB Authentication Flow
-- Manual login via Upside UI: enter IB username/password → approve 2FA on IB Key phone app
-- No automated login (IBeam/Playwright) — IB prohibits it for individual accounts, risk of account flagging
-- Session maintained via tickle endpoint every 30s, lasts until IB's nightly forced logout (~11:45 PM ET)
-- On session expiry: app shows cached data + amber "Reconnect" banner, one-tap re-auth
-- Daily ritual: open app → tap reconnect → approve 2FA → live data (~10 seconds)
-- User's IB Israel account (U-prefix) works with Client Portal API
+### Upside Authentication (Google OAuth + Whitelist)
+- Single login button on entry: "Continue with Google"
+- Uses Supabase Auth with Google OAuth provider
+- After Google OAuth returns, backend checks email against whitelist (env var `UPSIDE_ALLOWED_EMAILS`)
+- Whitelisted → JWT issued, lasts 30+ days, lands on portfolio home (or IB connect if first time)
+- Not whitelisted → log attempt to `access_attempts` table (`{ email, ip_address, user_agent, attempted_at }`), sign out, redirect to https://google.com (inconspicuous bounce)
+- No public signup form — emails are added to whitelist out-of-band by admin
+- No password-based fallback in MVP (Google OAuth only)
+- Login page has no Upside branding visible until after auth succeeds
+
+### IB Authentication Flow
+- First-time setup wizard: after Upside login → "Connect IB" screen → form with `autocomplete="username"` and `autocomplete="current-password"` attributes
+- Browser/OS prompts to save credentials to password manager (Keychain, 1Password, Bitwarden, etc.)
+- Credentials NEVER stored by Upside — only in user's password manager and IB's auth servers
+- Backend proxies credentials to IB Gateway → 2FA push to IB Key phone app → user approves with biometrics → connected
+- IB session token stored in Redis with 24h TTL, keyed by Supabase user ID
+- Multi-device support: IB session shared across all user's devices (both pull from same Redis-stored session)
+- Session keepalive via tickle endpoint every 30s
+- IB's nightly forced logout (~11:45 PM ET) ends session daily
+- On session expiry: full-screen block with "Reconnect" prompt (no cached data shown until restored)
+- On mid-session failure (IB hiccup): silent retry with exponential backoff, header status dot turns amber. If all retries fail, dot turns red, user can tap to reconnect via non-blocking side sheet.
+- Backend stops polling when session expires — no unnecessary API calls
+- If IB session is killed externally (user logged into TWS directly), next backend poll detects auth error → marks expired → all clients see block screen
+
+### Connection Status Header
+- Always-visible status dot in header next to market period badge
+- Green dot → connected (no text)
+- Amber dot + "Reconnecting..." → mid-session retry in progress
+- Red dot + "Session expired" → user action required
+
+### Signal Model (MVP — SELL signals on held positions only)
+
+**Trigger:** Manual only. Two-step intentional friction:
+1. User taps "Analyze" on ticker detail
+2. Button greys out for 1 second
+3. Button shows "Confirm analyze" — user taps again to confirm
+4. Analysis runs (~5-15 seconds)
+
+**Concurrency lock (Supabase + Realtime):**
+- `analysis_locks` table with row per active analysis: `{ symbol, user_id, started_at, status }`
+- Supabase Realtime broadcasts lock to all connected clients → Analyze button disabled everywhere
+- On completion (success or error), lock row deleted → button re-enables, new signal appears via Realtime
+- Stale locks (>60s old) auto-cleaned by cron
+
+**Pre-LLM filters (skip analysis entirely):**
+- Skip positions with market value < $1,000 (configurable threshold)
+- Skip positions where user has manually disabled signal generation
+- DROPPED for MVP: "skip positions opened recently" filter (manual trigger means user controls timing)
+
+**Signal structure (range-based, not point-based):**
+- Engine outputs SELL with a **price range** (e.g. $193-198) and **optimal price** (the HIGH of range, since selling high = better)
+- Signal is dormant until live price enters range
+- Client renders SELL badge when current price ≥ range low
+- **Two confidence metrics shown separately:**
+  - Signal Quality (0-100, LLM's confidence in the analysis — stable per signal)
+  - Price Proximity ("at optimal" / "approaching optimal" / "edge of range" — computed from live price)
+- Compact card shows: "Sell · 82% · $193–198 (target $198)"
+
+**No-signal as valid output:**
+- LLM can return `signalType: 'no_signal'` with a reason ("Indicators mixed: RSI overbought but volume increasing, earnings in 2 days adds uncertainty")
+- Stored like any other signal, visible in history
+
+**Multiple signals per analysis:**
+- One analysis can produce 1 or 2 signal records (e.g. sell + buy when both make sense)
+- In MVP, only SELL is supported, so this is effectively always 1 signal
+
+**Re-analysis behavior:**
+- Re-analyzing creates a new signal record; old signal marked `supersededByAnalysisId`
+- Old signal remains in history, never deleted
+- Latest signal shown on ticker detail by default with "Last analyzed: 3h ago · N previous analyses"
+- Signal History collapsible section shows full chronological list of past analyses for this ticker
+
+**Accuracy tracking (continuous, per signal):**
+- For each SELL signal: track `actualMaxSinceAnalysis` — highest price observed since signal generated
+- For each BUY signal (post-MVP): track `actualMinSinceAnalysis` — lowest price observed
+- Updated on every price tick during market hours
+- Stored in signal record for post-MVP accuracy view
+
+**Info badges (non-signal context, shown on cards):**
+- Earnings date proximity (e.g. "Earnings · 12d")
+- Upcoming dividend dates
+- Insider transactions (size/direction)
+- Unusual volume (today vs 30d avg)
+- Material news (sentiment-flagged via Finnhub)
+- Analyst rating changes
+- Extreme social sentiment (very positive or very negative)
+- All shown in one row on compact card, trading signals shown FIRST, info badges AFTER
+
+### Realtime Update Architecture (no push notifications in MVP)
+- All clients subscribe to Supabase Realtime on `positions`, `signals`, `analysis_locks` tables
+- Backend writes to Supabase → Realtime pushes change notification to clients → clients pull latest data from Supabase (source of truth)
+- Push notifications DROPPED from MVP — Realtime handles online users. Offline users see updates when they next open the app.
+- Push notifications return post-MVP when automated signal scanning is added (user might be alerted when not in app)
+
+### LLM Provider Abstraction
+- Provider-agnostic interface in backend: `analyzePosition(context: PositionContext) → Signal`
+- Implementations: `gemini.ts` (default for MVP — free tier), `claude.ts`, `openai.ts` (upgrade paths)
+- Selected via `LLM_PROVIDER` env var (`gemini` | `claude` | `openai`)
+- Switching providers requires backend restart
+
+### Signal Data Sources (per analysis)
+- IB price data: real-time + intraday + historical daily bars + pre-market data
+- Computed locally: RSI, MACD, Bollinger, VWAP divergence, support/resistance, volume profile, SMA/EMA, Stochastic
+- Finnhub: news, sentiment scores, insider transactions, earnings calendar
+- LLM picks the timeframe (intraday, swing, longer) based on what the data suggests
+- Reasoning output includes short bullet per contributing indicator + overall summary
 
 ### Data Sources (simplified)
 - **IB API provides**: real-time prices, OHLCV bars (any interval/timeframe), VWAP, volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data
@@ -48,12 +185,6 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 - Global: 10 requests/second via Client Portal API
 - Historical data: no hard limit for bars ≥1 min, but soft pacing — avoid >60 requests/10 min
 - With <10 positions, rate limits are not a concern. Redis cache prevents redundant calls.
-
-### Signal Engine Filters
-- Skip positions with market value < $200 (configurable threshold)
-- Skip positions where user has manually disabled signal generation
-- Skip positions opened less than configurable hours ago (avoid noise on new entries)
-- Filters checked before any API calls, saving LLM tokens and Finnhub quota
 
 ### Supabase Keepalive
 - Backend pings Supabase with a lightweight query every few hours to prevent 7-day inactivity pause
@@ -77,7 +208,7 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 ### Sprint 1 — Get data on screen (~1 week)
 1. IB gateway + Node.js API proxy on Oracle VPS
 2. Portfolio home screen with real IB position data (static initially)
-3. Supabase setup + auth (single user)
+3. Supabase setup + Google OAuth auth + email whitelist
 
 ### Sprint 2 — Make it live (~1 week)
 4. Real-time price updates (WebSocket/polling from IB, all sessions)
@@ -87,19 +218,35 @@ Upside is a mobile-first PWA portfolio intelligence layer for Interactive Broker
 8. Ticker detail screen
 
 ### Sprint 3 — Add intelligence (~2 weeks)
-9. Signal analysis engine (technical indicators + LLM synthesis)
-10. Signal pills on position cards
+9. Signal analysis engine — manual trigger only, SELL signals on held positions
+10. Signal pills on position cards (range-based, fired when live price in range)
 11. Signal detail view (Style A analytical breakdown)
+12. Signal history per ticker
+13. Analysis lock pattern (concurrent-safe via Supabase Realtime)
 
-### Sprint 4 — Notifications + polish (~1 week)
-12. PWA push notifications
-13. Alerts feed screen
-14. Settings screen
+### Sprint 4 — Polish (~1 week)
+14. Alerts feed screen (Positions only in MVP)
+15. Settings screen (MVP scope: IB connection, signal preferences, theme, LLM provider)
+16. Multi-device sync via shared IB session in Redis
 
-### Post-MVP
-- AI chat (conversational portfolio Q&A)
-- Natural language ticker screener
-- Trade journal with %/day metric
+### Out of MVP — DROPPED
+- ❌ Push notifications (Supabase Realtime handles online users; users not in app don't need urgent alerts in MVP)
+- ❌ Watchlists (regular and active) — first thing post-MVP
+- ❌ BUY signals (only SELL signals in MVP since BUY relates to entries/watchlist)
+- ❌ Automated signal scanning / cron-based analysis
+- ❌ Alpha Vantage (all technicals computed locally)
+- ❌ Upstash Redis external (self-hosted in Docker)
+- ❌ IBeam / automated IB login (manual via browser autofill)
+
+### Post-MVP (in priority order)
+1. Active Watchlist (BUY signals on whatever ticker)
+2. Regular Watchlists (read-only mirror from IB)
+3. Push notifications (when automated scanning is added)
+4. AI chat (conversational portfolio Q&A)
+5. Natural language ticker screener
+6. Trade journal with %/day metric
+7. Signal accuracy tracking view (aggregated stats from per-signal accuracy data)
+8. Options / shorts / trade execution
 
 ---
 
