@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 7.5 — Collapse migrations into single baseline
 - Owner: claude
 - Started: 2026-05-14 19:49
-
-## Completed
+- Finished: 2026-05-14 19:50
+- Commit: 6ed224b
 
 ### Batch 6 — Schema reconciliation + IB mappers + snapshot fix
 - Owner: claude
