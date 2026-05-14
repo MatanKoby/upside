@@ -14,6 +14,11 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Batch 8 — Supabase project provisioning
+- Owner: Me!
+- Started: 2026-05-14 20:26
+- Finished: 2026-05-14 20:41
+
 ### Batch 9 — Real-time price loop + frontend wiring
 - Owner: claude
 - Started: 2026-05-14 19:50
