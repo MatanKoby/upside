@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 9 — Real-time price loop + frontend wiring
+- Owner: claude
+- Started: 2026-05-14 19:50
 
 ## Completed
 
