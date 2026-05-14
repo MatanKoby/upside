@@ -72,10 +72,11 @@ This spec is public. The repo is public. Security comes from proper secret isola
 ### Upside Authentication (Google OAuth + Whitelist)
 - Single login button on entry: "Continue with Google"
 - Uses Supabase Auth with Google OAuth provider
-- After Google OAuth returns, backend checks email against whitelist (env var `UPSIDE_ALLOWED_EMAILS`)
+- After Google OAuth returns, backend checks email against whitelist (env var `UPSIDE_ALLOWED_EMAILS`, comma-separated)
 - Whitelisted → JWT issued, lasts 30+ days, lands on portfolio home (or IB connect if first time)
 - Not whitelisted → log attempt to `access_attempts` table (`{ email, ip_address, user_agent, attempted_at }`), sign out, redirect to https://google.com (inconspicuous bounce)
 - No public signup form — emails are added to whitelist out-of-band by admin
+- **Multiple whitelisted emails are allowed at the auth layer** (any whitelisted user can sign in and access the app). However, **pricePoller serves only the *first* whitelisted user's data** in MVP — i.e. positions are polled from the IB account tied to whichever Supabase user matched the first email in `UPSIDE_ALLOWED_EMAILS`. Additional users can sign in but will see no data until the multi-user architecture lands post-MVP (per-user `ib-gateway` container).
 - No password-based fallback in MVP (Google OAuth only)
 - Login page has no Upside branding visible until after auth succeeds
 
