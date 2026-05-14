@@ -294,6 +294,27 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 
 ---
 
+## Batch 7.5: Collapse migrations into single baseline
+
+**Depends on:** Batch 6 (must have written migration 002 before there's anything to collapse).
+
+**Scope:** Before we apply any SQL to a real Supabase project, fold the contents of `supabase/migrations/002_align_with_ib.sql` directly into `supabase/migrations/001_initial.sql` so that the on-disk schema is a single source-of-truth file. Delete `002_align_with_ib.sql`.
+
+**Why:** We're pre-deploy. There's no production data to preserve through a migration sequence. The 001/002 split was useful as an audit trail of "what we learned from Batch 7 captures" — but that history is already captured in git log + `CLAIMS.md` + `BUILD_QUEUE.md`. The on-disk file should reflect the *current intended schema*, not the history of how we got there.
+
+After this batch, future schema changes (post-Supabase-deploy) become real sequential migrations (`002`, `003`, etc.) with the proper "alter existing" semantics. The pre-deploy collapsing only happens once.
+
+**Deliverables:**
+1. Edit `supabase/migrations/001_initial.sql` to incorporate all changes from `002_align_with_ib.sql` (positions columns, signals.conid, contracts table, ib_api_metrics table). Existing 001 table definitions get the new columns added inline rather than via `alter table`.
+2. Delete `supabase/migrations/002_align_with_ib.sql`.
+3. Verify by reading the consolidated 001 top-to-bottom — every table fully specified, no `alter` statements remain.
+
+**Files:** `supabase/migrations/001_initial.sql` (rewrite), `supabase/migrations/002_align_with_ib.sql` (delete).
+
+**Does NOT touch:** Any code, types, mappers, FE. Pure SQL housekeeping.
+
+---
+
 ## Batch 8: Supabase project provisioning [MANUAL]
 
 **Scope:** Create the actual Supabase project, apply migrations, save credentials. You do this manually; no agent claim, no agent code.
@@ -303,8 +324,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 ### Steps:
 1. Create Supabase account at https://supabase.com if not already.
 2. New project → name `upside-prod` (or whatever) → choose closest region to Oracle VPS (US East 1 / Virginia matches Ashburn well).
-3. In SQL Editor, paste and run `supabase/migrations/001_initial.sql`.
-4. In SQL Editor, paste and run `supabase/migrations/002_align_with_ib.sql` (from Batch 6).
+3. In SQL Editor, paste and run `supabase/migrations/001_initial.sql` (single baseline file post-Batch-7.5; if Batch 7.5 hasn't run yet, also apply `002_align_with_ib.sql` after).
 5. Project Settings → API → copy:
    - `SUPABASE_URL` (Project URL)
    - `SUPABASE_ANON_KEY` (anon / public key)
