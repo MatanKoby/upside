@@ -381,6 +381,10 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 
 **Note on shared types:** the `Position` / `Signal` / `IndicatorSnapshot` / `MarketPeriod` / `SessionStatus` types this batch consumes are already defined and reconciled with IB reality in Batch 6 (`server/src/types/index.ts`, `client/src/types/index.ts`). Don't redefine; import.
 
+**Verification pending from spec — resolve in this batch:**
+- `tradingDaysHeld` source. Spec intends to derive this from IB's transactions endpoint (`/v1/api/portfolio/<acctId>/transactions` or equivalent). Confirm the endpoint exists, the response shape gives us entry dates, and that it works for older positions. If unreliable, fall back to Upside-tracked entry-date (mark older positions as "≥N days" until next change-in-shares event).
+- MTD return source. Spec intends to pull MTD from IB's account summary endpoint. Confirm endpoint name + response field. If absent, compute from a Redis-cached portfolio-value snapshot taken at the start of each month.
+
 **Files:** `server/src/cron/*`, `server/src/utils/marketHours.ts`, `client/src/services/supabase.ts`, `client/src/hooks/*`, updates to PortfolioHome components.
 
 ---

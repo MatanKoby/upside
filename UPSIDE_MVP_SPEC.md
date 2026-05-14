@@ -189,8 +189,8 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ### Data Sources (simplified)
 - **IB API provides**: real-time prices (subscribe-then-poll snapshot), OHLCV bars (any interval/timeframe), volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data, transactions, account summary (incl. MTD return).
-- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance, volume profile, **VWAP** (IB's snapshot endpoint does NOT expose VWAP as a field; we compute it from intraday history bars in `server/src/services/technicals.ts`), VWAP divergence, **`tradingDaysHeld`** (from IB's transactions endpoint: find entry date for each held position, count trading days since).
-- **From IB account summary**: month-to-date (MTD) return (pulled directly; no dependency on our own daily snapshots).
+- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance, volume profile, **VWAP** (IB's snapshot endpoint does NOT expose VWAP as a field; we compute it from intraday history bars in `server/src/services/technicals.ts`), VWAP divergence, **`tradingDaysHeld`** (intended source: IB's transactions endpoint — find entry date for each held position, count trading days since. **⚠ Verification pending at Batch 9 implementation**: confirm the transactions endpoint exists, returns the data we need, and is reliable for all positions. Fallback if not: track entry-date in Upside from when we first see a position, accept that pre-Upside positions show 0 until next user-confirmed entry).
+- **From IB account summary**: month-to-date (MTD) return — intended source is `/v1/api/portfolio/<acctId>/summary` or equivalent (**⚠ Verification pending at Batch 9 implementation**: confirm endpoint name and response shape for MTD field). Fallback if missing: compute from a lightweight position-value-at-month-start snapshot kept in Redis.
 - **Finnhub provides**: company news + sentiment scores, insider transactions, earnings calendar + estimates, basic financials (supplementary)
 - **Alpha Vantage**: DROPPED — 25 calls/day too limiting, all technicals computed locally instead
 - **Sparklines**: fetched live from IB (7 daily bars per ticker), current day updates in real-time. No overnight batch needed.
@@ -370,6 +370,8 @@ Four tabs with icons + labels:
 
 Opens as a full-screen slide-in from the right when tapping a position card. Route: `/ticker/:symbol`
 
+> **Held vs. unheld tickers render the same screen.** Every TickerDetail screen has the same layout: header, today's range, market stats, chart, controls, timeframe bar, collapsible sections. The only difference between a position you hold and one you don't is that **Position Stats** section is present for held positions (shares, avg cost, P&L, contribution, days held) and absent for non-held. Everything else — signal section, market stats, chart, indicators — renders identically regardless.
+
 #### Navigation
 - Slide-in animation from right (CSS transform)
 - Back arrow (ti-arrow-left) returns to portfolio home
@@ -482,14 +484,16 @@ Empty state for MVP: "No signals yet. Signals will appear here once the analysis
 
 ### Screen 4: Settings
 
-> **Note — two-tier settings model:** This screen is the **app-level** Settings. The per-ticker display configuration (which market stats to show on TickerDetail, etc.) lives in its own inline edit panel **inside the TickerDetail screen**, NOT here. Don't conflate the two.
+> **Settings are global, not per-ticker.** Every ticker detail screen looks the same — same layout, same market-stats panel, same chart controls. Whether you hold the position or not, the screen renders identically except that held positions display their position-stats section (shares, avg cost, P&L, etc.) and non-held positions don't. The inline edit panel inside TickerDetail's MarketStats component is a *convenience* surface for adjusting display preferences — but the resulting settings are stored once in `user_preferences.stat_config` and apply to **all** ticker screens.
+
+**Settings persistence:** All user-settable preferences live in the `user_preferences` Supabase table (one row per user, keyed by Supabase user ID). The FE writes through the BE (`PUT /api/user/preferences` or equivalent — to be added in Batch 15) which validates and upserts the row. On app load, the FE reads the row once and subscribes to Realtime so multi-device users see changes propagate.
 
 **App-level Settings (MVP scope):**
 
 - **IB Connection**: Status indicator (connected/disconnected/session expired), last sync time, reconnect button
 - **Signal Preferences**: Confidence threshold slider (same as alerts), signal_min_market_value, suppressed symbols list
 - **Notifications**: DROPPED from MVP (no push notifications). Quiet-hours UI deferred until push returns post-MVP.
-- **Display**: Dark/light mode toggle (or system default), market period display preferences
+- **Display**: Dark/light mode toggle (or system default), market period display preferences, market-stats config (which 6-8 stats appear on the TickerDetail MarketStats panel)
 - **LLM Provider**: Dropdown (Gemini / Claude / OpenAI) — selects which provider the user-triggered signal analysis uses
 - **Account**: Email, sign out
 
