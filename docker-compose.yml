@@ -1,0 +1,45 @@
+# Upside — production compose stack.
+# Three containers on a private bridge network. Only the api is published.
+
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    # IMPORTANT: do NOT set TWS_USERID / TWS_PASSWORD.
+    # IB credentials NEVER live in server config per the project's security model.
+    # We use this image purely as a Java gateway runner; auth happens via REST
+    # calls from the Node backend, which proxies user-entered credentials.
+    environment:
+      TRADING_MODE: live
+    restart: unless-stopped
+    networks:
+      - upside
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - upside
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      IB_GATEWAY_URL: http://ib-gateway:5000
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - ib-gateway
+      - redis
+    ports:
+      - "127.0.0.1:3001:3001"
+    restart: unless-stopped
+    networks:
+      - upside
+
+networks:
+  upside:
+    driver: bridge

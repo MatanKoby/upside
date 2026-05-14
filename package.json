@@ -5,8 +5,9 @@
   "packageManager": "pnpm@11.0.9",
   "scripts": {
     "dev": "pnpm --filter client dev",
-    "build": "pnpm --filter client build",
+    "dev:server": "pnpm --filter server dev",
+    "build": "pnpm -r build",
     "preview": "pnpm --filter client preview",
-    "typecheck": "pnpm --filter client typecheck"
+    "typecheck": "pnpm -r typecheck"
   }
 }
