@@ -10,6 +10,9 @@ importers:
 
   client:
     dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.45.4
+        version: 2.105.4
       '@tabler/icons-react':
         specifier: ^3.21.0
         version: 3.44.0(react@18.3.1)

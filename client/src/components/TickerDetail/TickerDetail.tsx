@@ -48,7 +48,7 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
       <MarketStats initialStats={detail.marketStats} />
 
       <section className="td-chart-shell" aria-label="Chart placeholder">
-        <PriceChart timeframe={timeframe} mode={mode} overlays={overlays} />
+        <PriceChart symbol={detail.symbol} timeframe={timeframe} mode={mode} overlays={overlays} entryPrice={detail.positionStats.avgCost} />
         <ChartControls
           mode={mode}
           overlays={overlays}

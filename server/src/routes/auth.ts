@@ -4,8 +4,24 @@ import { supabase } from '../services/supabase.js';
 import { ibLogin, ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
 import { setWithTtl, get, del, ibSessionKey } from '../services/redis.js';
 import { requireAuth } from '../middleware/auth.js';
+import { marketPeriodAt } from '../utils/marketHours.js';
 
 const router = Router();
+
+// GET /api/auth/status — combined session + market period.
+// Polled by the FE every 30s via useMarketSession hook.
+router.get('/status', requireAuth, async (req: Request, res: Response) => {
+  const sessionToken = req.user ? await get(ibSessionKey(req.user.id)) : null;
+  let session: 'connected' | 'disconnected' | 'expired' = 'expired';
+  if (sessionToken) {
+    const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+    session = status.authenticated && status.connected ? 'connected' : 'disconnected';
+  }
+  res.json({
+    session,
+    marketPeriod: marketPeriodAt(),
+  });
+});
 
 router.post('/google/callback', async (req: Request, res: Response) => {
   const { accessToken } = req.body ?? {};

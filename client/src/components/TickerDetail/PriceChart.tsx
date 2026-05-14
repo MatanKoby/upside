@@ -9,26 +9,48 @@ import {
   LineSeries,
 } from 'lightweight-charts';
 import { mockChartDataByTimeframe, type ChartTimeframe } from '../../data/mockChartData';
+import { useChartHistory, type ChartHistory } from '../../hooks/useChartHistory';
 import type { ChartMode, OverlayKey } from './ChartControls';
 
 export function PriceChart({
+  symbol,
   timeframe,
   mode,
   overlays,
+  entryPrice,
 }: {
+  symbol?: string;
   timeframe: ChartTimeframe;
   mode: ChartMode;
   overlays: Record<OverlayKey, boolean>;
+  entryPrice?: number;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const rsiHostRef = useRef<HTMLDivElement | null>(null);
+  const { history: fetched, isLoading } = useChartHistory(symbol, timeframe);
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) {
-      return undefined;
+    if (!host) return undefined;
+
+    // Use real fetched data when available; fall back to mock during the
+    // wiring transition or when symbol prop is absent.
+    let data: ChartHistory & { rsi: { time: number; value: number }[]; entryDate?: number };
+    if (fetched) {
+      data = { ...fetched, rsi: [], entryDate: undefined };
+    } else {
+      const mock = mockChartDataByTimeframe[timeframe];
+      data = {
+        candles: mock.candles,
+        closeLine: mock.closeLine,
+        vwap: mock.vwap,
+        volume: mock.volume,
+        // mock rsi is shaped as LineData<Time> — coerce for the local type
+        rsi: mock.rsi as unknown as { time: number; value: number }[],
+        entryDate: mock.entryDate as unknown as number,
+      };
     }
-    const data = mockChartDataByTimeframe[timeframe];
+
     const textPrimary = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f5f5f3';
     const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || 'rgba(255,255,255,0.08)';
     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#0f0f0f';
@@ -40,21 +62,15 @@ export function PriceChart({
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: textPrimary,
       },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-      },
+      crosshair: { mode: CrosshairMode.Normal },
       grid: {
         vertLines: { color: borderColor },
         horzLines: { color: borderColor },
       },
       handleScale: true,
       handleScroll: true,
-      rightPriceScale: {
-        borderColor,
-      },
-      timeScale: {
-        borderColor,
-      },
+      rightPriceScale: { borderColor },
+      timeScale: { borderColor },
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -75,7 +91,7 @@ export function PriceChart({
     });
     lineSeries.setData(data.closeLine);
 
-    if (overlays.vwap) {
+    if (overlays.vwap && data.vwap.length > 0) {
       const vwapSeries = chart.addSeries(LineSeries, {
         color: '#8f68ff',
         lineWidth: 2,
@@ -84,45 +100,46 @@ export function PriceChart({
       vwapSeries.setData(data.vwap);
     }
 
-    if (overlays.volume) {
+    if (overlays.volume && data.volume.length > 0) {
       const volumeSeries = chart.addSeries(HistogramSeries, {
         priceFormat: { type: 'volume' },
         priceScaleId: '',
       });
       volumeSeries.priceScale().applyOptions({
-        scaleMargins: {
-          top: 0.75,
-          bottom: 0,
-        },
+        scaleMargins: { top: 0.75, bottom: 0 },
       });
       volumeSeries.setData(data.volume);
     }
 
-    const markerTarget = mode === 'candle' ? candleSeries : lineSeries;
-    createSeriesMarkers(markerTarget, [
-      {
-        time: data.entryDate,
-        position: 'aboveBar',
-        color: '#f5b500',
-        shape: 'arrowDown',
-        text: 'Entry',
-      },
-    ]);
-
-    const firstTime = data.closeLine[0]?.time;
-    const lastTime = data.closeLine[data.closeLine.length - 1]?.time;
-    if (firstTime && lastTime) {
-      const entryLine = chart.addSeries(LineSeries, {
-        color: 'rgba(245, 181, 0, 0.65)',
-        lineStyle: 2,
-        lineWidth: 1,
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
-      entryLine.setData([
-        { time: firstTime, value: data.entryPrice },
-        { time: lastTime, value: data.entryPrice },
+    const entryDateFallback = data.closeLine[0]?.time;
+    const entryDateActual = data.entryDate ?? entryDateFallback;
+    if (entryPrice !== undefined && entryDateActual !== undefined) {
+      const markerTarget = mode === 'candle' ? candleSeries : lineSeries;
+      createSeriesMarkers(markerTarget, [
+        {
+          time: entryDateActual as never,
+          position: 'aboveBar',
+          color: '#f5b500',
+          shape: 'arrowDown',
+          text: 'Entry',
+        },
       ]);
+
+      const firstTime = data.closeLine[0]?.time;
+      const lastTime = data.closeLine[data.closeLine.length - 1]?.time;
+      if (firstTime && lastTime) {
+        const entryLine = chart.addSeries(LineSeries, {
+          color: 'rgba(245, 181, 0, 0.65)',
+          lineStyle: 2,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+        entryLine.setData([
+          { time: firstTime, value: entryPrice },
+          { time: lastTime, value: entryPrice },
+        ]);
+      }
     }
 
     chart.timeScale().fitContent();
@@ -135,38 +152,24 @@ export function PriceChart({
     let rsiChart: ReturnType<typeof createChart> | undefined;
     let rsiResizeObserver: ResizeObserver | undefined;
 
-    if (overlays.rsi && rsiHostRef.current) {
+    if (overlays.rsi && rsiHostRef.current && data.rsi.length > 0) {
       const rsiHost = rsiHostRef.current;
       rsiChart = createChart(rsiHost, {
         width: rsiHost.clientWidth,
         height: 90,
-        layout: {
-          background: { type: ColorType.Solid, color: bgColor },
-          textColor: textPrimary,
-        },
-        grid: {
-          vertLines: { color: borderColor },
-          horzLines: { color: borderColor },
-        },
+        layout: { background: { type: ColorType.Solid, color: bgColor }, textColor: textPrimary },
+        grid: { vertLines: { color: borderColor }, horzLines: { color: borderColor } },
         rightPriceScale: {
           borderColor,
-          scaleMargins: {
-            top: 0.05,
-            bottom: 0.05,
-          },
+          scaleMargins: { top: 0.05, bottom: 0.05 },
         },
-        timeScale: {
-          borderColor,
-          visible: false,
-        },
-        crosshair: {
-          mode: CrosshairMode.Normal,
-        },
+        timeScale: { borderColor, visible: false },
+        crosshair: { mode: CrosshairMode.Normal },
         handleScroll: false,
         handleScale: true,
       });
       const rsiSeries = rsiChart.addSeries(LineSeries, { color: '#f5b500', lineWidth: 2 });
-      rsiSeries.setData(data.rsi);
+      rsiSeries.setData(data.rsi as never);
       const overboughtLine = rsiChart.addSeries(LineSeries, {
         color: 'rgba(226, 75, 74, 0.5)',
         lineWidth: 1,
@@ -174,7 +177,7 @@ export function PriceChart({
         lastValueVisible: false,
         priceLineVisible: false,
       });
-      overboughtLine.setData(data.rsi.map((point) => ({ time: point.time, value: 70 })));
+      overboughtLine.setData(data.rsi.map((point) => ({ time: point.time as never, value: 70 })));
       const oversoldLine = rsiChart.addSeries(LineSeries, {
         color: 'rgba(99, 153, 34, 0.5)',
         lineWidth: 1,
@@ -182,7 +185,7 @@ export function PriceChart({
         lastValueVisible: false,
         priceLineVisible: false,
       });
-      oversoldLine.setData(data.rsi.map((point) => ({ time: point.time, value: 30 })));
+      oversoldLine.setData(data.rsi.map((point) => ({ time: point.time as never, value: 30 })));
       rsiChart.priceScale('right').applyOptions({ autoScale: false });
       rsiChart.timeScale().fitContent();
       rsiResizeObserver = new ResizeObserver(() => {
@@ -197,11 +200,13 @@ export function PriceChart({
       rsiResizeObserver?.disconnect();
       rsiChart?.remove();
     };
-  }, [mode, overlays.rsi, overlays.volume, overlays.vwap, timeframe]);
+  }, [mode, overlays.rsi, overlays.volume, overlays.vwap, timeframe, fetched, entryPrice]);
 
   return (
     <div className="price-chart-wrap">
-      <div ref={hostRef} className="price-chart-main" />
+      <div ref={hostRef} className="price-chart-main">
+        {isLoading && !fetched && <div className="price-chart-loading">Loading chart…</div>}
+      </div>
       {overlays.rsi && (
         <div className="price-chart-rsi-wrap">
           <div className="price-chart-rsi-band overbought" />

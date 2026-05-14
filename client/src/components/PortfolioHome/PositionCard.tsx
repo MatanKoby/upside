@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { IconChevronRight, IconArrowUp, IconArrowDown } from '@tabler/icons-react';
 import { Sparkline } from '../common/Sparkline';
+import { useSparkline } from '../../hooks/useSparkline';
 import {
   formatCurrency,
   formatSignedCurrency,
@@ -32,6 +33,10 @@ export function PositionCard({
   totalPortfolioValue: number;
 }) {
   const navigate = useNavigate();
+  // Prefer real sparkline closes from the BE; fall back to whatever's on the
+  // position (kept for mock data compatibility during the wiring transition).
+  const fetched = useSparkline(position.symbol);
+  const sparklineData = fetched.length > 0 ? fetched : position.sparkline;
   const tone = getPnlColor(position.unrealizedPnLPercent);
   const todayTone = getPnlColor(position.todayChangePercent);
   const tint = getTintOpacity(position.unrealizedPnLPercent);
@@ -60,7 +65,7 @@ export function PositionCard({
             <div className={`pnl pnl-${tone}`}>
               {formatPnL(position.unrealizedPnL, position.unrealizedPnLPercent)}
             </div>
-            <Sparkline data={position.sparkline} />
+            <Sparkline data={sparklineData} />
           </div>
           <div className="position-card-right">
             <div className="price">{formatCurrency(position.currentPrice)}</div>
