@@ -8,11 +8,15 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Completed
+
 ### Batch 6 — Schema reconciliation + IB mappers + snapshot fix
 - Owner: claude
 - Started: 2026-05-14 17:50
-
-## Completed
+- Finished: 2026-05-14 18:03
+- Commit: f7cdfef
 
 ### Batch 7 — Raw IB Client Portal data capture
 - Owner: claude
