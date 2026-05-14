@@ -11,8 +11,8 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'symbol required' });
     return;
   }
-  // TODO Batch 6: resolve symbol -> conid via IB contracts lookup, cache in Redis
-  res.status(501).json({ error: 'snapshot resolution pending Batch 6', symbol, raw: await ibSnapshot([]) });
+  // TODO Batch 9: resolve symbol -> conid via IB contracts lookup, cache in Redis
+  res.status(501).json({ error: 'snapshot resolution pending Batch 9', symbol, raw: await ibSnapshot([]) });
 });
 
 router.get('/history/:symbol', async (req: Request, res: Response) => {
@@ -23,8 +23,8 @@ router.get('/history/:symbol', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'symbol required' });
     return;
   }
-  // TODO Batch 6: symbol -> conid resolution
-  res.status(501).json({ error: 'history resolution pending Batch 6', symbol, period, bar, raw: await ibHistory(0, period, bar) });
+  // TODO Batch 9: symbol -> conid resolution
+  res.status(501).json({ error: 'history resolution pending Batch 9', symbol, period, bar, raw: await ibHistory(0, period, bar) });
 });
 
 export default router;

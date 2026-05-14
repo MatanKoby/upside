@@ -44,7 +44,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
   const lockId = lockInsert.data.id;
 
   try {
-    // TODO Batch 6+: fetch indicators, news, earnings; run LLM; insert signal row.
+    // TODO future batch: fetch indicators, news, earnings; run LLM; insert signal row.
     res.status(501).json({ error: 'analyze pipeline pending', lockId, symbol: sym });
   } finally {
     await supabase().from('analysis_locks').delete().eq('id', lockId);

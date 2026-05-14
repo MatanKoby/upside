@@ -85,6 +85,41 @@ export type IndicatorDetail = {
   note?: string;
 };
 
+// Contract metadata as returned by BE (mirrors server's Contract type).
+// Used in TickerDetail to surface industry/category context. Not consumed by
+// PositionCard in MVP, but the field is committed so we don't re-migrate later.
+export type Contract = {
+  conid: number;
+  symbol: string;
+  companyName: string | null;
+  industry: string | null;
+  category: string | null;
+  assetClass: string;
+  currency: string;
+  exchange: string | null;
+};
+
+// Chart bar shape as it leaves the BE history endpoint.
+// Lightweight-charts adapters live in client/src/components/TickerDetail/PriceChart.tsx.
+export type ChartBar = {
+  t: number;                       // unix milliseconds
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+};
+
+export type VwapPoint = {
+  t: number;
+  v: number;                       // VWAP value at that bar timestamp
+};
+
+export type HistoryBundle = {
+  bars: ChartBar[];
+  vwap: VwapPoint[];
+};
+
 export type TickerDetailData = {
   symbol: string;
   company: string;
