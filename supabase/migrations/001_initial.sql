@@ -176,6 +176,23 @@ create policy "user_preferences: owner write"  on public.user_preferences   for 
 create policy "analysis_locks: owner read"     on public.analysis_locks     for select using (auth.uid() = user_id);
 
 -- ============================================================================
+-- Explicit grants to the auto-generated Data API roles.
+--
+-- This migration assumes Supabase project setting "Automatically expose new
+-- tables" is OFF (recommended). Without explicit grants, the FE supabase-js
+-- client returns empty results even when RLS would allow the row through.
+--
+-- The `authenticated` role is for signed-in users (Supabase Auth JWT).
+-- The `service_role` (used by the BE) bypasses these grants entirely.
+-- `access_attempts`, `contracts`, `ib_api_metrics` get NO grants — they are
+-- server-only and accessed exclusively via the service role.
+-- ============================================================================
+grant select          on public.positions         to authenticated;
+grant select          on public.signals           to authenticated;
+grant select, insert, update on public.user_preferences to authenticated;
+grant select          on public.analysis_locks    to authenticated;
+
+-- ============================================================================
 -- Realtime — publish tables that the FE subscribes to.
 -- ============================================================================
 alter publication supabase_realtime add table public.positions;
