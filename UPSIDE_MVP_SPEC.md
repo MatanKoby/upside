@@ -31,7 +31,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - IB session tokens stored ONLY in Redis with 24h TTL — never persisted to disk or DB
 - Google OAuth + email whitelist for Upside auth, with rejected attempts logged to `access_attempts` table
 - Rate limiting on all public endpoints (login, OAuth callback)
-- HTTPS only (Vercel handles for frontend, Oracle VPS needs Let's Encrypt for backend if direct access; otherwise route through Cloudflare Tunnel)
+- HTTPS only. Frontend served by Vercel (automatic TLS on `*.vercel.app`). Backend exposed via **Cloudflare Tunnel** — `cloudflared` runs on the Oracle VPS, exposes the api container, provides automatic HTTPS, requires no domain purchase, no incoming firewall port forwarding.
 - Dependency audit (`npm audit`) before any deploy
 - Secrets rotated if ever exposed accidentally — assume compromise
 
@@ -49,7 +49,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - **Backend**: Node.js + Express (or Fastify), running on Oracle Cloud Always Free VPS
 - **Database**: Supabase (PostgreSQL + Auth + Realtime) — free tier (500 MB DB, 50K MAUs)
 - **Broker API**: IB Client Portal API (REST), gateway runs on same Oracle VPS
-- **Market Data**: IB API (all prices, OHLCV bars, VWAP, fundamentals), Finnhub (news, sentiment, insider trades, earnings — free 60 calls/min)
+- **Market Data**: IB API (prices, OHLCV bars, fundamentals — VWAP is computed BE-side, not provided by IB), Finnhub (news, sentiment, insider trades, earnings — free 60 calls/min)
 - **Technical Indicators**: Computed locally from IB price data using `technicalindicators` npm library (RSI, MACD, Bollinger, SMA/EMA, Stochastic, support/resistance, volume profile)
 - **AI/LLM**: Gemini free tier via Google AI Studio (initially). Provider-agnostic abstraction layer — swap to Claude/OpenAI via env var. No vendor lock-in.
 - **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
@@ -60,11 +60,13 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ### Infrastructure — Oracle Cloud VPS (US-Ashburn)
 - Oracle Cloud Always Free: 4 ARM OCPUs, 24 GB RAM, 200 GB storage
-- Docker Compose runs 3 containers:
-  1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on localhost:5000
+- Docker Compose runs 3 containers (+ optional `cloudflared` for Tunnel):
+  1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on localhost:5000. Built locally from IB's official `clientportal.gw.zip` via `infra/clientportal.gw/Dockerfile`. **Requires an IBKR Pro account** — Client Portal Web API is not supported on IBKR Lite.
   2. **Upside Node.js app** (Express + WebSocket + cron jobs + signal engine) — the brain
   3. **Redis** — local caching for IB rate-limit buffering and data deduplication
-- All 3 containers communicate via Docker internal network (localhost)
+  4. **cloudflared** (optional fourth container, or installed as a host service) — Cloudflare Tunnel agent that exposes the api container over HTTPS without opening incoming firewall ports.
+- All 3 application containers communicate via Docker internal network (localhost)
+- **Single-user MVP scope**: one user, one IB account. Multi-user (e.g., separate accounts for family members) requires a per-user `ib-gateway` container — the IB Client Portal Gateway is single-session, so two users cannot share one gateway. Deferred post-MVP.
 
 ### IB Authentication Flow
 ### Upside Authentication (Google OAuth + Whitelist)
@@ -78,6 +80,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - Login page has no Upside branding visible until after auth succeeds
 
 ### IB Authentication Flow
+- **Account requirement**: IBKR **Pro** account, fully funded and activated. Client Portal Web API is not supported on IBKR Lite. Real-time market data subscription required for live prices (delayed otherwise).
 - First-time setup wizard: after Upside login → "Connect IB" screen → form with `autocomplete="username"` and `autocomplete="current-password"` attributes
 - Browser/OS prompts to save credentials to password manager (Keychain, 1Password, Bitwarden, etc.)
 - Credentials NEVER stored by Upside — only in user's password manager and IB's auth servers
@@ -161,6 +164,16 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - Push notifications DROPPED from MVP — Realtime handles online users. Offline users see updates when they next open the app.
 - Push notifications return post-MVP when automated signal scanning is added (user might be alerted when not in app)
 
+### Supabase Schema (tables)
+- `positions` — current holdings per user, written by `pricePoller`, read via Realtime by the FE
+- `signals` — range-based signal records per analysis (range, indicators, reasoning, accuracy tracking)
+- `user_preferences` — sort order, theme, LLM provider, signal threshold, suppressed symbols
+- `analysis_locks` — concurrency control for signal analysis
+- `access_attempts` — Google OAuth attempts (granted + non-whitelisted)
+- `contracts` — per-conid metadata cache (company_name, industry, category, currency, exchange). Populated lazily; weekly refresh
+- `ib_api_metrics` — per-IB-call instrumentation (endpoint, duration_ms, retries, status). 30-day TTL. Foundation for empirical perf tuning
+- `position_history` — **DROPPED from MVP**. Originally planned for daily snapshots; not needed because MTD comes from IB account summary and accuracy tracking lives on the signals row itself. Re-add when we want historical P&L charts.
+
 ### LLM Provider Abstraction
 - Provider-agnostic interface in backend: `analyzePosition(context: PositionContext) → Signal`
 - Implementations: `gemini.ts` (default for MVP — free tier), `claude.ts`, `openai.ts` (upgrade paths)
@@ -169,14 +182,15 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ### Signal Data Sources (per analysis)
 - IB price data: real-time + intraday + historical daily bars + pre-market data
-- Computed locally: RSI, MACD, Bollinger, VWAP divergence, support/resistance, volume profile, SMA/EMA, Stochastic
+- Computed locally: RSI, MACD, Bollinger, VWAP (from intraday bars; IB doesn't ship it), VWAP divergence, support/resistance, volume profile, SMA/EMA, Stochastic
 - Finnhub: news, sentiment scores, insider transactions, earnings calendar
 - LLM picks the timeframe (intraday, swing, longer) based on what the data suggests
 - Reasoning output includes short bullet per contributing indicator + overall summary
 
 ### Data Sources (simplified)
-- **IB API provides**: real-time prices, OHLCV bars (any interval/timeframe), VWAP, volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data
-- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, VWAP divergence, support/resistance, volume profile
+- **IB API provides**: real-time prices (subscribe-then-poll snapshot), OHLCV bars (any interval/timeframe), volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data, transactions, account summary (incl. MTD return).
+- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance, volume profile, **VWAP** (IB's snapshot endpoint does NOT expose VWAP as a field; we compute it from intraday history bars in `server/src/services/technicals.ts`), VWAP divergence, **`tradingDaysHeld`** (from IB's transactions endpoint: find entry date for each held position, count trading days since).
+- **From IB account summary**: month-to-date (MTD) return (pulled directly; no dependency on our own daily snapshots).
 - **Finnhub provides**: company news + sentiment scores, insider transactions, earnings calendar + estimates, basic financials (supplementary)
 - **Alpha Vantage**: DROPPED — 25 calls/day too limiting, all technicals computed locally instead
 - **Sparklines**: fetched live from IB (7 daily bars per ticker), current day updates in real-time. No overnight batch needed.
@@ -205,6 +219,8 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ## MVP Build Order
 
+> **Operational sequencing lives in `BUILD_QUEUE.md`.** The Sprint outline below is a planning ladder describing what gets built and roughly in what phase. The actual execution unit is the **batch**, tracked in `BUILD_QUEUE.md`, with per-batch claims in `CLAIMS.md`. When the two disagree, the queue wins. The "data-only live" milestone (phone shows real portfolio + auth working, no signals yet) is reached after Batch 13 in the queue.
+
 ### Sprint 1 — Get data on screen (~1 week)
 1. IB gateway + Node.js API proxy on Oracle VPS
 2. Portfolio home screen with real IB position data (static initially)
@@ -213,7 +229,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 ### Sprint 2 — Make it live (~1 week)
 4. Real-time price updates (WebSocket/polling from IB, all sessions)
 5. Sparklines (7-day daily closes) + P&L tint intensity
-6. VWAP data from IB market data
+6. VWAP computed BE-side from intraday bars (IB doesn't expose VWAP as a snapshot field; `server/src/services/technicals.ts:vwap()`)
 7. Sort views (P&L, custom drag)
 8. Ticker detail screen
 
@@ -264,7 +280,7 @@ This is the main screen. Mobile-first, phone-sized (375-390px viewport).
   - Tapping opens dropdown showing exchange groups and their trading windows:
     - NYSE / NASDAQ: Pre-market 4:00–9:30 AM ET, Regular 9:30 AM–4:00 PM ET, After-hours 4:00–8:00 PM ET
     - (Future: LSE, TSE, etc.)
-- Header also has icon buttons: chat (ti-message-chatbot), notifications (ti-bell), settings (ti-settings)
+- Header also has icon buttons: notifications (ti-bell, taps into Alerts feed — Screen 3 — which renders an empty state until signals start firing), settings (ti-settings, taps into Settings — Screen 4). Chat icon dropped from MVP.
 
 #### Summary Strip
 Two metric cards side by side:
@@ -466,10 +482,15 @@ Empty state for MVP: "No signals yet. Signals will appear here once the analysis
 
 ### Screen 4: Settings
 
+> **Note — two-tier settings model:** This screen is the **app-level** Settings. The per-ticker display configuration (which market stats to show on TickerDetail, etc.) lives in its own inline edit panel **inside the TickerDetail screen**, NOT here. Don't conflate the two.
+
+**App-level Settings (MVP scope):**
+
 - **IB Connection**: Status indicator (connected/disconnected/session expired), last sync time, reconnect button
-- **Signal Preferences**: Confidence threshold slider (same as alerts), enable/disable per signal type (sell/buy/event)
-- **Notifications**: Toggle push notifications on/off, quiet hours setting, per-type toggles
+- **Signal Preferences**: Confidence threshold slider (same as alerts), signal_min_market_value, suppressed symbols list
+- **Notifications**: DROPPED from MVP (no push notifications). Quiet-hours UI deferred until push returns post-MVP.
 - **Display**: Dark/light mode toggle (or system default), market period display preferences
+- **LLM Provider**: Dropdown (Gemini / Claude / OpenAI) — selects which provider the user-triggered signal analysis uses
 - **Account**: Email, sign out
 
 ---
@@ -623,12 +644,15 @@ upside/
 │   │   │   └── auth.ts          # IB login proxy
 │   │   ├── services/
 │   │   │   ├── ibGateway.ts     # IB Client Portal API wrapper
+│   │   │   ├── ibMappers.ts     # Boundary transformers: raw IB shapes → our types
 │   │   │   ├── finnhub.ts       # News, sentiment, earnings
-│   │   │   ├── signalEngine.ts  # Technical analysis + LLM synthesis
-│   │   │   ├── technicals.ts    # RSI, MACD, Bollinger computation
+│   │   │   ├── signalEngine.ts  # Technical analysis + LLM synthesis (Batch 14)
+│   │   │   ├── technicals.ts    # RSI, MACD, Bollinger, VWAP computation
 │   │   │   ├── llm.ts           # Provider-agnostic LLM abstraction layer
 │   │   │   ├── redis.ts         # Redis cache wrapper
 │   │   │   └── supabase.ts      # Supabase client for server-side writes
+│   │   ├── scripts/
+│   │   │   └── captureIb.ts     # One-shot capture script (Batch 7 deliverable)
 │   │   ├── cron/
 │   │   │   ├── pricePoller.ts   # Real-time loop (5-15s)
 │   │   │   ├── signalRunner.ts  # Signal loop (15-30 min)
@@ -637,7 +661,12 @@ upside/
 │   │   └── index.ts
 │   ├── Dockerfile
 │   └── package.json
-├── docker-compose.yml       # 3 containers: IB Gateway, Node.js, Redis
+├── infra/
+│   └── clientportal.gw/      # Dockerfile that wraps IB's official clientportal.gw zip
+├── supabase/
+│   └── migrations/           # 001_initial.sql, 002_align_with_ib.sql
+├── captures/                 # Raw IB JSON dumps (gitignored, Batch 7 output)
+├── docker-compose.yml       # 3 containers: IB Gateway, Node.js, Redis (+ optional cloudflared)
 ├── .env.example             # LLM_PROVIDER, FINNHUB_KEY, SUPABASE_URL, etc.
 ├── package.json
 └── README.md
