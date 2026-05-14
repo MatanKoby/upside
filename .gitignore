@@ -53,8 +53,14 @@ logs/
 .supabase/
 
 # === IB Client Portal Gateway (local runs) ===
-clientportal.gw/
-ibgateway/
+# Anchored to repo root: we DO commit `infra/clientportal.gw/` (Dockerfile etc).
+# The top-level `clientportal.gw/` is what appears when a user unzips IB's zip.
+/clientportal.gw/
+/ibgateway/
 *.session
 .ssh/*
+
+# === Raw IB captures (Batch 7) ===
+# May contain account identifiers from IB's responses. Never commit.
+captures/
 
