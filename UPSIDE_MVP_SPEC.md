@@ -60,13 +60,50 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ### Infrastructure — Oracle Cloud VPS (US-Ashburn)
 - Oracle Cloud Always Free: 4 ARM OCPUs, 24 GB RAM, 200 GB storage
-- Docker Compose runs 3 containers (+ optional `cloudflared` for Tunnel):
-  1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on localhost:5000. Built locally from IB's official `clientportal.gw.zip` via `infra/clientportal.gw/Dockerfile`. **Requires an IBKR Pro account** — Client Portal Web API is not supported on IBKR Lite.
-  2. **Upside Node.js app** (Express + WebSocket + cron jobs + signal engine) — the brain
+- Docker Compose runs 4 containers:
+  1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on the compose-network hostname `ib-gateway:5000` (HTTPS, self-signed cert). Built locally from IB's official `clientportal.gw.zip` via `infra/clientportal.gw/Dockerfile`. **Requires an IBKR Pro account** — Client Portal Web API is not supported on IBKR Lite.
+  2. **Upside Node.js app** (Express + WebSocket + cron jobs + signal engine + tunnel watcher) — the brain
   3. **Redis** — local caching for IB rate-limit buffering and data deduplication
-  4. **cloudflared** (optional fourth container, or installed as a host service) — Cloudflare Tunnel agent that exposes the api container over HTTPS without opening incoming firewall ports.
-- All 3 application containers communicate via Docker internal network (localhost)
-- **Single-user MVP scope**: one user, one IB account. Multi-user (e.g., separate accounts for family members) requires a per-user `ib-gateway` container — the IB Client Portal Gateway is single-session, so two users cannot share one gateway. Deferred post-MVP.
+  4. **cloudflared** — Cloudflare Tunnel agent (Quick Tunnel mode) that exposes the api container over HTTPS without opening firewall ports or requiring a custom domain. Runs with `--no-autoupdate` so the tunnel URL stays stable across cloudflared image updates (we trigger updates explicitly). Writes its startup log to a volume shared with the api so the tunnel watcher can detect URL changes. See "Public URL Discovery" below for the self-healing pattern.
+- All 4 containers communicate via Docker internal bridge network (`upside`)
+- **Single-user MVP scope**: one user, one IB account. Multi-user (e.g., separate accounts for family members) requires a per-user `ib-gateway` container — the IB Client Portal Gateway is single-session, so two users cannot share one gateway. The tunnel and watcher do **not** multiply with users: the api is the single public entry point and proxies to the appropriate internal `ib-gateway-N` based on user. Deferred post-MVP.
+
+### Public URL Discovery (self-healing Quick Tunnel)
+
+The api container is exposed to the public internet via Cloudflare Quick Tunnel (free, no custom domain required). Quick Tunnel URLs are random `*.trycloudflare.com` hostnames assigned at cloudflared process startup. They change whenever the cloudflared process restarts. Rather than pin that URL into Vercel env vars (which would force manual intervention after each restart), the system self-heals via Supabase as a runtime config store.
+
+**Why this pattern instead of a paid domain + named tunnel:** the $10/yr domain is the simpler answer to "stable public URL," but with self-healing in place we get zero ongoing maintenance at zero cost. Estimated restart frequency in practice is 1-3 per year (Oracle VPS reboots + rare cloudflared crashes), each fully automatic from the user's perspective. The mechanism stays in place harmlessly if we later attach a domain — the URL just stops changing, watcher becomes a no-op.
+
+**Components:**
+
+- **`cloudflared` compose service** — runs `cloudflared tunnel --no-autoupdate --url http://api:3001 --logfile /shared/cloudflared.log`. `--no-autoupdate` is critical: without it, cloudflared self-updates ~daily and each update reassigns the Quick Tunnel URL. We update the image explicitly when we choose to.
+- **`app_config` Supabase table** — key/value runtime config: `{ key: text primary key, value: text not null, updated_at: timestamptz default now() }`. RLS: public `select`, service-role `insert`/`update`/`delete`. Realtime enabled. Holds `api_url` for now; designed as a generic runtime-config home for future flags.
+- **Tunnel watcher (in api)** — background task in `server/src/services/tunnelWatcher.ts`. On startup and on log-file change (`fs.watch` + 30s poll fallback), parses cloudflared's "Your quick Tunnel ... <URL>" line and upserts the current URL into `app_config` keyed `api_url`. In-process inside the api rather than a sidecar, because the supabase service-role client is already there — duplicating it to a sidecar broadens the secret surface for no real lifecycle benefit (if api is down, the URL update wouldn't help anyone).
+- **FE bootstrap** — on app load the FE reads `api_url` from `app_config` (cache-first via localStorage, stale-while-revalidate), then subscribes via Supabase Realtime so URL changes propagate within ~500ms without polling. All API calls go to the discovered URL. There is **no** `VITE_API_URL` Vercel env var — Supabase is the single source of truth.
+
+**Recovery flow on tunnel restart:**
+1. cloudflared restarts; new Quick Tunnel URL assigned (~5-10s).
+2. Watcher detects new log line; upserts `app_config` (<1s).
+3. Supabase Realtime fires `UPDATE`; FE swaps cached URL (<500ms).
+4. Next FE API request hits the new URL.
+
+Total user-visible outage on a planned restart: **~10-15 seconds**.
+
+**First deploy:** start the VPS stack (cloudflared writes URL → watcher upserts to Supabase) *before* deploying Vercel FE. By the time the FE first loads, `app_config.api_url` is already populated. No manual env-var step.
+
+**Verification (used in Batch 11):**
+
+```bash
+# Terminal 1 — watch the watcher detect the URL change
+docker compose logs api -f | grep -i tunnel
+
+# Terminal 2 — trigger a restart
+docker compose restart cloudflared
+
+# Then:
+#  - Supabase SQL Editor: select * from app_config; — verify new URL within ~15s
+#  - Browser dev tools (FE open): first request fails, next succeeds against new URL
+```
 
 ### IB Authentication Flow
 ### Upside Authentication (Google OAuth + Whitelist)
@@ -173,6 +210,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - `access_attempts` — Google OAuth attempts (granted + non-whitelisted)
 - `contracts` — per-conid metadata cache (company_name, industry, category, currency, exchange). Populated lazily; weekly refresh
 - `ib_api_metrics` — per-IB-call instrumentation (endpoint, duration_ms, retries, status). 30-day TTL. Foundation for empirical perf tuning
+- `app_config` — key/value runtime config (`{ key, value, updated_at }`). Currently holds `api_url` (current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription). Public read via RLS, service-role write only. See "Public URL Discovery" in Architecture for the self-healing mechanism. Designed as a generic home for future runtime flags too.
 - `position_history` — **DROPPED from MVP**. Originally planned for daily snapshots; not needed because MTD comes from IB account summary and accuracy tracking lives on the signals row itself. Re-add when we want historical P&L charts.
 
 ### LLM Provider Abstraction
