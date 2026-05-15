@@ -60,12 +60,13 @@ This spec is public. The repo is public. Security comes from proper secret isola
 
 ### Infrastructure — Oracle Cloud VPS (US-Ashburn)
 - Oracle Cloud Always Free: 4 ARM OCPUs, 24 GB RAM, 200 GB storage
-- Docker Compose runs 4 containers:
+- Docker Compose runs 5 containers:
   1. **IB Client Portal Gateway** (Java) — IB's software, exposes REST API on the compose-network hostname `ib-gateway:5000` (HTTPS, self-signed cert). Built locally from IB's official `clientportal.gw.zip` via `infra/clientportal.gw/Dockerfile`. **Requires an IBKR Pro account** — Client Portal Web API is not supported on IBKR Lite.
   2. **Upside Node.js app** (Express + WebSocket + cron jobs + signal engine + tunnel watcher) — the brain
   3. **Redis** — local caching for IB rate-limit buffering and data deduplication
-  4. **cloudflared** — Cloudflare Tunnel agent (Quick Tunnel mode) that exposes the api container over HTTPS without opening firewall ports or requiring a custom domain. Runs with `--no-autoupdate` so the tunnel URL stays stable across cloudflared image updates (we trigger updates explicitly). Writes its startup log to a volume shared with the api so the tunnel watcher can detect URL changes. See "Public URL Discovery" below for the self-healing pattern.
-- All 4 containers communicate via Docker internal bridge network (`upside`)
+  4. **cloudflared-api** — Cloudflare Quick Tunnel exposing the api container over HTTPS. Runs with `--no-autoupdate` so the tunnel URL stays stable across cloudflared image updates (we trigger updates explicitly). Writes its startup log to a shared volume; the api's tunnel watcher reads it and upserts the URL into `app_config.api_url`.
+  5. **cloudflared-ib** — Second Cloudflare Quick Tunnel, exposing `https://ib-gateway:5000` (with `--no-tls-verify` for the self-signed cert). Gives the IB Gateway its own public origin so its absolute-path HTML works without proxy rewriting. Same `--no-autoupdate` + shared-log-volume pattern; watcher writes its URL into `app_config.ib_portal_url`. See "IB Authentication Flow" above.
+- All 5 containers communicate via Docker internal bridge network (`upside`)
 - **Single-user MVP scope**: one user, one IB account. Multi-user (e.g., separate accounts for family members) requires a per-user `ib-gateway` container — the IB Client Portal Gateway is single-session, so two users cannot share one gateway. The tunnel and watcher do **not** multiply with users: the api is the single public entry point and proxies to the appropriate internal `ib-gateway-N` based on user. Deferred post-MVP.
 
 ### Public URL Discovery (self-healing Quick Tunnel)
@@ -77,9 +78,9 @@ The api container is exposed to the public internet via Cloudflare Quick Tunnel 
 **Components:**
 
 - **`cloudflared` compose service** — runs `cloudflared tunnel --no-autoupdate --url http://api:3001 --logfile /shared/cloudflared.log`. `--no-autoupdate` is critical: without it, cloudflared self-updates ~daily and each update reassigns the Quick Tunnel URL. We update the image explicitly when we choose to.
-- **`app_config` Supabase table** — key/value runtime config: `{ key: text primary key, value: text not null, updated_at: timestamptz default now() }`. RLS: public `select`, service-role `insert`/`update`/`delete`. Realtime enabled. Holds `api_url` for now; designed as a generic runtime-config home for future flags.
-- **Tunnel watcher (in api)** — background task in `server/src/services/tunnelWatcher.ts`. On startup and on log-file change (`fs.watch` + 30s poll fallback), parses cloudflared's "Your quick Tunnel ... <URL>" line and upserts the current URL into `app_config` keyed `api_url`. In-process inside the api rather than a sidecar, because the supabase service-role client is already there — duplicating it to a sidecar broadens the secret surface for no real lifecycle benefit (if api is down, the URL update wouldn't help anyone).
-- **FE bootstrap** — on app load the FE reads `api_url` from `app_config` (cache-first via localStorage, stale-while-revalidate), then subscribes via Supabase Realtime so URL changes propagate within ~500ms without polling. All API calls go to the discovered URL. There is **no** `VITE_API_URL` Vercel env var — Supabase is the single source of truth.
+- **`app_config` Supabase table** — key/value runtime config: `{ key: text primary key, value: text not null, updated_at: timestamptz default now() }`. RLS: public `select`, service-role `insert`/`update`/`delete`. Realtime enabled. Holds `api_url` (the api's tunnel URL) and `ib_portal_url` (the IB Gateway's tunnel URL — see "IB Authentication Flow"). Designed as a generic runtime-config home for future flags.
+- **Tunnel watcher (in api)** — background task in `server/src/services/tunnelWatcher.ts`. One instance is started per cloudflared logfile: one watching the api tunnel's log and upserting `api_url`, a second watching the ib-gateway tunnel's log and upserting `ib_portal_url`. Each uses `fs.watch` + 30s poll fallback to detect URL changes. In-process inside the api rather than a sidecar, because the supabase service-role client is already there — duplicating it to a sidecar broadens the secret surface for no real lifecycle benefit.
+- **FE bootstrap** — on app load the FE reads `api_url` and `ib_portal_url` from `app_config` (cache-first via localStorage, stale-while-revalidate), then subscribes via Supabase Realtime so URL changes propagate within ~500ms without polling. All API calls go to the `api_url`; the IB reconnect iframe loads from `ib_portal_url`. There is **no** `VITE_API_URL` (or any IB URL) Vercel env var — Supabase is the single source of truth.
 
 **Recovery flow on tunnel restart:**
 1. cloudflared restarts; new Quick Tunnel URL assigned (~5-10s).
@@ -119,13 +120,14 @@ docker compose restart cloudflared
 
 ### IB Authentication Flow
 - **Account requirement**: IBKR **Pro** account, fully funded and activated. Client Portal Web API is not supported on IBKR Lite. Real-time market data subscription required for live prices (delayed otherwise).
-- **Browser-mediated login via reverse proxy** — IB Client Portal Gateway only accepts authentication through its own web UI (programmatic credential POSTs return 401, discovered during Batch 13). The api container proxies a path prefix `/ib-portal/*` to `https://ib-gateway:5000/*` so that:
-  - User enters IB credentials directly into IB's own login UI rendered through the proxy.
-  - Credentials never touch our code — they flow browser → reverse proxy → gateway → IB servers.
+- **Browser-mediated login through a dedicated Quick Tunnel** — IB Client Portal Gateway only accepts authentication through its own web UI (programmatic credential POSTs return 401, discovered during Batch 13). A second `cloudflared` container ("cloudflared-ib") gives the gateway its own public HTTPS origin via a separate Quick Tunnel. The gateway sees itself at the root of that origin — its absolute-path HTML responses (`/sso/Login`, etc.) work natively, no path rewriting needed. Tried and abandoned: api-side `/ib-portal/*` path proxy — gateway's absolute paths bypassed the prefix.
+- **The user-visible flow**:
+  - User enters IB credentials directly into IB's own login UI at the dedicated `*.trycloudflare.com` URL.
+  - Credentials never touch our code — they flow browser → cloudflared → gateway → IB servers.
   - 2FA push fires to IB Key phone app → user approves with biometrics → gateway holds the session.
-  - Our BE polls `/v1/api/iserver/auth/status` (server-to-server) and surfaces the result via `/api/auth/status` to the FE.
-- **FE renders the proxy in an iframe** by default so the login stays inside the Upside PWA. If X-Frame-Options / CSP frame-ancestors from the gateway block iframe embedding (despite our proxy stripping them), the FE falls back to opening the proxy URL in a new tab.
-- **No Redis token storage in the BE for IB session** — IB Gateway maintains its own session cookie/state internally; we just ask it whether it's authenticated. (The Redis-stored token plan from earlier batches no longer applies; that assumed a programmatic-auth model we cannot use.)
+  - Our BE polls `/v1/api/iserver/auth/status` (server-to-server, over the internal compose network) and surfaces the result via `/api/auth/status` to the FE.
+- **FE renders the IB portal in an iframe** (URL from `app_config.ib_portal_url`) so the login stays inside the Upside PWA. If IB's UI uses frame-busting JavaScript or sets cookies that browsers reject in cross-origin iframes, the FE falls back to opening the same URL in a new tab.
+- **No Redis token storage in the BE for IB session** — IB Gateway maintains its own session cookie/state internally; we just ask it whether it's authenticated. (The Redis-stored token plan from earlier batches assumed a programmatic-auth model we cannot use.)
 - Multi-device support: IB session shared across all user's devices (both pull from same Redis-stored session)
 - Session keepalive via tickle endpoint every 30s
 - IB's nightly forced logout (~11:45 PM ET) ends session daily

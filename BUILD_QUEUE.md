@@ -561,23 +561,26 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 - **Don't override Install / Build commands in Vercel UI or in `vercel.json`** — declarative `package.json` (`packageManager` + `engines`) is sufficient and survives Vercel UI churn. No `vercel.json` needed for a Vite project.
 
 ### IB login redesign — also lands in this batch
-The original IB auth path in `server/src/services/ibGateway.ts` (`ibLogin`) does `POST /v1/api/iserver/auth/ssodh/init` to the gateway with `{username, password}`. **The gateway returns 401** — it only accepts browser-mediated login via its own web UI, not programmatic credential POSTs. We hit this on the first live deploy.
+The original IB auth path in `server/src/services/ibGateway.ts` (`ibLogin`) does `POST /v1/api/iserver/auth/ssodh/init` to the gateway with `{username, password}`. **The gateway returns 401** — it only accepts browser-mediated login via its own web UI, not programmatic credential POSTs. We hit this on the first live deploy. We also tried a path-prefix reverse proxy in the api (`/ib-portal/*` → gateway), but IB Gateway's HTML uses *absolute* paths (`/sso/Login`, `/css/...`) which bypassed the prefix and 404'd from the api router.
 
 Replacement design (matches UPSIDE_MVP_SPEC.md → "IB Authentication Flow"):
 
-1. **Reverse proxy in api** — add a middleware that proxies `/ib-portal/*` requests to `https://ib-gateway:5000/*`. Use `http-proxy-middleware` with `secure: false` (gateway has self-signed cert) and strip `X-Frame-Options` / `Content-Security-Policy` headers from gateway responses so the FE can embed the proxy in an iframe.
-2. **FE: replace `IBReconnectBlock` credentials form with an iframe** pointing at `${apiUrl}/ib-portal/`. User logs into IB via IB's own UI inside the iframe. 2FA push fires to IB Key app; user approves.
-3. **FE detects connection** via existing `/api/auth/status` polling (already in `useMarketSession`). When `session === 'connected'`, dismiss the iframe block and render the portfolio.
-4. **Fallback** if iframe is blocked by the gateway anyway: "Open in new tab" button that opens the same `/ib-portal/` URL outside the iframe.
-5. **Remove `ibLogin` / `/api/auth/ib/login` route** — credentials never go through our code now.
+1. **Second Quick Tunnel for the gateway** — add a `cloudflared-ib` compose service running `tunnel --no-autoupdate --no-tls-verify --url https://ib-gateway:5000`. Same `--no-autoupdate` discipline as the api tunnel. `--no-tls-verify` is required because the gateway has a self-signed cert. Logfile to the shared volume.
+2. **Watcher for both tunnels** — refactor `tunnelWatcher.ts` to support multiple `(logPath, configKey)` pairs and start one watcher per tunnel: `(cloudflaredApiLogPath, 'api_url')` and `(cloudflaredIbLogPath, 'ib_portal_url')`. Each watcher independently parses its log file and upserts its key.
+3. **FE: replace `IBReconnectBlock` credentials form with an iframe** loading `app_config.ib_portal_url`. Below the iframe, a fallback "open in new tab" link in case iframe embedding is rejected by IB's UI (frame-busting JS or cross-origin cookie behavior).
+4. **FE detects connection** via existing `/api/auth/status` polling (already in `useMarketSession`). When `session === 'connected'`, dismiss the iframe block and render the portfolio.
+5. **Remove `ibLogin` / `/api/auth/ib/login` route** — credentials never go through our code.
 6. **Remove Redis IB session storage** — the gateway holds the session itself; we just poll its status.
 
 **Files this batch creates/edits:**
 - `client/package.json` (add `packageManager` + `engines.node`)
-- `server/package.json` (add `http-proxy-middleware`)
-- `server/src/index.ts` (mount the proxy middleware)
+- `docker-compose.yml` (add cloudflared-ib service, rename existing cloudflared service for clarity)
+- `server/src/env.ts` (`CLOUDFLARED_API_LOG_PATH`, `CLOUDFLARED_IB_LOG_PATH` replace `CLOUDFLARED_LOG_PATH`)
+- `server/src/services/tunnelWatcher.ts` (refactor for multi-watcher)
 - `server/src/services/ibGateway.ts` (remove `ibLogin`, keep status/tickle/etc.)
 - `server/src/routes/auth.ts` (remove `/ib/login`; `/status` route stays)
+- `server/src/index.ts` (start two watchers)
+- `client/src/services/apiUrl.ts` (add `getIbPortalUrl()` + subscribe to ib_portal_url Realtime)
 - `client/src/components/common/IBReconnectBlock.tsx` (replace form with iframe + fallback)
 - No `vercel.json`.
 
