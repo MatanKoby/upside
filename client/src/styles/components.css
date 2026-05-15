@@ -641,3 +641,63 @@
 .td-indicator-badge.is-bearish { background: rgb(var(--loss-rgb) / 0.18); color: rgb(var(--loss-rgb)); }
 .td-indicator-badge.is-neutral { background: rgb(var(--neutral-rgb) / 0.18); color: var(--text-secondary); }
 .td-indicator-badge.is-event { background: var(--pill-event-bg); color: var(--pill-event-text); }
+
+/* ========== Login (pre-auth) ========== */
+.login-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+  padding: var(--sp-16);
+}
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-12);
+  width: 100%;
+  max-width: 320px;
+}
+.login-google-button {
+  padding: var(--sp-12) var(--sp-16);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+.login-google-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.login-error {
+  margin: 0;
+  color: rgb(var(--loss-rgb));
+  font-size: var(--fs-12);
+  text-align: center;
+}
+
+/* ========== Auth verification (in-flight, denied, etc.) ========== */
+.auth-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+}
+.auth-spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-secondary);
+  animation: auth-spin 0.8s linear infinite;
+}
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}
