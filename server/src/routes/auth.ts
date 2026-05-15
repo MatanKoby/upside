@@ -37,12 +37,17 @@ router.post('/google/callback', async (req: Request, res: Response) => {
   const email = (data.user.email ?? '').toLowerCase();
   const granted = !!email && env.allowedEmails.includes(email);
 
-  await supabase().from('access_attempts').insert({
+  const { error: insertErr } = await supabase().from('access_attempts').insert({
     email,
     granted,
     ip_address: req.ip ?? null,
     user_agent: req.header('user-agent') ?? null,
   });
+  if (insertErr) {
+    // Don't block the auth decision on logging failure — but make sure it's
+    // visible. Silent failures here cost us a debugging round-trip in batch 12.
+    console.error('[auth/google/callback] access_attempts insert failed:', insertErr.message);
+  }
 
   if (!granted) {
     res.status(403).json({ error: 'not_whitelisted', redirect: 'https://google.com' });

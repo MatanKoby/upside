@@ -14,7 +14,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Known issues (deferred fixes)
 
-- **service_role grants for server-only tables** — root cause confirmed during Batch 11: this Supabase project has Data API "auto-expose new tables" OFF, so `service_role` does **not** auto-bypass grants. `app_config` was fixed in `002_app_config.sql` with an explicit `grant all to service_role`. The same gap still affects `analysis_locks`, `access_attempts`, `contracts`, `ib_api_metrics` from `001_initial.sql`. Visible today as `[signalRunner] cleanup error: permission denied for table analysis_locks` every 30s. Must be resolved before Batch 14 (signal pipeline writes to all of these). Likely fix: a `003_service_role_grants.sql` that adds `grant all on <table> to service_role` for each.
+(none)
 
 ## Completed
 
