@@ -31,9 +31,12 @@ create policy "app_config: public read"
 --
 -- anon needs select for the pre-login bootstrap (FE fetches api_url before
 -- the user signs in). authenticated also needs select for the same reason.
--- service_role bypasses these grants and handles all writes.
+-- service_role needs explicit grants because this project has Data API
+-- "auto-expose new tables" OFF — without this, even the BE's secret key gets
+-- "permission denied" on insert/update via PostgREST.
 -- ============================================================================
 grant select on public.app_config to anon, authenticated;
+grant all    on public.app_config to service_role;
 
 -- ============================================================================
 -- Realtime — FE subscribes for url changes so a tunnel restart propagates
