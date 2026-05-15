@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
-    "capture": "tsx scripts/captureIb.ts"
+    "capture": "tsx scripts/captureIb.ts",
+    "oauth:smoke": "tsx scripts/oauthSmoke.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

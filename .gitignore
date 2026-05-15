@@ -44,7 +44,12 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.oauth
 *.pem
+# IBKR OAuth keys (live outside the repo at ~/dev-projects/upside-oauth-keys/
+# by convention, but ignore anything matching the pattern in case they end up
+# checked-in by accident).
+upside-oauth-keys/
 
 # === Vercel (frontend deploy) ===
 .vercel
