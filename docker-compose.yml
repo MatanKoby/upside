@@ -1,6 +1,7 @@
 # Upside — production compose stack.
-# Three containers on a private bridge network. Only the api is published,
-# and only to localhost (Cloudflare Tunnel terminates HTTPS upstream).
+# Five containers on a private bridge network. The api is published only to
+# localhost; cloudflared-api and cloudflared-ib publish HTTPS to the public
+# internet (with their own per-tunnel trycloudflare URLs).
 
 services:
   ib-gateway:
@@ -32,7 +33,8 @@ services:
       PORT: "3001"
       IB_GATEWAY_URL: https://ib-gateway:5000
       REDIS_URL: redis://redis:6379
-      CLOUDFLARED_LOG_PATH: /var/log/cloudflared/cloudflared.log
+      CLOUDFLARED_API_LOG_PATH: /var/log/cloudflared/api.log
+      CLOUDFLARED_IB_LOG_PATH: /var/log/cloudflared/ib.log
     depends_on:
       - ib-gateway
       - redis
@@ -46,17 +48,11 @@ services:
     networks:
       - upside
 
-  cloudflared:
-    # Cloudflare Tunnel in Quick Tunnel mode — free, no domain required.
-    # --no-autoupdate is REQUIRED: cloudflared self-updates daily by default,
-    # each update reassigns the trycloudflare.com URL. We update the image
-    # explicitly by pulling a new tag.
-    #
-    # user: root — the cloudflare/cloudflared image runs as a non-root user
-    # by default, but named Docker volumes are owned by root:root, so the
-    # non-root user can't create the logfile. Running as root inside this
-    # container is safe: it's a sandboxed network proxy, container root is
-    # not host root, and there's no shell exposure.
+  cloudflared-api:
+    # Cloudflare Quick Tunnel for the api container. --no-autoupdate keeps the
+    # URL stable across image updates (auto-update would reassign daily).
+    # user: root because named volumes are owned by root and the default
+    # cloudflared image runs as a non-root user — would fail to write logfile.
     image: cloudflare/cloudflared:latest
     user: "0:0"
     command:
@@ -65,9 +61,32 @@ services:
       - --url
       - http://api:3001
       - --logfile
-      - /var/log/cloudflared/cloudflared.log
+      - /var/log/cloudflared/api.log
     depends_on:
       - api
+    restart: unless-stopped
+    volumes:
+      - cloudflared-logs:/var/log/cloudflared
+    networks:
+      - upside
+
+  cloudflared-ib:
+    # Cloudflare Quick Tunnel for the IB Client Portal Gateway. Gives the
+    # gateway its own public origin so its absolute-path HTML works without
+    # proxy rewriting. --no-tls-verify because the gateway has a self-signed
+    # cert. Same root/--no-autoupdate discipline as the api tunnel.
+    image: cloudflare/cloudflared:latest
+    user: "0:0"
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --no-tls-verify
+      - --url
+      - https://ib-gateway:5000
+      - --logfile
+      - /var/log/cloudflared/ib.log
+    depends_on:
+      - ib-gateway
     restart: unless-stopped
     volumes:
       - cloudflared-logs:/var/log/cloudflared

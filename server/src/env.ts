@@ -38,8 +38,9 @@ export const env = {
   ibGatewayUrl: optional('IB_GATEWAY_URL', 'http://ib-gateway:5000'),
   redisUrl: optional('REDIS_URL', 'redis://redis:6379'),
 
-  // Path to the cloudflared logfile, shared in from the cloudflared container
-  // via a Docker named volume. The tunnel watcher tails this for the current
-  // Quick Tunnel URL. See server/src/services/tunnelWatcher.ts.
-  cloudflaredLogPath: optional('CLOUDFLARED_LOG_PATH', '/var/log/cloudflared/cloudflared.log'),
+  // Paths to the cloudflared logfiles, shared in from the cloudflared
+  // containers via a Docker named volume. The tunnel watcher tails each for
+  // the current Quick Tunnel URL. See server/src/services/tunnelWatcher.ts.
+  cloudflaredApiLogPath: optional('CLOUDFLARED_API_LOG_PATH', '/var/log/cloudflared/api.log'),
+  cloudflaredIbLogPath: optional('CLOUDFLARED_IB_LOG_PATH', '/var/log/cloudflared/ib.log'),
 };

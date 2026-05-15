@@ -1,96 +1,138 @@
 import { supabase } from './supabase';
 
-// Discovers the api's public URL from Supabase app_config and keeps the
-// in-memory + localStorage caches fresh via a Realtime subscription. The api
-// URL is set by the cloudflared tunnel watcher on the BE (see
-// server/src/services/tunnelWatcher.ts) and changes whenever the Quick Tunnel
-// URL rotates. Architecture: UPSIDE_MVP_SPEC.md → "Public URL Discovery".
+// Discovers the api + IB-portal public URLs from Supabase app_config and
+// keeps in-memory + localStorage caches fresh via a Realtime subscription.
+// Both URLs are written by the BE tunnel watcher (one per cloudflared
+// service). Architecture: UPSIDE_MVP_SPEC.md → "Public URL Discovery" and
+// "IB Authentication Flow".
 
-const STORAGE_KEY = 'upside_api_url';
+const STORAGE_KEY_API = 'upside_api_url';
+const STORAGE_KEY_IB_PORTAL = 'upside_ib_portal_url';
 
-let inMemoryUrl: string | null = null;
+let inMemoryApiUrl: string | null = null;
+let inMemoryIbPortalUrl: string | null = null;
 
-function readLocalStorage(): string | null {
+function readStorage(key: string): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeLocalStorage(url: string): void {
+function writeStorage(key: string, url: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, url);
+    localStorage.setItem(key, url);
   } catch {
-    // localStorage unavailable (private mode, etc.) — in-memory cache still works.
+    // localStorage unavailable (private mode) — in-memory cache still works.
   }
 }
 
-function clearLocalStorage(): void {
+function clearStorage(key: string): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(key);
   } catch {
     // ignore
   }
 }
 
-export async function getApiUrl(): Promise<string> {
-  if (inMemoryUrl) return inMemoryUrl;
-
-  const fromStorage = readLocalStorage();
-  if (fromStorage) {
-    inMemoryUrl = fromStorage;
-    return fromStorage;
-  }
-
+async function fetchConfig(key: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('app_config')
     .select('value')
-    .eq('key', 'api_url')
+    .eq('key', key)
     .maybeSingle();
-
   if (error) {
-    throw new Error(`Failed to load api_url from Supabase: ${error.message}`);
+    throw new Error(`Failed to load ${key} from Supabase: ${error.message}`);
   }
-  if (!data?.value) {
+  return data?.value ?? null;
+}
+
+export async function getApiUrl(): Promise<string> {
+  if (inMemoryApiUrl) return inMemoryApiUrl;
+  const cached = readStorage(STORAGE_KEY_API);
+  if (cached) {
+    inMemoryApiUrl = cached;
+    return cached;
+  }
+  const fetched = await fetchConfig('api_url');
+  if (!fetched) {
     throw new Error(
       'app_config.api_url not yet populated. Ensure the BE tunnel watcher has run at least once.',
     );
   }
+  inMemoryApiUrl = fetched;
+  writeStorage(STORAGE_KEY_API, fetched);
+  return fetched;
+}
 
-  inMemoryUrl = data.value;
-  writeLocalStorage(data.value);
-  return data.value;
+export async function getIbPortalUrl(): Promise<string> {
+  if (inMemoryIbPortalUrl) return inMemoryIbPortalUrl;
+  const cached = readStorage(STORAGE_KEY_IB_PORTAL);
+  if (cached) {
+    inMemoryIbPortalUrl = cached;
+    return cached;
+  }
+  const fetched = await fetchConfig('ib_portal_url');
+  if (!fetched) {
+    throw new Error(
+      'app_config.ib_portal_url not yet populated. Ensure the IB tunnel watcher has run at least once.',
+    );
+  }
+  inMemoryIbPortalUrl = fetched;
+  writeStorage(STORAGE_KEY_IB_PORTAL, fetched);
+  return fetched;
 }
 
 export function clearCachedApiUrl(): void {
-  inMemoryUrl = null;
-  clearLocalStorage();
+  inMemoryApiUrl = null;
+  clearStorage(STORAGE_KEY_API);
 }
 
-// Subscribes to Supabase Realtime on app_config and refreshes the cache when
-// the api_url row changes. Call once at app mount; the returned function
-// tears down the subscription on unmount.
+export function clearCachedIbPortalUrl(): void {
+  inMemoryIbPortalUrl = null;
+  clearStorage(STORAGE_KEY_IB_PORTAL);
+}
+
+// Subscribes to Supabase Realtime on app_config for both keys we care about.
+// Call once at app mount; the returned function tears down the subscription.
 export function subscribeToApiUrl(): () => void {
-  const apply = (next: unknown): void => {
+  const applyApi = (next: unknown): void => {
     if (typeof next !== 'string') return;
-    if (next === inMemoryUrl) return;
-    console.log(`[apiUrl] received update: ${inMemoryUrl ?? '(none)'} -> ${next}`);
-    inMemoryUrl = next;
-    writeLocalStorage(next);
+    if (next === inMemoryApiUrl) return;
+    console.log(`[apiUrl] api_url update: ${inMemoryApiUrl ?? '(none)'} -> ${next}`);
+    inMemoryApiUrl = next;
+    writeStorage(STORAGE_KEY_API, next);
+  };
+  const applyIbPortal = (next: unknown): void => {
+    if (typeof next !== 'string') return;
+    if (next === inMemoryIbPortalUrl) return;
+    console.log(`[apiUrl] ib_portal_url update: ${inMemoryIbPortalUrl ?? '(none)'} -> ${next}`);
+    inMemoryIbPortalUrl = next;
+    writeStorage(STORAGE_KEY_IB_PORTAL, next);
   };
 
   const channel = supabase
-    .channel('app_config_api_url')
+    .channel('app_config_urls')
     .on(
       'postgres_changes',
       { event: 'UPDATE', schema: 'public', table: 'app_config', filter: 'key=eq.api_url' },
-      (payload) => apply((payload.new as { value?: unknown })?.value),
+      (payload) => applyApi((payload.new as { value?: unknown })?.value),
     )
     .on(
       'postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'app_config', filter: 'key=eq.api_url' },
-      (payload) => apply((payload.new as { value?: unknown })?.value),
+      (payload) => applyApi((payload.new as { value?: unknown })?.value),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'app_config', filter: 'key=eq.ib_portal_url' },
+      (payload) => applyIbPortal((payload.new as { value?: unknown })?.value),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'app_config', filter: 'key=eq.ib_portal_url' },
+      (payload) => applyIbPortal((payload.new as { value?: unknown })?.value),
     )
     .subscribe();
 

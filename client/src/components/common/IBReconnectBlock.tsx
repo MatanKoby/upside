@@ -9,7 +9,7 @@
 // tab" button below the iframe is the fallback.
 
 import { useEffect, useState } from 'react';
-import { getApiUrl } from '../../services/apiUrl';
+import { getIbPortalUrl } from '../../services/apiUrl';
 
 interface Props {
   // Called by the parent (useMarketSession in App.tsx) when its polling
@@ -24,9 +24,9 @@ export function IBReconnectBlock({ onReconnected: _onReconnected }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    getApiUrl()
-      .then((base) => {
-        if (!cancelled) setPortalUrl(`${base}/ib-portal/`);
+    getIbPortalUrl()
+      .then((url) => {
+        if (!cancelled) setPortalUrl(url);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));

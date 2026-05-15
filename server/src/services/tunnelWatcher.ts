@@ -4,119 +4,122 @@ import { dirname, basename } from 'node:path';
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
 
-// Detects the current Cloudflare Quick Tunnel URL from cloudflared's logfile
-// (mounted in from the cloudflared compose service via a shared volume) and
-// upserts it into Supabase's app_config table keyed `api_url`. The FE reads
-// this on bootstrap and subscribes to changes via Realtime.
+// Detects current Cloudflare Quick Tunnel URLs from cloudflared logfiles
+// (mounted in from the cloudflared compose services via a shared volume) and
+// upserts them into Supabase's app_config table. The FE reads these on
+// bootstrap and subscribes to changes via Realtime.
 //
-// Architecture rationale: UPSIDE_MVP_SPEC.md → "Public URL Discovery
-// (self-healing Quick Tunnel)".
+// One watcher per tunnel: one for the api tunnel (app_config.api_url), one
+// for the IB Gateway tunnel (app_config.ib_portal_url). Architecture:
+// UPSIDE_MVP_SPEC.md → "Public URL Discovery" + "IB Authentication Flow".
 
 const POLL_INTERVAL_MS = 30_000;
 const TRYCLOUDFLARE_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/g;
 
-let lastKnownUrl: string | null = null;
-let pollTimer: NodeJS.Timeout | null = null;
-let dirWatcher: FSWatcher | null = null;
+interface WatcherHandle {
+  stop: () => void;
+}
+
+const handles: WatcherHandle[] = [];
 
 async function parseLatestUrl(logPath: string): Promise<string | null> {
   try {
     const content = await readFile(logPath, 'utf8');
     const matches = content.match(TRYCLOUDFLARE_URL_REGEX);
     if (!matches || matches.length === 0) return null;
-    // cloudflared appends to --logfile across restarts, so the most recent
-    // URL is the last match. (If the file is recreated, the new run's URL
-    // is still the last match in the current contents.)
     return matches[matches.length - 1] ?? null;
   } catch (e: unknown) {
     const code = (e as NodeJS.ErrnoException)?.code;
-    if (code === 'ENOENT') return null; // logfile not yet created — cloudflared still starting
+    if (code === 'ENOENT') return null;
     throw e;
   }
 }
 
-async function upsertUrl(url: string): Promise<boolean> {
+async function upsertUrl(configKey: string, url: string): Promise<boolean> {
   const { error } = await supabase()
     .from('app_config')
     .upsert(
-      { key: 'api_url', value: url, updated_at: new Date().toISOString() },
+      { key: configKey, value: url, updated_at: new Date().toISOString() },
       { onConflict: 'key' },
     );
   if (error) {
-    console.error('[tunnelWatcher] upsert error:', error.message);
+    console.error(`[tunnelWatcher:${configKey}] upsert error:`, error.message);
     return false;
   }
-  console.log(`[tunnelWatcher] api_url upserted: ${url}`);
+  console.log(`[tunnelWatcher:${configKey}] upserted: ${url}`);
   return true;
 }
 
-async function detectAndPublish(logPath: string): Promise<void> {
-  let url: string | null;
-  try {
-    url = await parseLatestUrl(logPath);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error('[tunnelWatcher] read error:', msg);
-    return;
+function startOne(logPath: string, configKey: string): WatcherHandle {
+  let lastKnownUrl: string | null = null;
+  let pollTimer: NodeJS.Timeout | null = null;
+  let dirWatcher: FSWatcher | null = null;
+
+  async function detectAndPublish(): Promise<void> {
+    let url: string | null;
+    try {
+      url = await parseLatestUrl(logPath);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[tunnelWatcher:${configKey}] read error:`, msg);
+      return;
+    }
+    if (!url || url === lastKnownUrl) return;
+
+    // Optimistic claim, sync, before await — see comment on the original
+    // single-watcher version for the race-condition rationale.
+    const previousUrl = lastKnownUrl;
+    lastKnownUrl = url;
+    console.log(`[tunnelWatcher:${configKey}] detected url change: ${previousUrl ?? '(none)'} -> ${url}`);
+    const ok = await upsertUrl(configKey, url);
+    if (!ok) lastKnownUrl = previousUrl;
   }
-  if (!url || url === lastKnownUrl) return;
 
-  // Optimistic claim: synchronously stake out lastKnownUrl right after the
-  // check so any concurrent detectAndPublish calls (e.g. a burst of
-  // fs.watch events while cloudflared writes its boot sequence) see the
-  // new value and bail out at their own check — without this, ~10 racing
-  // events all pass the check on the still-old lastKnownUrl and each
-  // issues its own redundant upsert.
-  //
-  // If the upsert fails (e.g. permission denied, transient outage), we
-  // roll back so the next poll/event retries.
-  const previousUrl = lastKnownUrl;
-  lastKnownUrl = url;
-  console.log(`[tunnelWatcher] detected url change: ${previousUrl ?? '(none)'} -> ${url}`);
-  const ok = await upsertUrl(url);
-  if (!ok) lastKnownUrl = previousUrl;
-}
-
-export function startTunnelWatcher(): void {
-  const logPath = env.cloudflaredLogPath;
   const logDir = dirname(logPath);
   const logFile = basename(logPath);
-  console.log(`[tunnelWatcher] starting — watching ${logPath}`);
+  console.log(`[tunnelWatcher:${configKey}] starting — watching ${logPath}`);
 
-  void detectAndPublish(logPath);
+  void detectAndPublish();
 
-  // Watching the directory rather than the file directly survives cloudflared
-  // recreating the file on restart (fs.watch on a deleted file silently stops
-  // firing events).
   try {
     dirWatcher = fsWatch(logDir, (_eventType, fileName) => {
       if (fileName === logFile) {
-        void detectAndPublish(logPath);
+        void detectAndPublish();
       }
     });
     dirWatcher.on('error', (e) => {
-      console.error('[tunnelWatcher] dir watch error:', e instanceof Error ? e.message : e);
+      console.error(`[tunnelWatcher:${configKey}] dir watch error:`, e instanceof Error ? e.message : e);
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[tunnelWatcher] failed to start dir watch:', msg);
-    // Polling fallback below still covers us.
+    console.error(`[tunnelWatcher:${configKey}] failed to start dir watch:`, msg);
   }
 
-  // Polling fallback. fs.watch can miss events on Docker bind mounts /
-  // named volumes depending on kernel + storage driver.
   pollTimer = setInterval(() => {
-    void detectAndPublish(logPath);
+    void detectAndPublish();
   }, POLL_INTERVAL_MS);
+
+  return {
+    stop() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (dirWatcher) {
+        dirWatcher.close();
+        dirWatcher = null;
+      }
+    },
+  };
+}
+
+export function startTunnelWatcher(): void {
+  handles.push(startOne(env.cloudflaredApiLogPath, 'api_url'));
+  handles.push(startOne(env.cloudflaredIbLogPath, 'ib_portal_url'));
 }
 
 export function stopTunnelWatcher(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  if (dirWatcher) {
-    dirWatcher.close();
-    dirWatcher = null;
+  while (handles.length) {
+    handles.pop()!.stop();
   }
 }
