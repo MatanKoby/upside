@@ -60,6 +60,11 @@ logs/
 *.session
 .ssh/*
 
+# === IBeam credentials (Batch 13) ===
+# IB account + password files live on the VPS in ~/upside/secrets/, mounted
+# into the IBeam container at /run/secrets/. Never commit them.
+/secrets/
+
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.
 captures/

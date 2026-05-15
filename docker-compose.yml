@@ -1,17 +1,25 @@
 # Upside — production compose stack.
-# Five containers on a private bridge network. The api is published only to
-# localhost; cloudflared-api and cloudflared-ib publish HTTPS to the public
-# internet (with their own per-tunnel trycloudflare URLs).
+# Four containers on a private bridge network. The api is published only to
+# localhost; cloudflared publishes HTTPS to the public internet via a
+# trycloudflare URL stored in app_config.api_url.
 
 services:
   ib-gateway:
-    # Built from infra/clientportal.gw/Dockerfile — wraps IB's official
-    # Client Portal Gateway (Java REST API on port 5000). NOT the legacy
-    # TWS Socket API (that was the gnzsnz image, wrong product entirely).
-    # Credentials are NEVER set as env vars here — the api container
-    # proxies user-entered credentials at login time per the security model.
-    build:
-      context: ./infra/clientportal.gw
+    # IBeam (voyz/ibeam) wraps IB's Client Portal Gateway and automates the
+    # browser-based login at localhost:5000 — the only auth path the gateway
+    # supports. Exposes the same REST API on port 5000 with a self-signed
+    # cert, so the api code is unchanged. Credentials are read from files
+    # mounted from the host at /run/secrets/ — IBEAM_SECRETS_SOURCE=fs.
+    # Pin a version (not :latest) so cloudflared-style auto-rotation can't
+    # surprise us with a new image.
+    image: voyz/ibeam:0.5.11
+    environment:
+      IBEAM_SECRETS_SOURCE: fs
+      IBEAM_ACCOUNT: /run/secrets/ib_account
+      IBEAM_PASSWORD: /run/secrets/ib_password
+    volumes:
+      - ./secrets/ib_account.txt:/run/secrets/ib_account:ro
+      - ./secrets/ib_password.txt:/run/secrets/ib_password:ro
     restart: unless-stopped
     networks:
       - upside
@@ -33,8 +41,7 @@ services:
       PORT: "3001"
       IB_GATEWAY_URL: https://ib-gateway:5000
       REDIS_URL: redis://redis:6379
-      CLOUDFLARED_API_LOG_PATH: /var/log/cloudflared/api.log
-      CLOUDFLARED_IB_LOG_PATH: /var/log/cloudflared/ib.log
+      CLOUDFLARED_LOG_PATH: /var/log/cloudflared/api.log
     depends_on:
       - ib-gateway
       - redis
@@ -48,7 +55,7 @@ services:
     networks:
       - upside
 
-  cloudflared-api:
+  cloudflared:
     # Cloudflare Quick Tunnel for the api container. --no-autoupdate keeps the
     # URL stable across image updates (auto-update would reassign daily).
     # user: root because named volumes are owned by root and the default
@@ -64,29 +71,6 @@ services:
       - /var/log/cloudflared/api.log
     depends_on:
       - api
-    restart: unless-stopped
-    volumes:
-      - cloudflared-logs:/var/log/cloudflared
-    networks:
-      - upside
-
-  cloudflared-ib:
-    # Cloudflare Quick Tunnel for the IB Client Portal Gateway. Gives the
-    # gateway its own public origin so its absolute-path HTML works without
-    # proxy rewriting. --no-tls-verify because the gateway has a self-signed
-    # cert. Same root/--no-autoupdate discipline as the api tunnel.
-    image: cloudflare/cloudflared:latest
-    user: "0:0"
-    command:
-      - tunnel
-      - --no-autoupdate
-      - --no-tls-verify
-      - --url
-      - https://ib-gateway:5000
-      - --logfile
-      - /var/log/cloudflared/ib.log
-    depends_on:
-      - ib-gateway
     restart: unless-stopped
     volumes:
       - cloudflared-logs:/var/log/cloudflared

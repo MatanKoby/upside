@@ -114,8 +114,7 @@ function startOne(logPath: string, configKey: string): WatcherHandle {
 }
 
 export function startTunnelWatcher(): void {
-  handles.push(startOne(env.cloudflaredApiLogPath, 'api_url'));
-  handles.push(startOne(env.cloudflaredIbLogPath, 'ib_portal_url'));
+  handles.push(startOne(env.cloudflaredLogPath, 'api_url'));
 }
 
 export function stopTunnelWatcher(): void {
