@@ -13,13 +13,11 @@ import { supabase } from './supabase.js';
 // (self-healing Quick Tunnel)".
 
 const POLL_INTERVAL_MS = 30_000;
-const FS_WATCH_DEBOUNCE_MS = 500;
 const TRYCLOUDFLARE_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/g;
 
 let lastKnownUrl: string | null = null;
 let pollTimer: NodeJS.Timeout | null = null;
 let dirWatcher: FSWatcher | null = null;
-let debounceTimer: NodeJS.Timeout | null = null;
 
 async function parseLatestUrl(logPath: string): Promise<string | null> {
   try {
@@ -62,22 +60,21 @@ async function detectAndPublish(logPath: string): Promise<void> {
     return;
   }
   if (!url || url === lastKnownUrl) return;
-  console.log(`[tunnelWatcher] detected url change: ${lastKnownUrl ?? '(none)'} -> ${url}`);
-  // Only mark as published on a successful upsert — otherwise the next poll
-  // would short-circuit and we'd never retry a transient Supabase failure.
-  const ok = await upsertUrl(url);
-  if (ok) lastKnownUrl = url;
-}
 
-function scheduleDetect(logPath: string): void {
-  // fs.watch fires many events per cloudflared startup (each line of its
-  // boot sequence triggers a change event). Debounce to a single trailing
-  // call so we don't issue ~10 redundant upserts per tunnel restart.
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    void detectAndPublish(logPath);
-  }, FS_WATCH_DEBOUNCE_MS);
+  // Optimistic claim: synchronously stake out lastKnownUrl right after the
+  // check so any concurrent detectAndPublish calls (e.g. a burst of
+  // fs.watch events while cloudflared writes its boot sequence) see the
+  // new value and bail out at their own check — without this, ~10 racing
+  // events all pass the check on the still-old lastKnownUrl and each
+  // issues its own redundant upsert.
+  //
+  // If the upsert fails (e.g. permission denied, transient outage), we
+  // roll back so the next poll/event retries.
+  const previousUrl = lastKnownUrl;
+  lastKnownUrl = url;
+  console.log(`[tunnelWatcher] detected url change: ${previousUrl ?? '(none)'} -> ${url}`);
+  const ok = await upsertUrl(url);
+  if (!ok) lastKnownUrl = previousUrl;
 }
 
 export function startTunnelWatcher(): void {
@@ -94,7 +91,7 @@ export function startTunnelWatcher(): void {
   try {
     dirWatcher = fsWatch(logDir, (_eventType, fileName) => {
       if (fileName === logFile) {
-        scheduleDetect(logPath);
+        void detectAndPublish(logPath);
       }
     });
     dirWatcher.on('error', (e) => {
@@ -121,9 +118,5 @@ export function stopTunnelWatcher(): void {
   if (dirWatcher) {
     dirWatcher.close();
     dirWatcher = null;
-  }
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
   }
 }
