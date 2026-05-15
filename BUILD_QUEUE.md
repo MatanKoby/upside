@@ -561,35 +561,44 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 - **Don't override Install / Build commands in Vercel UI or in `vercel.json`** — declarative `package.json` (`packageManager` + `engines`) is sufficient and survives Vercel UI churn. No `vercel.json` needed for a Vite project.
 
 ### IB login redesign — also lands in this batch
-The original IB auth path in `server/src/services/ibGateway.ts` (`ibLogin`) does `POST /v1/api/iserver/auth/ssodh/init` to the gateway with `{username, password}`. **The gateway returns 401** — it only accepts browser-mediated login via its own web UI, not programmatic credential POSTs. We hit this on the first live deploy. We also tried a path-prefix reverse proxy in the api (`/ib-portal/*` → gateway), but IB Gateway's HTML uses *absolute* paths (`/sso/Login`, `/css/...`) which bypassed the prefix and 404'd from the api router.
+Four approaches tried before landing on IBeam. Documented here for institutional memory:
 
-Replacement design (matches UPSIDE_MVP_SPEC.md → "IB Authentication Flow"):
+1. **Programmatic credential POST** to `/v1/api/iserver/auth/ssodh/init` from `server/src/services/ibGateway.ts:ibLogin` — gateway returned 401. That endpoint is for SSO redirection from the gateway's own UI, not direct password auth.
+2. **api-side path proxy `/ib-portal/*`** → `https://ib-gateway:5000/*` using `http-proxy-middleware`. IB Gateway's HTML returns absolute paths (`/sso/Login`, `/css/…`) which bypassed the prefix and 404'd from the api router.
+3. **Second dedicated Quick Tunnel to the gateway** — gave the gateway its own public origin so absolute paths worked. Browser-side login appeared to succeed ("Client login succeeds"), but the gateway's `/v1/api/iserver/auth/status` from inside the compose network still returned 401. Cookie/Host-header round-tripping through Quick Tunnels does not carry the session cleanly.
+4. **IBKR OAuth 1.0a Extended** (cleanest long-term) — server-to-server auth, no gateway container, no credentials on VPS. Implemented on `oauth-dev` branch (commit `4d7a822`). Blocked on IBKR-side activation that retail users must request via email and may wait days-to-weeks for. Parked.
 
-1. **Second Quick Tunnel for the gateway** — add a `cloudflared-ib` compose service running `tunnel --no-autoupdate --no-tls-verify --url https://ib-gateway:5000`. Same `--no-autoupdate` discipline as the api tunnel. `--no-tls-verify` is required because the gateway has a self-signed cert. Logfile to the shared volume.
-2. **Watcher for both tunnels** — refactor `tunnelWatcher.ts` to support multiple `(logPath, configKey)` pairs and start one watcher per tunnel: `(cloudflaredApiLogPath, 'api_url')` and `(cloudflaredIbLogPath, 'ib_portal_url')`. Each watcher independently parses its log file and upserts its key.
-3. **FE: replace `IBReconnectBlock` credentials form with an iframe** loading `app_config.ib_portal_url`. Below the iframe, a fallback "open in new tab" link in case iframe embedding is rejected by IB's UI (frame-busting JS or cross-origin cookie behavior).
-4. **FE detects connection** via existing `/api/auth/status` polling (already in `useMarketSession`). When `session === 'connected'`, dismiss the iframe block and render the portfolio.
-5. **Remove `ibLogin` / `/api/auth/ib/login` route** — credentials never go through our code.
-6. **Remove Redis IB session storage** — the gateway holds the session itself; we just poll its status.
+**Landing approach: IBeam** ([voyz/ibeam:0.5.11](https://hub.docker.com/r/voyz/ibeam)). Replaces the bare `ib-gateway` container; runs the Client Portal Gateway inside its own image and automates the browser-based login via a headless browser at `localhost:5000` (where the gateway's auth model works without cookie/host shenanigans). The api code is unchanged — it still talks to `https://ib-gateway:5000/v1/api/…` over the compose network.
+
+Implementation steps:
+
+1. **Replace `ib-gateway` compose service**: image `voyz/ibeam:0.5.11`, mount credential files from VPS host. IBeam reads them via `IBEAM_SECRETS_SOURCE=fs`.
+2. **Drop `cloudflared-ib` compose service** — no more external exposure of the gateway needed; IBeam handles login internally.
+3. **Simplify `tunnelWatcher.ts`** — back to a single watcher for `api_url` only.
+4. **Drop `CLOUDFLARED_IB_LOG_PATH` env** from api service.
+5. **FE: simplify `IBReconnectBlock`** — replace the iframe (and its `getIbPortalUrl` flow) with a slim "Connecting to Interactive Brokers…" spinner with a help line about approving the 2FA push. The existing `useMarketSession` polling dismisses it once IBeam reports authenticated.
+6. **Drop `getIbPortalUrl` + `ib_portal_url` realtime subscription** from `client/src/services/apiUrl.ts`.
+7. **Manual step**: user creates `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt` on the VPS, mode `0400`. Files mounted into the IBeam container at `/run/secrets/`. Approve the 2FA push from IB Key on phone during IBeam's first login.
+8. **Manual step**: in Supabase SQL Editor, `delete from app_config where key='ib_portal_url';` to clear the now-stale row.
 
 **Files this batch creates/edits:**
 - `client/package.json` (add `packageManager` + `engines.node`)
-- `docker-compose.yml` (add cloudflared-ib service, rename existing cloudflared service for clarity)
-- `server/src/env.ts` (`CLOUDFLARED_API_LOG_PATH`, `CLOUDFLARED_IB_LOG_PATH` replace `CLOUDFLARED_LOG_PATH`)
-- `server/src/services/tunnelWatcher.ts` (refactor for multi-watcher)
-- `server/src/services/ibGateway.ts` (remove `ibLogin`, keep status/tickle/etc.)
-- `server/src/routes/auth.ts` (remove `/ib/login`; `/status` route stays)
-- `server/src/index.ts` (start two watchers)
-- `client/src/services/apiUrl.ts` (add `getIbPortalUrl()` + subscribe to ib_portal_url Realtime)
-- `client/src/components/common/IBReconnectBlock.tsx` (replace form with iframe + fallback)
+- `docker-compose.yml` (swap `ib-gateway` image to IBeam; drop `cloudflared-ib`; mount secrets dir into IBeam ro)
+- `.gitignore` (`secrets/`)
+- `server/src/env.ts` (drop `CLOUDFLARED_IB_LOG_PATH`)
+- `server/src/services/tunnelWatcher.ts` (single-watcher)
+- `client/src/services/apiUrl.ts` (drop IB-portal helpers)
+- `client/src/components/common/IBReconnectBlock.tsx` (slim "Connecting…" spinner)
 - No `vercel.json`.
 
-**Output:** Live Upside app reachable from any browser at the Vercel URL. PWA installable on iOS / Android. IB login completes inside the PWA via embedded IB UI.
+Kept as fallback (no change): `infra/clientportal.gw/Dockerfile` + `README.md` — used to build the bare gateway. Could be revived if IBeam ever stops being maintained.
+
+**Output:** Live Upside app reachable from any browser at the Vercel URL. PWA installable on iOS / Android. IB session established automatically on container start, refreshed on IB's nightly forced logout.
 
 **Verification:**
 - Vercel URL loads on phone, shows Login screen.
-- Google sign-in flow completes; you land on the IB reconnect screen (iframe).
-- Complete IB login inside the iframe; 2FA push approves; iframe dismisses; portfolio loads.
+- Google sign-in flow completes; brief "Connecting to IB…" screen appears.
+- 2FA push arrives on IB Key phone app during IBeam's first login → approve → spinner dismisses → portfolio loads with real positions.
 - Open simultaneously on phone and laptop; both render same data; an updated position appears on both within seconds.
 
 **🎯 Milestone: Data-only live. Phone shows real portfolio.**
