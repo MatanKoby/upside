@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
+import https from 'node:https';
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
 import type {
@@ -29,6 +30,11 @@ function client(): AxiosInstance {
       baseURL: env.ibGatewayUrl,
       timeout: 15_000,
       validateStatus: () => true,
+      // IB Client Portal Gateway ships a self-signed cert issued to `localhost`.
+      // Inside our compose network the hostname is `ib-gateway`, so the cert
+      // can't validate. Traffic stays on the private bridge — never crosses
+      // the host boundary — so disabling verification here is safe.
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
     });
   }
   return _client;
