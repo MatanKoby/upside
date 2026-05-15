@@ -38,6 +38,14 @@ export function AuthGuard({ children }: { children: ReactNode }) {
         // Same token we already verified — nothing to do.
         return;
       }
+      // Optimistic claim: stake out the token synchronously, before the
+      // await, so any other onAuthStateChange events firing for the same
+      // token see it already claimed and bail out at their own check.
+      // (A single OAuth sign-in fires INITIAL_SESSION + SIGNED_IN +
+      // sometimes TOKEN_REFRESHED in rapid succession.) On verification
+      // failure we roll back so the next event/retry can take another swing.
+      const previousToken = verifiedTokenRef.current;
+      verifiedTokenRef.current = accessToken;
       if (!cancelled) setPhase('verifying');
       try {
         const res = await apiFetch('/api/auth/google/callback', {
@@ -53,16 +61,17 @@ export function AuthGuard({ children }: { children: ReactNode }) {
           return;
         }
         if (!res.ok) {
+          verifiedTokenRef.current = previousToken;
           setError(`Auth verification failed (${res.status})`);
           setPhase('unauthenticated');
           await supabase.auth.signOut();
           return;
         }
-        verifiedTokenRef.current = accessToken;
         setError(null);
         setPhase('authenticated');
       } catch (e: unknown) {
         if (cancelled) return;
+        verifiedTokenRef.current = previousToken;
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
         setPhase('unauthenticated');
