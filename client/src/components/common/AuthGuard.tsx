@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { supabase, apiFetch } from '../../services/supabase';
 import Login from '../../pages/Login';
 
@@ -19,13 +19,23 @@ type Phase = 'loading' | 'unauthenticated' | 'verifying' | 'authenticated' | 'de
 export function AuthGuard({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<string | null>(null);
+  // Tracks the last access token we successfully verified, so we don't
+  // re-POST /api/auth/google/callback on every onAuthStateChange event
+  // (a single OAuth sign-in fires INITIAL_SESSION + SIGNED_IN + sometimes
+  // TOKEN_REFRESHED, which would otherwise produce 3-4 audit log rows).
+  const verifiedTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function verify(accessToken: string | undefined) {
       if (!accessToken) {
+        verifiedTokenRef.current = null;
         if (!cancelled) setPhase('unauthenticated');
+        return;
+      }
+      if (accessToken === verifiedTokenRef.current) {
+        // Same token we already verified — nothing to do.
         return;
       }
       if (!cancelled) setPhase('verifying');
@@ -48,6 +58,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
           await supabase.auth.signOut();
           return;
         }
+        verifiedTokenRef.current = accessToken;
         setError(null);
         setPhase('authenticated');
       } catch (e: unknown) {
