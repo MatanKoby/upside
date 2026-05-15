@@ -119,11 +119,13 @@ docker compose restart cloudflared
 
 ### IB Authentication Flow
 - **Account requirement**: IBKR **Pro** account, fully funded and activated. Client Portal Web API is not supported on IBKR Lite. Real-time market data subscription required for live prices (delayed otherwise).
-- First-time setup wizard: after Upside login → "Connect IB" screen → form with `autocomplete="username"` and `autocomplete="current-password"` attributes
-- Browser/OS prompts to save credentials to password manager (Keychain, 1Password, Bitwarden, etc.)
-- Credentials NEVER stored by Upside — only in user's password manager and IB's auth servers
-- Backend proxies credentials to IB Gateway → 2FA push to IB Key phone app → user approves with biometrics → connected
-- IB session token stored in Redis with 24h TTL, keyed by Supabase user ID
+- **Browser-mediated login via reverse proxy** — IB Client Portal Gateway only accepts authentication through its own web UI (programmatic credential POSTs return 401, discovered during Batch 13). The api container proxies a path prefix `/ib-portal/*` to `https://ib-gateway:5000/*` so that:
+  - User enters IB credentials directly into IB's own login UI rendered through the proxy.
+  - Credentials never touch our code — they flow browser → reverse proxy → gateway → IB servers.
+  - 2FA push fires to IB Key phone app → user approves with biometrics → gateway holds the session.
+  - Our BE polls `/v1/api/iserver/auth/status` (server-to-server) and surfaces the result via `/api/auth/status` to the FE.
+- **FE renders the proxy in an iframe** by default so the login stays inside the Upside PWA. If X-Frame-Options / CSP frame-ancestors from the gateway block iframe embedding (despite our proxy stripping them), the FE falls back to opening the proxy URL in a new tab.
+- **No Redis token storage in the BE for IB session** — IB Gateway maintains its own session cookie/state internally; we just ask it whether it's authenticated. (The Redis-stored token plan from earlier batches no longer applies; that assumed a programmatic-auth model we cannot use.)
 - Multi-device support: IB session shared across all user's devices (both pull from same Redis-stored session)
 - Session keepalive via tickle endpoint every 30s
 - IB's nightly forced logout (~11:45 PM ET) ends session daily

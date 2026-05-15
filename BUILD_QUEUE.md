@@ -530,7 +530,7 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 
 ---
 
-## Batch 13: Vercel FE deploy [MANUAL]
+## Batch 13: Vercel FE deploy [MANUAL + code]
 
 **Depends on:** Batches 10, 11, 12.
 
@@ -539,22 +539,54 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 ### Steps:
 1. Create a Vercel account (Sign in with GitHub) if you don't have one.
 2. New Project → Import the `upside` repo.
-3. Root directory: `client`.
-4. Build settings should auto-detect Vite (`pnpm build`, output `dist`).
+3. **Root Directory: `client`** (this matters — see "pitfalls" below).
+4. Build settings should auto-detect Vite (`pnpm build`, output `dist`). Don't manually override Install / Build / Output commands.
 5. Environment variables:
    - `VITE_SUPABASE_URL` = from Batch 8
    - `VITE_SUPABASE_PUBLISHABLE_KEY` = from Batch 8
-   - **No `VITE_API_URL`**. The api's public URL is discovered at runtime from Supabase `app_config` (populated by the tunnel watcher in Batch 11). This is intentional — see UPSIDE_MVP_SPEC.md → "Public URL Discovery".
+   - `ENABLE_EXPERIMENTAL_COREPACK` = `1` (see "pitfalls" below — required to honor `packageManager` field; without it Vercel ships its bundled pnpm 6 which can't read our v9 lockfile).
+   - **No `VITE_API_URL`** — the api's public URL is discovered at runtime from Supabase `app_config` (Batch 11). See UPSIDE_MVP_SPEC.md → "Public URL Discovery".
 6. Trigger first deploy. Should produce a `*.vercel.app` URL.
-7. Test on phone: Safari → open the Vercel URL → "Add to Home Screen" → PWA installs.
+7. **After first deploy succeeds**, update Supabase → Authentication → URL Configuration:
+   - Site URL: the Vercel URL (e.g. `https://upside-client.vercel.app`).
+   - Redirect URLs: add `https://<your-vercel>.vercel.app/**` (keep `http://localhost:5173/**` for local dev).
+   Without this the OAuth redirect from Google → Supabase → Vercel origin is refused.
+8. Test on phone: Safari → open the Vercel URL → "Add to Home Screen" → PWA installs.
 
-**Output:** Live Upside app reachable from any browser at the Vercel URL. PWA installable on iOS / Android.
+### Pitfalls hit during first deploy (documented so the next agent doesn't redo)
+- **Vercel uses Root Directory's `package.json`, not the workspace root's.** With Root Directory = `client`, Vercel reads `client/package.json` for `packageManager` / `engines`. We had to mirror both into `client/package.json` (they were only in the root).
+- **Vercel ships pnpm 6.35.1 (from 2021) bundled.** Our pnpm-lock.yaml is v9.0 (pnpm 11). They're incompatible — pnpm 6 prints "Ignoring not compatible lockfile" and then fails. The only clean fix is enabling Corepack via `ENABLE_EXPERIMENTAL_COREPACK=1` so the project's `packageManager: "pnpm@11.0.9"` is honored.
+- **pnpm 11 requires Node ≥22.13** — set `engines.node: "22.x"` in `client/package.json` to match. (Earlier tries set 20.x to dodge an unrelated `ERR_INVALID_THIS` bug that was actually pnpm-6-on-Node-24, not pnpm-11.)
+- **A stray `client/package-lock.json` is a deploy-blocker once Corepack is enabled** — Vercel sees it, concludes "the project uses npm," and refuses to mix npm + pnpm. Delete it.
+- **Don't override Install / Build commands in Vercel UI or in `vercel.json`** — declarative `package.json` (`packageManager` + `engines`) is sufficient and survives Vercel UI churn. No `vercel.json` needed for a Vite project.
 
-**Files this batch creates/edits:** Possibly a `vercel.json` in `client/` if any custom routing is needed (for SPA fallback to `index.html`). Likely Vercel auto-handles Vite SPAs.
+### IB login redesign — also lands in this batch
+The original IB auth path in `server/src/services/ibGateway.ts` (`ibLogin`) does `POST /v1/api/iserver/auth/ssodh/init` to the gateway with `{username, password}`. **The gateway returns 401** — it only accepts browser-mediated login via its own web UI, not programmatic credential POSTs. We hit this on the first live deploy.
+
+Replacement design (matches UPSIDE_MVP_SPEC.md → "IB Authentication Flow"):
+
+1. **Reverse proxy in api** — add a middleware that proxies `/ib-portal/*` requests to `https://ib-gateway:5000/*`. Use `http-proxy-middleware` with `secure: false` (gateway has self-signed cert) and strip `X-Frame-Options` / `Content-Security-Policy` headers from gateway responses so the FE can embed the proxy in an iframe.
+2. **FE: replace `IBReconnectBlock` credentials form with an iframe** pointing at `${apiUrl}/ib-portal/`. User logs into IB via IB's own UI inside the iframe. 2FA push fires to IB Key app; user approves.
+3. **FE detects connection** via existing `/api/auth/status` polling (already in `useMarketSession`). When `session === 'connected'`, dismiss the iframe block and render the portfolio.
+4. **Fallback** if iframe is blocked by the gateway anyway: "Open in new tab" button that opens the same `/ib-portal/` URL outside the iframe.
+5. **Remove `ibLogin` / `/api/auth/ib/login` route** — credentials never go through our code now.
+6. **Remove Redis IB session storage** — the gateway holds the session itself; we just poll its status.
+
+**Files this batch creates/edits:**
+- `client/package.json` (add `packageManager` + `engines.node`)
+- `server/package.json` (add `http-proxy-middleware`)
+- `server/src/index.ts` (mount the proxy middleware)
+- `server/src/services/ibGateway.ts` (remove `ibLogin`, keep status/tickle/etc.)
+- `server/src/routes/auth.ts` (remove `/ib/login`; `/status` route stays)
+- `client/src/components/common/IBReconnectBlock.tsx` (replace form with iframe + fallback)
+- No `vercel.json`.
+
+**Output:** Live Upside app reachable from any browser at the Vercel URL. PWA installable on iOS / Android. IB login completes inside the PWA via embedded IB UI.
 
 **Verification:**
-- Vercel URL loads on iPhone, shows Login screen.
-- Google sign-in flow completes; you land on portfolio home with real positions.
+- Vercel URL loads on phone, shows Login screen.
+- Google sign-in flow completes; you land on the IB reconnect screen (iframe).
+- Complete IB login inside the iframe; 2FA push approves; iframe dismisses; portfolio loads.
 - Open simultaneously on phone and laptop; both render same data; an updated position appears on both within seconds.
 
 **🎯 Milestone: Data-only live. Phone shows real portfolio.**
