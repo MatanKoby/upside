@@ -416,39 +416,85 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 
 ---
 
-## Batch 11: Cloudflare Tunnel — public HTTPS for the BE [partly MANUAL]
+## Batch 11: Self-healing Cloudflare Quick Tunnel + FE URL bootstrap
 
 **Depends on:** Batch 10.
 
-**Scope:** Expose the api container over HTTPS to the public internet via Cloudflare Tunnel. No domain purchase, no inbound firewall changes.
+**Scope:** Expose the api container over HTTPS via a Cloudflare Quick Tunnel (free, no domain), and build the self-healing URL discovery mechanism so the FE recovers automatically when the tunnel URL changes. Architectural rationale lives in UPSIDE_MVP_SPEC.md → "Public URL Discovery (self-healing Quick Tunnel)".
 
-### Steps:
-1. Create a free Cloudflare account if not already.
-2. Install `cloudflared` on the Oracle VPS: `curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared`.
-3. `cloudflared tunnel login` — opens a URL, you authenticate via browser.
-4. `cloudflared tunnel create upside-api` — creates a tunnel, prints a tunnel UUID.
-5. Configure `~/.cloudflared/config.yml`:
-   ```yaml
-   tunnel: <UUID>
-   credentials-file: /root/.cloudflared/<UUID>.json
-   ingress:
-     - hostname: upside-api.<your-cf-subdomain>.workers.dev   # or custom
-       service: http://localhost:3001
-     - service: http_status:404
+### Backend / infra deliverables
+
+1. **`docker-compose.yml`** — add `cloudflared` as a fourth service:
+   - Image: `cloudflare/cloudflared:latest` (or a pinned tag).
+   - Command: `tunnel --no-autoupdate --url http://api:3001 --logfile /var/log/cloudflared/cloudflared.log`. **`--no-autoupdate` is required** — auto-update reassigns the Quick Tunnel URL on every (≈daily) self-update.
+   - Volume: named volume `cloudflared-logs` mounted at `/var/log/cloudflared`. Also mount the same volume into the `api` container read-only at the same path.
+   - `depends_on: [api]`, `restart: unless-stopped`, on the existing `upside` network.
+
+2. **`supabase/migrations/002_app_config.sql`** — new key/value runtime config table:
+   - `app_config { key text primary key, value text not null, updated_at timestamptz not null default now() }`.
+   - RLS enabled. Policies: `select` open to `anon` + `authenticated`; `insert`/`update`/`delete` only for service role.
+   - Realtime publication enabled on this table.
+   - User applies via Supabase SQL Editor (same manual pattern as Batch 8).
+
+3. **`server/src/services/tunnelWatcher.ts`** — background task in the api:
+   - On startup: read `/var/log/cloudflared/cloudflared.log` and parse for the current Quick Tunnel URL (line containing `trycloudflare.com`).
+   - Subscribe to file changes via `fs.watch` with a 30s polling fallback (Docker volume + `fs.watch` events can be unreliable across recreations).
+   - On any URL distinct from the last-known value, upsert into `app_config` keyed `api_url`.
+   - Log each detection + upsert at INFO level.
+   - Started from `server/src/index.ts` once the supabase service-role client is ready; runs forever.
+
+4. **`.env.example` cleanup** — note that no `VITE_API_URL` is needed on Vercel; the FE discovers the api URL from `app_config` at runtime.
+
+### Frontend deliverables
+
+5. **`client/src/services/apiUrl.ts`** — bootstrap utility:
+   - `getApiUrl()`: returns the current api URL. Lookup order: (a) in-memory cache, (b) `localStorage` (key `upside_api_url`), (c) Supabase `app_config.api_url`. If all three miss, throws.
+   - On successful Supabase fetch, populates both caches.
+   - `subscribeToApiUrl()`: wires up a Supabase Realtime channel on `app_config`; on `UPDATE` events where `key='api_url'`, refreshes both caches.
+
+6. **`client/src/services/api.ts`** (or the existing fetch helpers) — base URL for backend calls comes from `getApiUrl()`. On a network-class fetch failure, clears both caches and re-fetches from Supabase as a recovery step before retrying once.
+
+7. **`client/src/App.tsx`** (top-level mount) — call `subscribeToApiUrl()` on mount; tear down on unmount.
+
+8. **Remove any `VITE_API_URL` references** from FE code. Single source of truth is now `app_config`.
+
+### Verification
+
+1. `docker compose up -d --build` on VPS → four containers Up.
+2. `docker compose logs cloudflared --tail 30` → shows `Your quick Tunnel has been created! ... https://<random>.trycloudflare.com`.
+3. `docker compose logs api --tail 30 | grep -i tunnel` → watcher logs the detected URL and the upsert.
+4. Supabase SQL Editor: `select * from app_config` → one row, `key='api_url'`, value matches the cloudflared log.
+5. From a laptop: `curl https://<URL-from-supabase>/healthz` returns `{"ok":true,"env":"production"}`.
+6. **Self-healing test** (the critical one for this batch):
+   ```bash
+   # Terminal 1 — watcher logs
+   docker compose logs api -f | grep -i tunnel
+   # Terminal 2 — trigger
+   docker compose restart cloudflared
    ```
-6. Install as systemd service: `sudo cloudflared service install` and `sudo systemctl start cloudflared`.
-7. Verify externally: `curl https://upside-api.<...>/healthz` from your laptop returns the healthcheck JSON.
+   Within ~15s, Supabase `app_config.api_url` reflects the new URL. With the FE open in a browser, observe (dev tools → Network) requests transition from the old URL to the new one without manual intervention.
 
-**Alternative:** add `cloudflared` as a fourth Docker Compose service instead of a host systemd service. Slightly cleaner; documented in `infra/cloudflared/README.md` (to be created).
+### Files this batch creates/edits
 
-**Output:** Stable HTTPS URL for the BE, ready to be consumed by Vercel FE (Batch 13).
+- `docker-compose.yml` (add `cloudflared` service + named volume + api volume mount)
+- `supabase/migrations/002_app_config.sql` (new)
+- `server/src/services/tunnelWatcher.ts` (new)
+- `server/src/index.ts` (start the watcher)
+- `client/src/services/apiUrl.ts` (new)
+- `client/src/services/api.ts` (use new bootstrap; recovery on network error)
+- `client/src/App.tsx` (mount subscription)
+- `.env.example` (document that `VITE_API_URL` is intentionally absent)
 
-**Files this batch creates/edits:** Optionally `infra/cloudflared/` for the compose-service variant. `docker-compose.yml` if going the compose route.
+### Does NOT touch
 
-**Verification:**
-- `curl https://<tunnel-url>/healthz` from anywhere returns `{"ok":true,"env":"production"}`.
-- TLS cert is valid (no `-k` needed).
-- Tunnel survives a `docker compose restart` (cloudflared is upstream of compose).
+- Signal, portfolio, auth, market-data routes
+- IB gateway service or its client code
+- Any other Supabase tables
+
+### Manual steps (user)
+
+- A Cloudflare account is **not** required for Quick Tunnels (`cloudflared tunnel --url ...` works anonymously). Only sign up if you later want a dashboard view of metrics.
+- Apply `002_app_config.sql` via the Supabase SQL Editor.
 
 ---
 
@@ -496,9 +542,9 @@ After this batch, future schema changes (post-Supabase-deploy) become real seque
 3. Root directory: `client`.
 4. Build settings should auto-detect Vite (`pnpm build`, output `dist`).
 5. Environment variables:
-   - `VITE_API_URL` = Cloudflare Tunnel URL from Batch 11 (e.g., `https://upside-api.<tunnel>.workers.dev`)
    - `VITE_SUPABASE_URL` = from Batch 8
    - `VITE_SUPABASE_PUBLISHABLE_KEY` = from Batch 8
+   - **No `VITE_API_URL`**. The api's public URL is discovered at runtime from Supabase `app_config` (populated by the tunnel watcher in Batch 11). This is intentional — see UPSIDE_MVP_SPEC.md → "Public URL Discovery".
 6. Trigger first deploy. Should produce a `*.vercel.app` URL.
 7. Test on phone: Safari → open the Vercel URL → "Add to Home Screen" → PWA installs.
 
