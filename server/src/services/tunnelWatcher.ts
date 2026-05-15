@@ -13,11 +13,13 @@ import { supabase } from './supabase.js';
 // (self-healing Quick Tunnel)".
 
 const POLL_INTERVAL_MS = 30_000;
+const FS_WATCH_DEBOUNCE_MS = 500;
 const TRYCLOUDFLARE_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/g;
 
 let lastKnownUrl: string | null = null;
 let pollTimer: NodeJS.Timeout | null = null;
 let dirWatcher: FSWatcher | null = null;
+let debounceTimer: NodeJS.Timeout | null = null;
 
 async function parseLatestUrl(logPath: string): Promise<string | null> {
   try {
@@ -67,6 +69,17 @@ async function detectAndPublish(logPath: string): Promise<void> {
   if (ok) lastKnownUrl = url;
 }
 
+function scheduleDetect(logPath: string): void {
+  // fs.watch fires many events per cloudflared startup (each line of its
+  // boot sequence triggers a change event). Debounce to a single trailing
+  // call so we don't issue ~10 redundant upserts per tunnel restart.
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    void detectAndPublish(logPath);
+  }, FS_WATCH_DEBOUNCE_MS);
+}
+
 export function startTunnelWatcher(): void {
   const logPath = env.cloudflaredLogPath;
   const logDir = dirname(logPath);
@@ -81,7 +94,7 @@ export function startTunnelWatcher(): void {
   try {
     dirWatcher = fsWatch(logDir, (_eventType, fileName) => {
       if (fileName === logFile) {
-        void detectAndPublish(logPath);
+        scheduleDetect(logPath);
       }
     });
     dirWatcher.on('error', (e) => {
@@ -108,5 +121,9 @@ export function stopTunnelWatcher(): void {
   if (dirWatcher) {
     dirWatcher.close();
     dirWatcher = null;
+  }
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
   }
 }
