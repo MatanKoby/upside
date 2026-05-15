@@ -8,6 +8,7 @@ import signalRoutes from './routes/signals.js';
 import { startSignalRunner } from './cron/signalRunner.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startPricePoller } from './cron/pricePoller.js';
+import { startTunnelWatcher } from './services/tunnelWatcher.js';
 
 const app = express();
 
@@ -33,4 +34,5 @@ app.listen(env.port, () => {
   startSignalRunner();
   startKeepalive();
   startPricePoller();
+  startTunnelWatcher();
 });

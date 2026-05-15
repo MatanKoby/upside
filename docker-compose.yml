@@ -32,14 +32,43 @@ services:
       PORT: "3001"
       IB_GATEWAY_URL: https://ib-gateway:5000
       REDIS_URL: redis://redis:6379
+      CLOUDFLARED_LOG_PATH: /var/log/cloudflared/cloudflared.log
     depends_on:
       - ib-gateway
       - redis
     ports:
       - "127.0.0.1:3001:3001"
     restart: unless-stopped
+    volumes:
+      # Read-only share of cloudflared's log so the in-process tunnel watcher
+      # can detect Quick Tunnel URL changes. See server/src/services/tunnelWatcher.ts.
+      - cloudflared-logs:/var/log/cloudflared:ro
     networks:
       - upside
+
+  cloudflared:
+    # Cloudflare Tunnel in Quick Tunnel mode — free, no domain required.
+    # --no-autoupdate is REQUIRED: cloudflared self-updates daily by default,
+    # each update reassigns the trycloudflare.com URL. We update the image
+    # explicitly by pulling a new tag.
+    image: cloudflare/cloudflared:latest
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://api:3001
+      - --logfile
+      - /var/log/cloudflared/cloudflared.log
+    depends_on:
+      - api
+    restart: unless-stopped
+    volumes:
+      - cloudflared-logs:/var/log/cloudflared
+    networks:
+      - upside
+
+volumes:
+  cloudflared-logs:
 
 networks:
   upside:
