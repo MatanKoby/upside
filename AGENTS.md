@@ -128,9 +128,40 @@ Use sparingly — prefer to wait or ping the user.
 
 ## Editing rules
 
-- Treat `BUILD_QUEUE.md` and `UPSIDE_MVP_SPEC.md` as user-owned. Don't write claim/state into them. If you need a `spec:` edit, propose it; the user may accept it or replace your version on the next paste.
+- Treat `BUILD_QUEUE.md` and `UPSIDE_MVP_SPEC.md` as user-owned in terms of execution state (claim/Owner/timestamps live in `CLAIMS.md`, not here). Design intent may be written to both files per the "Design and spec decisions" section below.
 - Anyone may add new entries to `CLAIMS.md`, but only the current Owner of a batch should mutate that batch's entry (except for stale-claim recovery).
 - Always `git pull` before claiming so you don't race the other agent.
+
+## Design and spec decisions
+
+When a design or specification decision is made, the agent involved must
+persist it to the spec and queue before moving on. The path depends on where
+the decision originated:
+
+**Decision made in a working session with the user:**
+1. Update `UPSIDE_MVP_SPEC.md` to reflect the new design, with a `spec:` commit.
+2. Update `BUILD_QUEUE.md` to revise the relevant in-flight batch or add new
+   batches that flow from the decision, with a `meta:` commit.
+3. Then proceed to implementation.
+
+**Decision encountered by an agent mid-execution (no user input yet):**
+The agent must **not** quietly make and persist the decision. Instead:
+1. Surface it to the user — describe the choice and the tradeoffs.
+2. Wait for the user's call.
+3. Once the user has decided, follow the working-session flow above.
+
+Scope: **design/spec only** — architecture, data model, public behavior, batch
+scope. Day-to-day implementation forks (library choice, internal file naming,
+refactor shape) stay agent discretion.
+
+The spec and queue are the durable record. A decision discussed in a session
+but not written into these files will be re-litigated or silently contradicted
+by a future agent. The conversation transcript is not a substitute.
+
+This addition does *not* override the rule that execution state (claim /
+Owner / timestamps) never goes into `BUILD_QUEUE.md` — that still lives in
+`CLAIMS.md`. The queue holds *design intent*; the claims file holds *execution
+state*.
 
 ## What does NOT belong in this file
 
