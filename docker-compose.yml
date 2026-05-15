@@ -30,7 +30,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
-      IB_GATEWAY_URL: http://ib-gateway:5000
+      IB_GATEWAY_URL: https://ib-gateway:5000
       REDIS_URL: redis://redis:6379
     depends_on:
       - ib-gateway
