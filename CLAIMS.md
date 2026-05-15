@@ -8,15 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 12 — Google OAuth end-to-end
-- Owner: claude
-- Started: 2026-05-15 (today)
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 12 — Google OAuth end-to-end
+- Owner: claude
+- Started: 2026-05-15 (today)
+- Finished: 2026-05-15 (today)
+- Commit: bfa1d52
+- Notes: Login.tsx + AuthGuard.tsx + Supabase Auth (Google provider). Verified end-to-end on localhost:5173 against the deployed BE: whitelisted email lands on app, non-whitelisted bounces to google.com, access_attempts logs both. Follow-on fixes shipped under this batch: 003_service_role_grants.sql (resolves the deferred grants issue from batch 11; covers analysis_locks, access_attempts, contracts, ib_api_metrics), AuthGuard dedup-by-token with localStorage persistence (1 audit row per real auth event, not per reload), prompt=select_account on signInWithOAuth.
 
 ### Batch 11 — Self-healing Cloudflare Quick Tunnel + FE URL bootstrap
 - Owner: claude
