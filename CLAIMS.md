@@ -8,15 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 11 — Self-healing Cloudflare Quick Tunnel + FE URL bootstrap
-- Owner: claude
-- Started: 2026-05-15 (today)
+(none)
 
 ## Known issues (deferred fixes)
 
-- **`analysis_locks` permission denied** — `signalRunner` cleanup cron logs `permission denied for table analysis_locks` every 30s. The `SUPABASE_SECRET_KEY` should bypass RLS, so this is a grants problem, not RLS. Likely connected to "auto-expose tables OFF" spec change (commits fd07a90 / 1734633). Must be resolved before Batch 14 (signal pipeline depends on this table).
+- **service_role grants for server-only tables** — root cause confirmed during Batch 11: this Supabase project has Data API "auto-expose new tables" OFF, so `service_role` does **not** auto-bypass grants. `app_config` was fixed in `002_app_config.sql` with an explicit `grant all to service_role`. The same gap still affects `analysis_locks`, `access_attempts`, `contracts`, `ib_api_metrics` from `001_initial.sql`. Visible today as `[signalRunner] cleanup error: permission denied for table analysis_locks` every 30s. Must be resolved before Batch 14 (signal pipeline writes to all of these). Likely fix: a `003_service_role_grants.sql` that adds `grant all on <table> to service_role` for each.
 
 ## Completed
+
+### Batch 11 — Self-healing Cloudflare Quick Tunnel + FE URL bootstrap
+- Owner: claude
+- Started: 2026-05-15 (today)
+- Finished: 2026-05-15 (today)
+- Commit: b4b88fa
+- Notes: cloudflared compose service + 002_app_config.sql + tunnelWatcher.ts + FE apiUrl bootstrap. Self-healing test verified end-to-end (docker compose restart cloudflared → new URL in Supabase within ~15s). Three follow-on fixes shipped under the same batch tag: cloudflared user: root for logfile perms, service_role grant for app_config, optimistic-claim dedup in the watcher.
 
 ### Batch 10 — Deploy BE compose stack to Oracle VPS
 - Owner: claude
