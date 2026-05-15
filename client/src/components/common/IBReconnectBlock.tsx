@@ -1,78 +1,64 @@
-// Full-screen IB reconnect prompt — replaces the entire UI when IB session is
-// expired. Renders the credential form per spec (autocomplete attrs so the
-// browser password manager handles it).
+// Full-screen IB reconnect prompt — replaces the entire UI when IB session
+// is expired. Embeds IB's own login UI via the BE's /ib-portal reverse proxy
+// in an iframe so the user authenticates inside the Upside app without
+// credentials ever passing through Upside code. See UPSIDE_MVP_SPEC.md →
+// "IB Authentication Flow" for the rationale.
 //
-// In Batch 9 this is the lightweight version: simple form, basic submit, no
-// fancy "waiting for 2FA approval" animation yet (Batch 16 polish).
+// Some browsers / IB configurations may still block the iframe even after
+// our proxy strips X-Frame-Options + frame-ancestors CSP. A "Open in new
+// tab" button below the iframe is the fallback.
 
-import { useState } from 'react';
-import { apiFetch } from '../../services/supabase';
+import { useEffect, useState } from 'react';
+import { getApiUrl } from '../../services/apiUrl';
 
 interface Props {
+  // Called by the parent (useMarketSession in App.tsx) when its polling
+  // detects the gateway is now authenticated. Same hook as before; only the
+  // mechanism inside the block changed.
   onReconnected: () => void;
 }
 
-export function IBReconnectBlock({ onReconnected }: Props) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+export function IBReconnectBlock({ onReconnected: _onReconnected }: Props) {
+  const [portalUrl, setPortalUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await apiFetch('/api/auth/ib/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+  useEffect(() => {
+    let cancelled = false;
+    getApiUrl()
+      .then((base) => {
+        if (!cancelled) setPortalUrl(`${base}/ib-portal/`);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body.error ?? `Login failed (${res.status})`);
-        return;
-      }
-      onReconnected();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="ib-reconnect-block">
       <h1 className="ph-logo">Upside</h1>
-      <p className="ib-reconnect-message">Your IB session has expired</p>
-      <form className="ib-reconnect-form" onSubmit={onSubmit}>
-        <input
-          type="text"
-          name="username"
-          autoComplete="username"
-          placeholder="IB username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          required
-          autoFocus
-        />
-        <input
-          type="password"
-          name="password"
-          autoComplete="current-password"
-          placeholder="IB password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit" disabled={submitting || !username || !password}>
-          {submitting ? 'Connecting…' : 'Reconnect'}
-        </button>
-        {error && <div className="ib-reconnect-error">{error}</div>}
-      </form>
-      <p className="ib-reconnect-help">
-        Approve the 2FA push on your IB Key phone app after submitting.
-      </p>
+      <p className="ib-reconnect-message">Sign in to Interactive Brokers</p>
+
+      {error && <div className="ib-reconnect-error">{error}</div>}
+
+      {portalUrl && (
+        <>
+          <iframe
+            className="ib-reconnect-iframe"
+            src={portalUrl}
+            title="Interactive Brokers Login"
+          />
+          <p className="ib-reconnect-help">
+            If the login form doesn’t appear,{' '}
+            <a href={portalUrl} target="_blank" rel="noopener noreferrer">
+              open it in a new tab
+            </a>
+            . Approve the 2FA push on your IB Key app after submitting.
+          </p>
+        </>
+      )}
     </div>
   );
 }

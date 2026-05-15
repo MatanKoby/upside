@@ -701,3 +701,47 @@
 @keyframes auth-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ========== IB reconnect block (iframe-based) ========== */
+.ib-reconnect-block {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-10);
+  padding: var(--sp-16);
+  min-height: 100vh;
+}
+.ib-reconnect-block .ph-logo {
+  margin: 0;
+  text-align: center;
+}
+.ib-reconnect-message {
+  margin: 0;
+  font-size: var(--fs-14);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.ib-reconnect-iframe {
+  width: 100%;
+  flex: 1;
+  min-height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.ib-reconnect-help {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.ib-reconnect-help a {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+.ib-reconnect-error {
+  margin: 0;
+  color: rgb(var(--loss-rgb));
+  font-size: var(--fs-12);
+  text-align: center;
+}

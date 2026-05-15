@@ -124,22 +124,14 @@ async function instrumentedWithRetry<T>(
 
 // ---------------------------------------------------------------------------
 // Auth + session.
+//
+// No ibLogin function: the gateway only accepts browser-mediated auth via its
+// own UI (programmatic POST to /v1/api/iserver/auth/ssodh/init returns 401).
+// Users authenticate by loading the gateway's UI through the api's /ib-portal
+// reverse proxy. The gateway holds the resulting session itself; the helpers
+// below let our BE talk to that session (tickle to keep alive, status to
+// query, logout to terminate).
 // ---------------------------------------------------------------------------
-export async function ibLogin(username: string, password: string): Promise<{ ok: boolean; session?: string; error?: string }> {
-  await rateLimit();
-  const { data, status } = await instrumented(
-    { endpoint: '/v1/api/iserver/auth/ssodh/init' },
-    async () => {
-      const res = await client().post<{ session?: string }>('/v1/api/iserver/auth/ssodh/init', { username, password });
-      return { status: res.status, data: res.data };
-    },
-  );
-  if (status >= 200 && status < 300) {
-    return { ok: true, session: data?.session ?? undefined };
-  }
-  return { ok: false, error: `IB login failed (${status})` };
-}
-
 export async function ibTickle(): Promise<boolean> {
   await rateLimit();
   const { status } = await instrumented(

@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { env } from './env.js';
 import authRoutes from './routes/auth.js';
 import portfolioRoutes from './routes/portfolio.js';
@@ -13,6 +14,39 @@ import { startTunnelWatcher } from './services/tunnelWatcher.js';
 const app = express();
 
 app.use(cors());
+
+// Reverse proxy: /ib-portal/* → https://ib-gateway:5000/*
+// User-facing IB authentication runs through this — they hit
+// `<tunnel>/ib-portal/` in an iframe (or new tab fallback) and complete
+// IB's own browser login flow. Credentials never touch our code; the
+// gateway holds the session. See UPSIDE_MVP_SPEC.md → "IB Authentication Flow".
+//
+// Mounted before express.json() so the proxy gets raw request bodies; the
+// JSON middleware would otherwise consume the stream and break POSTs.
+app.use(
+  '/ib-portal',
+  createProxyMiddleware({
+    target: env.ibGatewayUrl,
+    changeOrigin: true,
+    secure: false, // gateway uses a self-signed cert
+    pathRewrite: { '^/ib-portal': '' },
+    ws: true,
+    on: {
+      proxyRes: (proxyRes) => {
+        // Strip headers that would block embedding our iframe.
+        delete proxyRes.headers['x-frame-options'];
+        const csp = proxyRes.headers['content-security-policy'];
+        if (typeof csp === 'string') {
+          proxyRes.headers['content-security-policy'] = csp
+            .split(';')
+            .filter((d) => !d.trim().toLowerCase().startsWith('frame-ancestors'))
+            .join(';');
+        }
+      },
+    },
+  }),
+);
+
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/healthz', (_req: Request, res: Response) => {
