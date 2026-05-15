@@ -51,7 +51,14 @@ services:
     # --no-autoupdate is REQUIRED: cloudflared self-updates daily by default,
     # each update reassigns the trycloudflare.com URL. We update the image
     # explicitly by pulling a new tag.
+    #
+    # user: root — the cloudflare/cloudflared image runs as a non-root user
+    # by default, but named Docker volumes are owned by root:root, so the
+    # non-root user can't create the logfile. Running as root inside this
+    # container is safe: it's a sandboxed network proxy, container root is
+    # not host root, and there's no shell exposure.
     image: cloudflare/cloudflared:latest
+    user: "0:0"
     command:
       - tunnel
       - --no-autoupdate
