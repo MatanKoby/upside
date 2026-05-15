@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 11 — Self-healing Cloudflare Quick Tunnel + FE URL bootstrap
+- Owner: claude
+- Started: 2026-05-15 (today)
 
 ## Known issues (deferred fixes)
 
