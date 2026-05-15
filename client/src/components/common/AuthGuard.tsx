@@ -16,14 +16,42 @@ import Login from '../../pages/Login';
 
 type Phase = 'loading' | 'unauthenticated' | 'verifying' | 'authenticated' | 'denied';
 
+const VERIFIED_TOKEN_STORAGE_KEY = 'upside_verified_token';
+
+function readVerifiedToken(): string | null {
+  try {
+    return localStorage.getItem(VERIFIED_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeVerifiedToken(token: string): void {
+  try {
+    localStorage.setItem(VERIFIED_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // localStorage unavailable (private mode etc.) — degrade silently.
+  }
+}
+
+function clearVerifiedToken(): void {
+  try {
+    localStorage.removeItem(VERIFIED_TOKEN_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function AuthGuard({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<string | null>(null);
-  // Tracks the last access token we successfully verified, so we don't
-  // re-POST /api/auth/google/callback on every onAuthStateChange event
-  // (a single OAuth sign-in fires INITIAL_SESSION + SIGNED_IN + sometimes
-  // TOKEN_REFRESHED, which would otherwise produce 3-4 audit log rows).
-  const verifiedTokenRef = useRef<string | null>(null);
+  // Tracks the last access token we successfully verified. Persisted in
+  // localStorage so a page reload with the same cached Supabase session
+  // doesn't re-verify (and re-log) what we already accepted; reset on
+  // sign-out. The BE still enforces requireAuth on every protected route,
+  // so a stale local cache can't bypass authorization — it only suppresses
+  // duplicate audit rows for the "same person, same token, fresh page" case.
+  const verifiedTokenRef = useRef<string | null>(readVerifiedToken());
 
   useEffect(() => {
     let cancelled = false;
@@ -31,11 +59,15 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     async function verify(accessToken: string | undefined) {
       if (!accessToken) {
         verifiedTokenRef.current = null;
+        clearVerifiedToken();
         if (!cancelled) setPhase('unauthenticated');
         return;
       }
       if (accessToken === verifiedTokenRef.current) {
-        // Same token we already verified — nothing to do.
+        // Already verified this exact token — including across page reloads
+        // since the ref is hydrated from localStorage on mount. Surface
+        // 'authenticated' immediately in case we just rendered 'loading'.
+        if (!cancelled) setPhase('authenticated');
         return;
       }
       // Optimistic claim: stake out the token synchronously, before the
@@ -55,6 +87,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
         });
         if (cancelled) return;
         if (res.status === 403) {
+          clearVerifiedToken();
           setPhase('denied');
           await supabase.auth.signOut();
           window.location.replace('https://google.com');
@@ -62,11 +95,13 @@ export function AuthGuard({ children }: { children: ReactNode }) {
         }
         if (!res.ok) {
           verifiedTokenRef.current = previousToken;
+          clearVerifiedToken();
           setError(`Auth verification failed (${res.status})`);
           setPhase('unauthenticated');
           await supabase.auth.signOut();
           return;
         }
+        writeVerifiedToken(accessToken);
         setError(null);
         setPhase('authenticated');
       } catch (e: unknown) {
