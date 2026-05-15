@@ -35,7 +35,7 @@ async function parseLatestUrl(logPath: string): Promise<string | null> {
   }
 }
 
-async function upsertUrl(url: string): Promise<void> {
+async function upsertUrl(url: string): Promise<boolean> {
   const { error } = await supabase()
     .from('app_config')
     .upsert(
@@ -44,9 +44,10 @@ async function upsertUrl(url: string): Promise<void> {
     );
   if (error) {
     console.error('[tunnelWatcher] upsert error:', error.message);
-    return;
+    return false;
   }
   console.log(`[tunnelWatcher] api_url upserted: ${url}`);
+  return true;
 }
 
 async function detectAndPublish(logPath: string): Promise<void> {
@@ -60,8 +61,10 @@ async function detectAndPublish(logPath: string): Promise<void> {
   }
   if (!url || url === lastKnownUrl) return;
   console.log(`[tunnelWatcher] detected url change: ${lastKnownUrl ?? '(none)'} -> ${url}`);
-  lastKnownUrl = url;
-  await upsertUrl(url);
+  // Only mark as published on a successful upsert — otherwise the next poll
+  // would short-circuit and we'd never retry a transient Supabase failure.
+  const ok = await upsertUrl(url);
+  if (ok) lastKnownUrl = url;
 }
 
 export function startTunnelWatcher(): void {
