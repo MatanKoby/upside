@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "pnpm --filter client dev",
     "dev:server": "pnpm --filter server dev",
