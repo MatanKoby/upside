@@ -8,11 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+(none)
+
+## Known issues (deferred fixes)
+
+- **`analysis_locks` permission denied** — `signalRunner` cleanup cron logs `permission denied for table analysis_locks` every 30s. The `SUPABASE_SECRET_KEY` should bypass RLS, so this is a grants problem, not RLS. Likely connected to "auto-expose tables OFF" spec change (commits fd07a90 / 1734633). Must be resolved before Batch 14 (signal pipeline depends on this table).
+
+## Completed
+
 ### Batch 10 — Deploy BE compose stack to Oracle VPS
 - Owner: claude
 - Started: 2026-05-14 20:36
-
-## Completed
+- Finished: 2026-05-15 (today)
+- Commits: 1d97339 (un-comment ib-gateway service), a87c8c3 (axios https + self-signed cert), d7ecc41 (compose IB_GATEWAY_URL → https)
+- Notes: surfaced and fixed http→https scheme bug for IB Client Portal Gateway. Filed `analysis_locks` grants issue as deferred.
 
 ### Batch 8 — Supabase project provisioning
 - Owner: Me!
