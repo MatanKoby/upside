@@ -14,7 +14,14 @@ export default function Login() {
     setBusy(true);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin },
+      options: {
+        redirectTo: window.location.origin,
+        // Force Google to show the account picker every time. Without this,
+        // Google silently signs in with whichever account is currently
+        // active in the browser, which is bad UX (user can't choose) and
+        // also blocks testing the non-whitelisted bounce path.
+        queryParams: { prompt: 'select_account' },
+      },
     });
     if (error) {
       setError(error.message);
