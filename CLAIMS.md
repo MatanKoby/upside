@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 12 — Google OAuth end-to-end
+- Owner: claude
+- Started: 2026-05-15 (today)
 
 ## Known issues (deferred fixes)
 
