@@ -37,8 +37,7 @@ function describe(message: string, err: unknown): string {
   return out.length > MAX_DESC_CHARS ? out.slice(0, MAX_DESC_CHARS - 3) + '...' : out;
 }
 
-async function postWebhook(payload: Record<string, unknown>): Promise<void> {
-  const url = env.discordWebhookUrl;
+async function postWebhook(url: string, payload: Record<string, unknown>): Promise<void> {
   if (!url) return; // silently no-op when not configured
   try {
     await axios.post(url, payload, { timeout: 5_000, validateStatus: () => true });
@@ -47,17 +46,35 @@ async function postWebhook(payload: Record<string, unknown>): Promise<void> {
   }
 }
 
-/**
- * Notify Discord of an error. `key` identifies the error site (used for rate
- * limiting). Subsequent calls with the same key within COOLDOWN_MS are
- * suppressed; the next allowed notification includes the suppressed count.
- */
-export async function notifyError(key: string, message: string, err?: unknown): Promise<void> {
-  // Mirror to local logs first so we have a record even if Discord is down.
-  if (err) console.error(`[${key}] ${message}`, err);
-  else console.error(`[${key}] ${message}`);
+type Severity = 'error' | 'critical' | 'info';
 
-  if (!env.discordWebhookUrl) return;
+const VISUAL: Record<Severity, { emoji: string; color: number }> = {
+  error:    { emoji: '🔴', color: 0xE53935 },
+  critical: { emoji: '🚨', color: 0xB71C1C },
+  info:     { emoji: '🟢', color: 0x43A047 },
+};
+
+function webhookFor(sev: Severity): string {
+  if (sev === 'critical') {
+    // Critical routes to its own channel; fall back to the routine channel
+    // if the critical webhook isn't configured (so we don't drop the message).
+    return env.discordCriticalWebhookUrl || env.discordWebhookUrl;
+  }
+  return env.discordWebhookUrl;
+}
+
+async function notify(sev: Severity, key: string, message: string, err?: unknown): Promise<void> {
+  // Mirror to local logs first so we have a record even if Discord is down.
+  if (sev === 'info') {
+    console.log(`[${key}] ${message}`);
+  } else if (err) {
+    console.error(`[${key}] ${message}`, err);
+  } else {
+    console.error(`[${key}] ${message}`);
+  }
+
+  const url = webhookFor(sev);
+  if (!url) return;
 
   const now = Date.now();
   const prev = state.get(key);
@@ -65,46 +82,42 @@ export async function notifyError(key: string, message: string, err?: unknown): 
     prev.suppressedSince += 1;
     return;
   }
-
   const suppressedNote = prev && prev.suppressedSince > 0
     ? `\n_(+ ${prev.suppressedSince} suppressed in the last 5 min)_`
     : '';
-
   state.set(key, { lastSentAt: now, suppressedSince: 0 });
 
-  await postWebhook({
+  const v = VISUAL[sev];
+  await postWebhook(url, {
     username: 'upside',
     embeds: [{
-      title: `🔴 ${key}`,
+      title: `${v.emoji} ${key}`,
       description: describe(message, err) + suppressedNote,
-      color: 0xE53935, // red
+      color: v.color,
       timestamp: new Date(now).toISOString(),
     }],
   });
 }
 
 /**
- * Notify Discord of a less-severe event (e.g., reconnects, recovered state).
- * Same rate-limit semantics.
+ * Routine error — recoverable, may flap. Goes to DISCORD_WEBHOOK_URL.
  */
-export async function notifyInfo(key: string, message: string): Promise<void> {
-  console.log(`[${key}] ${message}`);
-  if (!env.discordWebhookUrl) return;
+export function notifyError(key: string, message: string, err?: unknown): Promise<void> {
+  return notify('error', key, message, err);
+}
 
-  const now = Date.now();
-  const prev = state.get(key);
-  if (prev && now - prev.lastSentAt < COOLDOWN_MS) {
-    prev.suppressedSince += 1;
-    return;
-  }
-  state.set(key, { lastSentAt: now, suppressedSince: 0 });
-  await postWebhook({
-    username: 'upside',
-    embeds: [{
-      title: `🟢 ${key}`,
-      description: message.slice(0, MAX_DESC_CHARS),
-      color: 0x43A047, // green
-      timestamp: new Date(now).toISOString(),
-    }],
-  });
+/**
+ * Critical error — process-level / structurally broken. Goes to
+ * DISCORD_CRITICAL_WEBHOOK_URL (falls back to the routine channel if unset).
+ */
+export function notifyCritical(key: string, message: string, err?: unknown): Promise<void> {
+  return notify('critical', key, message, err);
+}
+
+/**
+ * Lower-severity event for the routine channel (e.g., reconnects, recovered
+ * state). Same rate-limit semantics.
+ */
+export function notifyInfo(key: string, message: string): Promise<void> {
+  return notify('info', key, message);
 }

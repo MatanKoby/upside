@@ -1,6 +1,6 @@
 import { ibTickle } from '../services/ibGateway.js';
 import { pingSupabase } from '../services/supabase.js';
-import { notifyError } from '../services/notify.js';
+import { notifyCritical } from '../services/notify.js';
 
 const TICKLE_INTERVAL_MS = 30_000;
 const SUPABASE_PING_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -19,7 +19,7 @@ export function startKeepalive(): void {
   if (!pingTimer) {
     pingTimer = setInterval(() => {
       pingSupabase().catch((e) =>
-        void notifyError('keepalive.supabasePing', 'Supabase ping failed', e),
+        void notifyCritical('keepalive.supabasePing', 'Supabase ping failed', e),
       );
     }, SUPABASE_PING_INTERVAL_MS);
   }

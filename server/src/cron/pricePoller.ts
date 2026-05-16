@@ -27,7 +27,7 @@ import {
   ibBarToOhlc,
 } from '../services/ibMappers.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
-import { notifyError } from '../services/notify.js';
+import { notifyError, notifyCritical } from '../services/notify.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 
@@ -322,7 +322,7 @@ export function startPricePoller(): void {
     `extended=${POLL_INTERVAL_EXTENDED_MS}ms, closed=${POLL_INTERVAL_CLOSED_MS}ms`,
   );
   void loop().catch((e) => {
-    void notifyError('pricePoller.loop.crashed', 'loop terminated unexpectedly', e);
+    void notifyCritical('pricePoller.loop.crashed', 'loop terminated unexpectedly', e);
     running = false;
   });
 }

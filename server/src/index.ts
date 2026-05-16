@@ -9,16 +9,16 @@ import { startSignalRunner } from './cron/signalRunner.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startPricePoller } from './cron/pricePoller.js';
 import { startTunnelWatcher } from './services/tunnelWatcher.js';
-import { notifyError } from './services/notify.js';
+import { notifyError, notifyCritical } from './services/notify.js';
 
 // Top-level safety net — anything thrown async without a catch lands here.
 // Notify Discord (if configured) and keep running; let the platform decide
 // whether to restart based on the type of error.
 process.on('unhandledRejection', (reason) => {
-  void notifyError('process.unhandledRejection', 'unhandled promise rejection', reason);
+  void notifyCritical('process.unhandledRejection', 'unhandled promise rejection', reason);
 });
 process.on('uncaughtException', (err) => {
-  void notifyError('process.uncaughtException', 'uncaught exception', err);
+  void notifyCritical('process.uncaughtException', 'uncaught exception', err);
 });
 
 const app = express();
