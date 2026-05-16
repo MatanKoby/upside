@@ -24,6 +24,16 @@ services:
       IBEAM_SECRETS_SOURCE: fs
       IBEAM_ACCOUNT: /run/secrets/ib_account
       IBEAM_PASSWORD: /run/secrets/ib_password
+      # Default page-load timeout is 15s — far too short for the user to
+      # approve the 2FA push on their IB Key app (notification → unlock →
+      # open app → biometric → approve takes 20-60s realistically). 90s
+      # gives comfortable headroom for the first attempt to succeed without
+      # spamming retries.
+      IBEAM_PAGE_LOAD_TIMEOUT: "90"
+      IBEAM_OAUTH_TIMEOUT: "90"
+      # Slow the retry cadence too so failed attempts don't fire a new 2FA
+      # push every 60s.
+      IBEAM_MAINTENANCE_INTERVAL: "300"
     volumes:
       - ./secrets/ib_account.txt:/run/secrets/ib_account:ro
       - ./secrets/ib_password.txt:/run/secrets/ib_password:ro
