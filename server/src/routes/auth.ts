@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
 import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
-import { getIbContainerState, startIbContainer, stopIbContainer } from '../services/ibContainer.js';
+import { getIbContainerState, startIbContainer, stopIbContainer, restartIbContainer } from '../services/ibContainer.js';
 import { notifyError } from '../services/notify.js';
 import { requireAuth } from '../middleware/auth.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
@@ -98,6 +98,20 @@ router.post('/ib/disconnect', requireAuth, async (_req: Request, res: Response) 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     void notifyError('auth.ib.disconnect', msg, e);
+    res.status(502).json({ error: msg });
+  }
+});
+
+// Stop + start the IBeam container in one call. Used by the FE when the user
+// missed a 2FA push — restarting kicks off a fresh login (and fresh 2FA push)
+// without requiring a two-step disconnect-then-connect dance.
+router.post('/ib/restart', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    await restartIbContainer();
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    void notifyError('auth.ib.restart', msg, e);
     res.status(502).json({ error: msg });
   }
 });

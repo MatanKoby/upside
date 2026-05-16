@@ -19,19 +19,28 @@ export function IbStatusIndicator({ status, onChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Disable taps while busy, while connecting (already in flight), or while
-  // disconnected (the BE polls — user can't speed that up).
-  const tappable = !busy && (status === 'stopped' || status === 'connected' || status === 'expired');
+  // Tappable in any state except when we're already in flight on an action,
+  // or sitting in the transient 'disconnected' (BE is auto-recovering — user
+  // can't speed it up). Notably, 'connecting' IS tappable: lets the user
+  // cancel a login they missed (e.g., didn't approve 2FA in time) and start
+  // fresh.
+  const tappable = !busy && status !== 'disconnected';
 
   async function onTap() {
     if (!tappable) return;
     setError(null);
     setBusy(true);
     try {
+      // 'connected'  → stop the container (disconnect).
+      // 'connecting' → restart it (missed 2FA → fresh push). Stop+start
+      //                in one call so the user doesn't need two taps.
+      // 'stopped' / 'expired' → start it (connect).
       const path =
         status === 'connected'
           ? '/api/auth/ib/disconnect'
-          : '/api/auth/ib/connect';
+          : status === 'connecting'
+            ? '/api/auth/ib/restart'
+            : '/api/auth/ib/connect';
       const res = await apiFetch(path, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -69,7 +78,7 @@ function labelFor(status: SessionStatus, busy: boolean): string {
     case 'connected':
       return 'IB live';
     case 'connecting':
-      return 'Approve 2FA on IB Key';
+      return 'Awaiting 2FA · tap to retry';
     case 'disconnected':
       return 'Reconnecting…';
     case 'expired':

@@ -37,3 +37,11 @@ export async function stopIbContainer(): Promise<void> {
   // t=10 gives Python a chance to clean up Selenium / Chrome before SIGKILL.
   await c.stop({ t: 10 });
 }
+
+export async function restartIbContainer(): Promise<void> {
+  const c = docker.getContainer(CONTAINER_NAME);
+  // dockerode's `restart` works regardless of current state: stop if running,
+  // then start. t=10 matches our stop grace period. Used by the FE to recover
+  // from a missed 2FA push without manual two-step cancel + reconnect.
+  await c.restart({ t: 10 });
+}
