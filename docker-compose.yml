@@ -100,3 +100,12 @@ volumes:
 networks:
   upside:
     driver: bridge
+    # Pin the subnet to 10.x — IB Client Portal Gateway's default conf.yaml
+    # has `10.*` in its ips.allow list (alongside the default Docker bridge
+    # at 172.17.0.*). Compose's auto-assigned custom-bridge subnet is in the
+    # 172.18+ range, which is NOT in the allow list — the gateway returns
+    # "404 Access Denied" to requests from those IPs. Putting our network
+    # on a 10.x subnet avoids needing a custom conf.yaml mount.
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
