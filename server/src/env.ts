@@ -42,4 +42,9 @@ export const env = {
   // container via a Docker named volume. The tunnel watcher tails it for
   // the current Quick Tunnel URL. See server/src/services/tunnelWatcher.ts.
   cloudflaredLogPath: optional('CLOUDFLARED_LOG_PATH', '/var/log/cloudflared/api.log'),
+
+  // Optional Discord incoming-webhook URL — when set, key error sites in
+  // the api notify the channel (rate-limited per key). See
+  // server/src/services/notify.ts.
+  discordWebhookUrl: optional('DISCORD_WEBHOOK_URL'),
 };

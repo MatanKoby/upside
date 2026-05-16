@@ -3,6 +3,7 @@ import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
+import { notifyError } from './notify.js';
 
 // Detects current Cloudflare Quick Tunnel URLs from cloudflared logfiles
 // (mounted in from the cloudflared compose services via a shared volume) and
@@ -43,7 +44,7 @@ async function upsertUrl(configKey: string, url: string): Promise<boolean> {
       { onConflict: 'key' },
     );
   if (error) {
-    console.error(`[tunnelWatcher:${configKey}] upsert error:`, error.message);
+    void notifyError(`tunnelWatcher.${configKey}.upsert`, error.message);
     return false;
   }
   console.log(`[tunnelWatcher:${configKey}] upserted: ${url}`);
@@ -60,8 +61,7 @@ function startOne(logPath: string, configKey: string): WatcherHandle {
     try {
       url = await parseLatestUrl(logPath);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[tunnelWatcher:${configKey}] read error:`, msg);
+      void notifyError(`tunnelWatcher.${configKey}.read`, 'log read failed', e);
       return;
     }
     if (!url || url === lastKnownUrl) return;

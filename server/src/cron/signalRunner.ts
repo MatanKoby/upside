@@ -1,4 +1,5 @@
 import { supabase } from '../services/supabase.js';
+import { notifyError } from '../services/notify.js';
 
 const STALE_LOCK_SECONDS = 60;
 const CLEANUP_INTERVAL_MS = 30_000;
@@ -11,7 +12,7 @@ async function cleanupStaleLocks(): Promise<void> {
     .from('analysis_locks')
     .delete()
     .lt('started_at', cutoff);
-  if (error) console.error('[signalRunner] cleanup error:', error.message);
+  if (error) void notifyError('signalRunner.cleanup', error.message);
 }
 
 export function startSignalRunner(): void {

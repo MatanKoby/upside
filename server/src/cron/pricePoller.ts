@@ -27,6 +27,7 @@ import {
   ibBarToOhlc,
 } from '../services/ibMappers.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
+import { notifyError } from '../services/notify.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 
@@ -99,7 +100,7 @@ async function ensureContractCached(conid: number, symbol: string): Promise<Cont
     refreshed_at: contract.refreshedAt,
   };
   const { error: upErr } = await supabase().from('contracts').upsert(row, { onConflict: 'conid' });
-  if (upErr) console.error('[pricePoller] contracts upsert error:', upErr.message);
+  if (upErr) void notifyError('pricePoller.contracts.upsert', upErr.message);
   return row;
 }
 
@@ -252,7 +253,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   const { error } = await supabase()
     .from('positions')
     .upsert(toUpsert, { onConflict: 'user_id,symbol' });
-  if (error) console.error('[pricePoller] upsert error:', error.message);
+  if (error) void notifyError('pricePoller.positions.upsert', error.message);
 
   // Delete rows for symbols no longer held.
   const heldSymbols = new Set(assembled.map((r) => r.symbol));
@@ -305,7 +306,7 @@ async function loop(): Promise<void> {
     try {
       await pollCycle(userId, accountId);
     } catch (e) {
-      console.error('[pricePoller] cycle error:', (e as Error).message);
+      void notifyError('pricePoller.cycle', (e as Error).message ?? 'unknown', e);
     }
 
     await sleep(intervalFor(marketPeriodAt()));
@@ -321,7 +322,7 @@ export function startPricePoller(): void {
     `extended=${POLL_INTERVAL_EXTENDED_MS}ms, closed=${POLL_INTERVAL_CLOSED_MS}ms`,
   );
   void loop().catch((e) => {
-    console.error('[pricePoller] loop crashed:', e);
+    void notifyError('pricePoller.loop.crashed', 'loop terminated unexpectedly', e);
     running = false;
   });
 }

@@ -3,6 +3,7 @@ import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
 import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
 import { getIbContainerState, startIbContainer, stopIbContainer } from '../services/ibContainer.js';
+import { notifyError } from '../services/notify.js';
 import { requireAuth } from '../middleware/auth.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 
@@ -64,7 +65,7 @@ router.post('/google/callback', async (req: Request, res: Response) => {
   if (insertErr) {
     // Don't block the auth decision on logging failure — but make sure it's
     // visible. Silent failures here cost us a debugging round-trip in batch 12.
-    console.error('[auth/google/callback] access_attempts insert failed:', insertErr.message);
+    void notifyError('auth.access_attempts.insert', insertErr.message);
   }
 
   if (!granted) {
@@ -85,7 +86,7 @@ router.post('/ib/connect', requireAuth, async (_req: Request, res: Response) => 
     res.json({ ok: true });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[auth/ib/connect] failed:', msg);
+    void notifyError('auth.ib.connect', msg, e);
     res.status(502).json({ error: msg });
   }
 });
@@ -96,7 +97,7 @@ router.post('/ib/disconnect', requireAuth, async (_req: Request, res: Response) 
     res.json({ ok: true });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[auth/ib/disconnect] failed:', msg);
+    void notifyError('auth.ib.disconnect', msg, e);
     res.status(502).json({ error: msg });
   }
 });
