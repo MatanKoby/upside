@@ -1,14 +1,14 @@
-// pricePoller — the real-time price loop.
+// pricePoller — pulls positions + market data from IB and writes to Supabase.
 //
-// Every 10s during active market sessions: pulls held positions from IB,
-// per-symbol snapshots (with subscribe-then-poll built into ibSnapshot),
-// today's intraday bars (for BE-computed VWAP), maps to our Position shape,
-// computes portfolio-level metrics (weight, contribution), and upserts the
-// positions table only on change.
+// Always polls when IB is connected, regardless of market state — held
+// positions (and IB's last-known snapshot prices) are returned by the API
+// even outside trading hours. The cadence adapts:
+//   regular market hours: every 10s
+//   pre/post-market:      every 60s
+//   closed (weekends, holidays, overnight): every 5 min
 //
 // Stops polling cleanly when:
-//   - market is closed (sleeps 5 min between checks)
-//   - IB session is expired (sleeps 30s between checks)
+//   - IB session is expired or container stopped (sleeps 30s between checks)
 //   - no whitelisted Supabase user has signed in yet (sleeps 60s)
 //   - no IB account discoverable (sleeps 30s)
 
@@ -30,8 +30,11 @@ import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 
-const POLL_INTERVAL_MS = 10_000;
-const MARKET_CLOSED_BACKOFF_MS = 5 * 60_000;
+// Polling cadences, in ms. We always poll at least once when IB is connected;
+// these dictate the gap between successful cycles.
+const POLL_INTERVAL_REGULAR_MS = 10_000;
+const POLL_INTERVAL_EXTENDED_MS = 60_000;       // pre-market / after-hours
+const POLL_INTERVAL_CLOSED_MS  = 5 * 60_000;    // weekends / overnight
 const AUTH_BACKOFF_MS = 30_000;
 const OWNER_BACKOFF_MS = 60_000;
 const ACCOUNT_BACKOFF_MS = 30_000;
@@ -263,14 +266,24 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   }
 }
 
+function intervalFor(period: ReturnType<typeof marketPeriodAt>): number {
+  switch (period) {
+    case 'regular':
+      return POLL_INTERVAL_REGULAR_MS;
+    case 'pre-market':
+    case 'after-hours':
+      return POLL_INTERVAL_EXTENDED_MS;
+    case 'closed':
+    default:
+      return POLL_INTERVAL_CLOSED_MS;
+  }
+}
+
 async function loop(): Promise<void> {
   while (!stopRequested) {
-    const period = marketPeriodAt();
-    if (period === 'closed') {
-      await sleep(MARKET_CLOSED_BACKOFF_MS);
-      continue;
-    }
-
+    // Auth gates the cycle (no point hitting IB without a session). Market
+    // state only controls the post-cycle sleep — held positions and IB's
+    // last-known snapshot prices are returned regardless of trading hours.
     const auth = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
     if (!auth.authenticated || !auth.connected) {
       await sleep(AUTH_BACKOFF_MS);
@@ -295,7 +308,7 @@ async function loop(): Promise<void> {
       console.error('[pricePoller] cycle error:', (e as Error).message);
     }
 
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(intervalFor(marketPeriodAt()));
   }
 }
 
@@ -303,7 +316,10 @@ export function startPricePoller(): void {
   if (running) return;
   running = true;
   stopRequested = false;
-  console.log(`[pricePoller] starting; interval ${POLL_INTERVAL_MS}ms during active market`);
+  console.log(
+    `[pricePoller] starting; intervals: regular=${POLL_INTERVAL_REGULAR_MS}ms, ` +
+    `extended=${POLL_INTERVAL_EXTENDED_MS}ms, closed=${POLL_INTERVAL_CLOSED_MS}ms`,
+  );
   void loop().catch((e) => {
     console.error('[pricePoller] loop crashed:', e);
     running = false;
