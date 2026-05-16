@@ -12,7 +12,14 @@ services:
     # mounted from the host at /run/secrets/ — IBEAM_SECRETS_SOURCE=fs.
     # Pin a version (not :latest) so cloudflared-style auto-rotation can't
     # surprise us with a new image.
+    #
+    # user: root: the IBeam image runs as a non-root user by default, but
+    # the host secret files are 0400 owned by `ubuntu` — that uid doesn't
+    # exist in the container, so IBeam can't read them. Running as root in
+    # the container is safe (container root ≠ host root; sandboxed image)
+    # and keeps host-side perms tight.
     image: voyz/ibeam:0.5.11
+    user: "0:0"
     environment:
       IBEAM_SECRETS_SOURCE: fs
       IBEAM_ACCOUNT: /run/secrets/ib_account
