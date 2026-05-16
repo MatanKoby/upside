@@ -16,6 +16,13 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Batch 13 — Vercel FE deploy + on-demand IBeam
+- Owner: claude (code) + Me! (manual deploy + 2FA approvals)
+- Started: 2026-05-15
+- Finished: 2026-05-16
+- Commit: e84da77 (on-demand IBeam wrap-up); whole arc spans many earlier batch-13 commits documented in the queue.
+- Notes: Vercel FE live at https://upside-client.vercel.app, PWA installable on Android, full live path verified end-to-end (phone → Vercel FE → Supabase app_config → Cloudflare Quick Tunnel → api → IBeam → IBKR). Final IB auth model is on-demand: ib-gateway tagged `profiles: [manual]`, user taps Connect/Disconnect in the FE, api uses mounted Docker socket (dockerode) to start/stop. Cooperates with IBKR Mobile (one-session limit no longer fights us). Five IB-auth approaches explored along the way (documented in queue): programmatic POST → 401; api path-proxy → 404 on absolute paths; second Quick Tunnel → cookie issue; full-time IBeam → battle royale with IBKR Mobile; OAuth 1.0a → parked on `oauth-dev` branch awaiting IBKR approval. 🎯 Data-only live milestone reached (positions empty until Monday market open; pricePoller will populate).
+
 ### Batch 12 — Google OAuth end-to-end
 - Owner: claude
 - Started: 2026-05-15 (today)
