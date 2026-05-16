@@ -568,18 +568,22 @@ Four approaches tried before landing on IBeam. Documented here for institutional
 3. **Second dedicated Quick Tunnel to the gateway** — gave the gateway its own public origin so absolute paths worked. Browser-side login appeared to succeed ("Client login succeeds"), but the gateway's `/v1/api/iserver/auth/status` from inside the compose network still returned 401. Cookie/Host-header round-tripping through Quick Tunnels does not carry the session cleanly.
 4. **IBKR OAuth 1.0a Extended** (cleanest long-term) — server-to-server auth, no gateway container, no credentials on VPS. Implemented on `oauth-dev` branch (commit `4d7a822`). Blocked on IBKR-side activation that retail users must request via email and may wait days-to-weeks for. Parked.
 
-**Landing approach: IBeam** ([voyz/ibeam:0.5.11](https://hub.docker.com/r/voyz/ibeam)). Replaces the bare `ib-gateway` container; runs the Client Portal Gateway inside its own image and automates the browser-based login via a headless browser at `localhost:5000` (where the gateway's auth model works without cookie/host shenanigans). The api code is unchanged — it still talks to `https://ib-gateway:5000/v1/api/…` over the compose network.
+**Landing approach: on-demand IBeam** ([voyz/ibeam:0.5.11](https://hub.docker.com/r/voyz/ibeam)). Replaces the bare `ib-gateway` container, but runs **only when the user explicitly turns it on from the Upside FE** — IBKR's single-session limit means a permanently-running IBeam would constantly fight the user's IBKR Mobile sessions for the same account. The api code is unchanged — it still talks to `https://ib-gateway:5000/v1/api/…` over the compose network when the container is running.
 
 Implementation steps:
 
 1. **Replace `ib-gateway` compose service**: image `voyz/ibeam:0.5.11`, mount credential files from VPS host. IBeam reads them via `IBEAM_SECRETS_SOURCE=fs`.
-2. **Drop `cloudflared-ib` compose service** — no more external exposure of the gateway needed; IBeam handles login internally.
-3. **Simplify `tunnelWatcher.ts`** — back to a single watcher for `api_url` only.
-4. **Drop `CLOUDFLARED_IB_LOG_PATH` env** from api service.
-5. **FE: simplify `IBReconnectBlock`** — replace the iframe (and its `getIbPortalUrl` flow) with a slim "Connecting to Interactive Brokers…" spinner with a help line about approving the 2FA push. The existing `useMarketSession` polling dismisses it once IBeam reports authenticated.
-6. **Drop `getIbPortalUrl` + `ib_portal_url` realtime subscription** from `client/src/services/apiUrl.ts`.
-7. **Manual step**: user creates `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt` on the VPS, mode `0400`. Files mounted into the IBeam container at `/run/secrets/`. Approve the 2FA push from IB Key on phone during IBeam's first login.
-8. **Manual step**: in Supabase SQL Editor, `delete from app_config where key='ib_portal_url';` to clear the now-stale row.
+2. **Mark `ib-gateway` as on-demand**: `profiles: [manual]` so `docker compose up` does **not** auto-start it. `IBEAM_RESTART_FAILED_SESSIONS=False` and `IBEAM_AUTHENTICATION_STRATEGY=A` so even when running, IBeam doesn't fight to re-claim a contested session.
+3. **Drop `cloudflared-ib` compose service** — no more external exposure of the gateway needed; IBeam handles login internally.
+4. **Pin the compose network to a `10.x` subnet** so the gateway's default `ips.allow` (which includes `10.*`) accepts requests from the api container. Without this, the gateway returns "404 Access Denied" to every internal call.
+5. **Mount Docker socket on api**: `/var/run/docker.sock` read-write into the api container so the api can start/stop the `ib-gateway` container via the host's Docker daemon. Accepted security trade-off for single-user MVP.
+6. **BE: dockerode integration**: install `dockerode`; add `POST /api/auth/ib/connect` and `POST /api/auth/ib/disconnect` routes that start/stop the `ib-gateway` container. Update `GET /api/auth/status` to recognize a new `stopped` state (container not running) so the FE can render the Connect button instead of treating it as `expired`.
+7. **Simplify `tunnelWatcher.ts`** — back to a single watcher for `api_url` only.
+8. **Drop `CLOUDFLARED_IB_LOG_PATH` env** from api service.
+9. **FE: cached-first model**: drop the full-screen `IBReconnectBlock` takeover entirely. Always render the portfolio screen. Header gets a small IB status indicator that shows state (`stopped`/`connecting`/`connected`/`disconnected`) and is tappable for connect/disconnect. While connecting, show "Approve 2FA push on IB Key app" and poll `/api/auth/status` every ~3s until state stabilizes.
+10. **Drop `getIbPortalUrl` + `ib_portal_url` realtime subscription** from `client/src/services/apiUrl.ts`.
+11. **Manual step**: user creates `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt` on the VPS, mode `0400`. Files mounted into the IBeam container at `/run/secrets/`.
+12. **Manual step**: in Supabase SQL Editor, `delete from app_config where key='ib_portal_url';` to clear the now-stale row.
 
 **Files this batch creates/edits:**
 - `client/package.json` (add `packageManager` + `engines.node`)
@@ -633,7 +637,18 @@ Kept as fallback (no change): `infra/clientportal.gw/Dockerfile` + `README.md` �
 6. Disable button when an `analysis_locks` row exists for the (user, symbol) — subscribe to that table via Realtime.
 7. Render new signal in the Signal Section when it lands via Realtime.
 
-**Files this batch creates/edits:** `server/src/services/llm.ts`, `server/src/services/signalEngine.ts`, `server/src/services/finnhub.ts` (real implementations replacing stubs), `server/src/routes/signals.ts`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`.
+### Signal accuracy tracking (added per Batch 13 user request)
+
+The schema in `001_initial.sql` already has the accuracy-tracking columns on `signals` (`actual_max_since_analysis`, `actual_min_since_analysis`, `entered_range_at`, `exited_range_at`). Wire them up so we can measure short- and long-term signal accuracy from day 1, not retrofit later.
+
+8. **Continuous live-price updates** — extend `pricePoller` (or add a parallel cron) that, for every signal where `superseded_by_analysis_id IS NULL`, updates `actual_max_since_analysis` / `actual_min_since_analysis` from the latest market price. Also stamp `entered_range_at` the first time live price crosses into `[price_range_low, price_range_high]`, and `exited_range_at` when it crosses back out.
+9. **User-acted-on-signal flag** — new column `acted_on_at timestamptz` on `signals`. When the user views a signal in the FE, show "I acted on this" button → POST sets the flag. Used downstream to compare LLM's predicted price vs. user's actual entry/exit.
+10. **Aggregate accuracy metric endpoint** — `GET /api/signals/accuracy` returning rolling stats: hit-rate (% of sell signals where actual_max ≥ optimal_price within N days), median-distance-from-target, time-to-hit. Used by Batch 15's Alerts feed / future Performance screen.
+11. **Surface aggregate accuracy in the FE** — at minimum on the Alerts feed (Batch 15) and a placeholder on the Signal Section ("This signal type's recent hit-rate: 65%").
+
+These together let us measure signal quality empirically — both retrospectively (did past signals work?) and prospectively (does this new signal pattern look promising?). Without them we'd be flying blind on whether the LLM is actually adding value.
+
+**Files this batch creates/edits:** `server/src/services/llm.ts`, `server/src/services/signalEngine.ts`, `server/src/services/finnhub.ts` (real implementations replacing stubs), `server/src/routes/signals.ts`, `server/src/cron/pricePoller.ts` (or a sibling cron) to update accuracy fields, `supabase/migrations/00X_acted_on_at.sql` for the new column, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`.
 
 **Manual prerequisites (you):**
 - Get a Gemini API key at aistudio.google.com.
