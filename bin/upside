@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Upside compose-stack shortcuts. Runs on any Linux host with Docker —
+# no Node / npm / pnpm required. From the repo root:
+#
+#   ./bin/upside up                 # build + start, create ib-gateway
+#   ./bin/upside down               # stop everything
+#   ./bin/upside ps                 # list containers incl. stopped
+#   ./bin/upside logs [service]     # follow all, or one service
+#   ./bin/upside restart api        # force-recreate a single service
+#   ./bin/upside reset              # down --remove-orphans, then up
+#
+# Mirrors the docker:* scripts in the root package.json (which require
+# Node and only make sense on the laptop). Keep both in sync.
+
+set -euo pipefail
+
+cmd="${1:-}"
+arg="${2:-}"
+
+case "$cmd" in
+  up)
+    docker compose up -d --build
+    docker compose --profile manual create ib-gateway
+    ;;
+  down)
+    docker compose down
+    ;;
+  ps)
+    docker compose ps -a
+    ;;
+  logs)
+    if [[ -n "$arg" ]]; then
+      docker compose logs -f --tail 100 "$arg"
+    else
+      docker compose logs -f --tail 100
+    fi
+    ;;
+  restart)
+    if [[ -z "$arg" ]]; then
+      echo "Usage: $0 restart <service>"
+      exit 2
+    fi
+    docker compose up -d --force-recreate "$arg"
+    ;;
+  reset)
+    docker compose down --remove-orphans
+    docker compose up -d --build
+    docker compose --profile manual create ib-gateway
+    ;;
+  ""|-h|--help)
+    cat <<EOF
+Usage: $0 <command> [arg]
+
+Commands:
+  up                    docker compose up -d --build, then create ib-gateway
+  down                  stop everything
+  ps                    list containers (incl. stopped)
+  logs [service]        follow logs (all services or one)
+  restart <service>     force-recreate one service
+  reset                 down --remove-orphans, then up
+EOF
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    echo "Run '$0 --help' for usage." >&2
+    exit 2
+    ;;
+esac
