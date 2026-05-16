@@ -11,6 +11,16 @@
     "dev:server": "pnpm --filter server dev",
     "build": "pnpm -r build",
     "preview": "pnpm --filter client preview",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+
+    "docker:up": "docker compose up -d --build && docker compose --profile manual create ib-gateway",
+    "docker:down": "docker compose down",
+    "docker:ps": "docker compose ps -a",
+    "docker:logs": "docker compose logs -f --tail 100",
+    "docker:logs:api": "docker compose logs -f --tail 100 api",
+    "docker:logs:ib": "docker compose logs -f --tail 100 ib-gateway",
+    "docker:logs:cf": "docker compose logs -f --tail 100 cloudflared",
+    "docker:restart:api": "docker compose up -d --force-recreate api",
+    "docker:reset": "docker compose down --remove-orphans && docker compose up -d --build && docker compose --profile manual create ib-gateway"
   }
 }

@@ -584,7 +584,7 @@ Implementation steps:
 10. **Drop `getIbPortalUrl` + `ib_portal_url` realtime subscription** from `client/src/services/apiUrl.ts`.
 11. **Manual step**: user creates `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt` on the VPS, mode `0400`. Files mounted into the IBeam container at `/run/secrets/`.
 12. **Manual step**: in Supabase SQL Editor, `delete from app_config where key='ib_portal_url';` to clear the now-stale row.
-13. **Manual step (one-time per deploy)**: after `docker compose up -d --build`, run `docker compose --profile manual create ib-gateway`. This creates the container in stopped state so the api's dockerode `start` call has something to act on. Without this, the first Connect tap returns 502 "no such container". Follow-up improvement: have the api auto-create on first Connect if missing (small change, not blocking).
+13. **Deploy script**: root `package.json` exposes `pnpm docker:up` which does `docker compose up -d --build && docker compose --profile manual create ib-gateway` — both idempotent, so safe to re-run on every deploy. The `create` half is what populates `upside-ib-gateway-1` in stopped state so the api's dockerode `start` call has something to act on. Without it the first Connect tap returns 502 "no such container". Other handy scripts: `docker:down`, `docker:ps`, `docker:logs:api|ib|cf`, `docker:restart:api`, `docker:reset` (down + remove-orphans + up).
 
 **Files this batch creates/edits:**
 - `client/package.json` (add `packageManager` + `engines.node`)
