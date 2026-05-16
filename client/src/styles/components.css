@@ -702,46 +702,38 @@
   to { transform: rotate(360deg); }
 }
 
-/* ========== IB reconnect block (iframe-based) ========== */
-.ib-reconnect-block {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp-10);
-  padding: var(--sp-16);
-  min-height: 100vh;
-}
-.ib-reconnect-block .ph-logo {
-  margin: 0;
-  text-align: center;
-}
-.ib-reconnect-message {
-  margin: 0;
-  font-size: var(--fs-14);
-  color: var(--text-secondary);
-  text-align: center;
-}
-.ib-reconnect-iframe {
-  width: 100%;
-  flex: 1;
-  min-height: 60vh;
+/* ========== IB status indicator (header button) ========== */
+.ib-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: var(--bg-elevated);
-}
-.ib-reconnect-help {
-  margin: 0;
-  font-size: var(--fs-11);
-  color: var(--text-tertiary);
-  text-align: center;
-}
-.ib-reconnect-help a {
   color: var(--text-secondary);
-  text-decoration: underline;
+  font-size: var(--fs-11);
+  cursor: pointer;
 }
-.ib-reconnect-error {
-  margin: 0;
-  color: rgb(var(--loss-rgb));
-  font-size: var(--fs-12);
-  text-align: center;
+.ib-status:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.ib-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.ib-status-connected .ib-status-dot   { background: rgb(var(--gain-rgb)); }
+.ib-status-connecting .ib-status-dot  { background: rgb(var(--neutral-rgb)); animation: ib-status-pulse 1.2s ease-in-out infinite; }
+.ib-status-disconnected .ib-status-dot{ background: rgb(var(--neutral-rgb)); }
+.ib-status-expired .ib-status-dot     { background: rgb(var(--loss-rgb)); }
+.ib-status-stopped .ib-status-dot     { background: var(--text-tertiary); }
+.ib-status-label {
+  white-space: nowrap;
+}
+@keyframes ib-status-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
 }

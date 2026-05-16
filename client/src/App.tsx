@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { AuthGuard } from './components/common/AuthGuard';
 import { BottomNav } from './components/common/BottomNav';
-import { IBReconnectBlock } from './components/common/IBReconnectBlock';
 import { useMarketSession } from './hooks/useMarketSession';
 import { subscribeToApiUrl } from './services/apiUrl';
 
@@ -21,21 +20,11 @@ export default function App() {
 }
 
 function AuthedApp() {
+  // Cached-first model: the portfolio renders regardless of IB session state.
+  // The PortfolioHome header includes an IB status indicator (see
+  // components/common/IbStatusIndicator) that lets the user connect/disconnect
+  // on demand. No more full-screen "session expired" interruption.
   const session = useMarketSession();
-
-  // IB session expired → full-screen reconnect prompt. Cached data is not
-  // shown beneath the block — IB session must be restored before portfolio
-  // is visible.
-  if (!session.isLoading && session.session === 'expired') {
-    return (
-      <div className="app-shell">
-        <main className="app-main">
-          <IBReconnectBlock onReconnected={() => window.location.reload()} />
-        </main>
-      </div>
-    );
-  }
-
   return (
     <div className="app-shell">
       <main className="app-main">

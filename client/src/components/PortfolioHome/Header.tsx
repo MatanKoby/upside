@@ -1,21 +1,25 @@
 import { Link } from 'react-router-dom';
 import { IconBell, IconSettings } from '@tabler/icons-react';
 import { MarketPeriodBadge } from './MarketPeriodBadge';
+import { IbStatusIndicator } from '../common/IbStatusIndicator';
 import type { MarketPeriod } from '../../types';
 import type { SessionStatus } from '../../hooks/useMarketSession';
 
 export function Header({
   marketPeriod,
   sessionStatus,
+  onIbChange,
 }: {
   marketPeriod: MarketPeriod;
   sessionStatus: SessionStatus;
+  /** Called after a successful Connect/Disconnect tap. */
+  onIbChange?: () => void;
 }) {
   return (
     <header className="ph-header">
       <h1 className="ph-logo">Upside</h1>
       <div className="ph-header-right">
-        <ConnectionDot status={sessionStatus} />
+        <IbStatusIndicator status={sessionStatus} onChange={onIbChange} />
         <MarketPeriodBadge period={marketPeriod} />
         <Link to="/alerts" className="icon-btn" aria-label="Alerts">
           <IconBell size={20} stroke={1.5} />
@@ -25,18 +29,5 @@ export function Header({
         </Link>
       </div>
     </header>
-  );
-}
-
-function ConnectionDot({ status }: { status: SessionStatus }) {
-  const label =
-    status === 'connected' ? '' :
-    status === 'disconnected' ? 'Reconnecting…' :
-    'Session expired';
-  return (
-    <span className={`connection-dot connection-dot-${status}`} aria-label={`IB session ${status}`}>
-      <span className="connection-dot-circle" />
-      {label && <span className="connection-dot-label">{label}</span>}
-    </span>
   );
 }

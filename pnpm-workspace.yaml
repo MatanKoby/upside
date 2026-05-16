@@ -2,4 +2,10 @@ packages:
   - "client"
   - "server"
 allowBuilds:
+  # We use dockerode over the local Docker socket only (no SSH connections,
+  # no gRPC), so its optional native deps are not needed. Setting these to
+  # false suppresses the per-install "approve build" prompts.
+  cpu-features: false
   esbuild: true
+  protobufjs: false
+  ssh2: false

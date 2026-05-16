@@ -26,6 +26,7 @@ export default function PortfolioHome() {
       <Header
         marketPeriod={session.marketPeriod}
         sessionStatus={session.session}
+        onIbChange={session.refresh}
       />
       <SummaryStrip
         portfolioValue={portfolioValue}

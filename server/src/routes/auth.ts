@@ -2,30 +2,43 @@ import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
 import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
+import { getIbContainerState, startIbContainer, stopIbContainer } from '../services/ibContainer.js';
 import { requireAuth } from '../middleware/auth.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 
 const router = Router();
 
 // GET /api/auth/status — combined IB session + market period.
-// Polled by the FE every 30s via useMarketSession hook. The gateway holds the
-// IB session itself (Batch 13 redesign: browser-mediated login via /ib-portal
-// proxy, no Redis-stored token); we just ask the gateway whether it's
-// authenticated.
+// Polled by the FE via useMarketSession.
+//
+// Session states:
+//   stopped      — ib-gateway container isn't running. User taps Connect to start.
+//   connecting   — container is running but the gateway hasn't reported
+//                  authenticated=true yet (login flow in progress / waiting 2FA).
+//   connected    — gateway authenticated AND connected to IBKR's servers.
+//   disconnected — gateway authenticated but currently not connected (transient).
+//   expired      — container running but no session (rare; usually kicked by IBKR).
 router.get('/status', requireAuth, async (_req: Request, res: Response) => {
+  const containerState = await getIbContainerState().catch(() => 'missing' as const);
+  if (containerState !== 'running') {
+    res.json({ session: 'stopped', marketPeriod: marketPeriodAt() });
+    return;
+  }
   const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
-  let session: 'connected' | 'disconnected' | 'expired';
+  let session: 'connecting' | 'connected' | 'disconnected' | 'expired';
   if (status.authenticated && status.connected) {
     session = 'connected';
   } else if (status.authenticated) {
     session = 'disconnected';
   } else {
-    session = 'expired';
+    // Container is running but the gateway isn't authenticated yet — most
+    // likely we're mid-login (IBeam selenium → 2FA push → user approval).
+    // After ~2 minutes of being in this state with no auth, IBKR likely
+    // expired the session — but for the FE's polling cadence (~3s during
+    // connect, 30s steady state) "connecting" is the useful answer.
+    session = 'connecting';
   }
-  res.json({
-    session,
-    marketPeriod: marketPeriodAt(),
-  });
+  res.json({ session, marketPeriod: marketPeriodAt() });
 });
 
 router.post('/google/callback', async (req: Request, res: Response) => {
@@ -61,10 +74,32 @@ router.post('/google/callback', async (req: Request, res: Response) => {
   res.json({ ok: true, user: { id: data.user.id, email } });
 });
 
-// IB session lives in the gateway itself, populated by the user logging in
-// through /ib-portal/* (browser-mediated). We expose status and tickle/logout
-// passthroughs; there is no /ib/login route — that route's implementation
-// (programmatic credential POST) returned 401 from IB and was removed.
+// On-demand IBeam control routes. The container is profile-gated in
+// docker-compose.yml so `docker compose up` doesn't auto-start it. Users
+// toggle it from the FE; api uses the mounted Docker socket to start/stop.
+// See UPSIDE_MVP_SPEC.md → "IB Authentication Flow".
+
+router.post('/ib/connect', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    await startIbContainer();
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[auth/ib/connect] failed:', msg);
+    res.status(502).json({ error: msg });
+  }
+});
+
+router.post('/ib/disconnect', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    await stopIbContainer();
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[auth/ib/disconnect] failed:', msg);
+    res.status(502).json({ error: msg });
+  }
+});
 
 router.post('/ib/tickle', requireAuth, async (_req: Request, res: Response) => {
   const ok = await ibTickle();

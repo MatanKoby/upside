@@ -20,24 +20,34 @@ services:
     # and keeps host-side perms tight.
     image: voyz/ibeam:0.5.11
     user: "0:0"
+    # `profiles: [manual]` keeps this service off by default — `docker
+    # compose up -d` will NOT start it. The user explicitly turns it on
+    # from the Upside FE (which calls /api/auth/ib/connect → the api
+    # starts this container via the mounted Docker socket). Reason: IBKR
+    # allows only one active session per account; a permanently-running
+    # IBeam fights the user's IBKR Mobile sessions for that single slot.
+    profiles: [manual]
     environment:
       IBEAM_SECRETS_SOURCE: fs
       IBEAM_ACCOUNT: /run/secrets/ib_account
       IBEAM_PASSWORD: /run/secrets/ib_password
-      # Default page-load timeout is 15s — far too short for the user to
-      # approve the 2FA push on their IB Key app (notification → unlock →
-      # open app → biometric → approve takes 20-60s realistically). 90s
-      # gives comfortable headroom for the first attempt to succeed without
-      # spamming retries.
+      # Allow time for the 2FA push to arrive on the user's phone and be
+      # approved (notification → unlock → IB Key biometric → approve).
       IBEAM_PAGE_LOAD_TIMEOUT: "90"
       IBEAM_OAUTH_TIMEOUT: "90"
-      # Slow the retry cadence too so failed attempts don't fire a new 2FA
-      # push every 60s.
+      # When (not if) the user opens IBKR Mobile and kicks us out, do NOT
+      # try to re-login automatically. The user will reconnect on demand
+      # from the Upside FE.
+      IBEAM_RESTART_FAILED_SESSIONS: "False"
+      IBEAM_AUTHENTICATION_STRATEGY: "A"
+      # Slow the maintenance loop so it doesn't churn while we're running.
       IBEAM_MAINTENANCE_INTERVAL: "300"
     volumes:
       - ./secrets/ib_account.txt:/run/secrets/ib_account:ro
       - ./secrets/ib_password.txt:/run/secrets/ib_password:ro
-    restart: unless-stopped
+    # No `restart: unless-stopped` — when the user stops this container
+    # from Upside, it should stay stopped.
+    restart: "no"
     networks:
       - upside
 
@@ -59,8 +69,12 @@ services:
       IB_GATEWAY_URL: https://ib-gateway:5000
       REDIS_URL: redis://redis:6379
       CLOUDFLARED_LOG_PATH: /var/log/cloudflared/api.log
+      # Container name the api will start/stop in response to FE Connect/
+      # Disconnect taps. Compose names = "<project>-<service>-1" by default.
+      IB_GATEWAY_CONTAINER: upside-ib-gateway-1
+    # ib-gateway is on the `manual` profile — depends_on against a
+    # profile-gated service is allowed; compose just won't auto-start it.
     depends_on:
-      - ib-gateway
       - redis
     ports:
       - "127.0.0.1:3001:3001"
@@ -69,6 +83,12 @@ services:
       # Read-only share of cloudflared's log so the in-process tunnel watcher
       # can detect Quick Tunnel URL changes. See server/src/services/tunnelWatcher.ts.
       - cloudflared-logs:/var/log/cloudflared:ro
+      # Docker socket: lets the api start/stop the ib-gateway container on
+      # demand. Security: this is effectively root access to the host's
+      # Docker. Acceptable for a single-user, self-hosted MVP. If the api
+      # is ever exposed multi-tenant, replace this with a privileged
+      # control sidecar that exposes only start/stop of whitelisted names.
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - upside
 
