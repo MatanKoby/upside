@@ -31,16 +31,14 @@ export function IbStatusIndicator({ status, onChange }: Props) {
     setError(null);
     setBusy(true);
     try {
-      // 'connected'  → stop the container (disconnect).
-      // 'connecting' → restart it (missed 2FA → fresh push). Stop+start
-      //                in one call so the user doesn't need two taps.
+      // 'connected' or 'connecting' → stop the container. In connecting,
+      //   this cancels the in-flight login (e.g., missed 2FA) — explicit
+      //   stop, no auto-retry. User decides whether to tap Connect again.
       // 'stopped' / 'expired' → start it (connect).
       const path =
-        status === 'connected'
+        status === 'connected' || status === 'connecting'
           ? '/api/auth/ib/disconnect'
-          : status === 'connecting'
-            ? '/api/auth/ib/restart'
-            : '/api/auth/ib/connect';
+          : '/api/auth/ib/connect';
       const res = await apiFetch(path, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -78,7 +76,7 @@ function labelFor(status: SessionStatus, busy: boolean): string {
     case 'connected':
       return 'IB live';
     case 'connecting':
-      return 'Awaiting 2FA · tap to retry';
+      return 'Awaiting 2FA · tap to cancel';
     case 'disconnected':
       return 'Reconnecting…';
     case 'expired':
