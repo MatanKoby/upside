@@ -45,10 +45,11 @@ export const env = {
 
   // Optional Discord incoming-webhook URLs — when set, key error sites in
   // the api notify the channel (rate-limited per key). Two channels:
-  //   DISCORD_WEBHOOK_URL          — routine errors (recoverable; flapping fine)
-  //   DISCORD_CRITICAL_WEBHOOK_URL — process-level / structurally-broken
-  //                                  (falls back to DISCORD_WEBHOOK_URL if unset)
+  //   DISCORD_ERRORS_WEBHOOK_URL          — routine errors (recoverable)
+  //   DISCORD_ERRORS_CRITICAL_WEBHOOK_URL — process-level / structurally-broken
+  //                                         (falls back to DISCORD_ERRORS_WEBHOOK_URL
+  //                                          if unset)
   // See server/src/services/notify.ts.
-  discordWebhookUrl: optional('DISCORD_WEBHOOK_URL'),
-  discordCriticalWebhookUrl: optional('DISCORD_CRITICAL_WEBHOOK_URL'),
+  discordWebhookUrl: optional('DISCORD_ERRORS_WEBHOOK_URL'),
+  discordCriticalWebhookUrl: optional('DISCORD_ERRORS_CRITICAL_WEBHOOK_URL'),
 };
