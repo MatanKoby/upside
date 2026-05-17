@@ -1,33 +1,89 @@
-import axios from 'axios';
+// Finnhub HTTP wrappers. Every outbound call routes through `finnhubQueue`
+// for rate limiting and per-(category, key) min-interval enforcement, and
+// every call is instrumented to `external_api_metrics` with `provider: 'finnhub'`.
+//
+// Per-category min-intervals default to 0s in Batch 13.7 (the queue acts as
+// a pure rate limiter). Batch 13.9 will tune them based on real usage.
+
+import axios, { type AxiosInstance } from 'axios';
 import { env } from '../env.js';
+import { supabase } from './supabase.js';
+import { finnhubQueue } from './finnhubQueue.js';
 
 const BASE = 'https://finnhub.io/api/v1';
 
-function client() {
-  return axios.create({
-    baseURL: BASE,
-    params: { token: env.finnhubApiKey },
-    timeout: 10_000,
-    validateStatus: () => true,
+let _client: AxiosInstance | null = null;
+
+function client(): AxiosInstance {
+  if (!_client) {
+    _client = axios.create({
+      baseURL: BASE,
+      params: { token: env.finnhubApiKey },
+      timeout: 10_000,
+      validateStatus: () => true,
+    });
+  }
+  return _client;
+}
+
+// Records the call to external_api_metrics. Fire-and-forget — the audit row
+// shouldn't fail the caller.
+function recordMetric(
+  category: string,
+  durationMs: number,
+  status: number,
+  succeeded: boolean,
+): void {
+  void supabase()
+    .from('external_api_metrics')
+    .insert({
+      provider: 'finnhub',
+      endpoint: `finnhub:${category}`,
+      conid: null,
+      duration_ms: durationMs,
+      retries: 0,
+      status,
+      succeeded,
+    })
+    .then(
+      () => undefined,
+      (err) => console.error('[external_api_metrics insert]', err?.message ?? err),
+    );
+}
+
+// Wraps a single Finnhub call with the queue and audit insert.
+async function call<T>(
+  category: string,
+  key: string,
+  path: string,
+  params: Record<string, string | number | undefined>,
+): Promise<{ status: number; data: T | null }> {
+  return finnhubQueue.request(category, key, async () => {
+    const start = performance.now();
+    const res = await client().get<T>(path, { params });
+    const durationMs = Math.round(performance.now() - start);
+    const succeeded = res.status >= 200 && res.status < 300;
+    recordMetric(category, durationMs, res.status, succeeded);
+    return { status: res.status, data: succeeded ? res.data : null };
   });
 }
 
 export async function companyNews(symbol: string, from: string, to: string): Promise<unknown[]> {
-  const res = await client().get('/company-news', { params: { symbol, from, to } });
-  return Array.isArray(res.data) ? res.data : [];
+  const { data } = await call<unknown[]>('news', symbol, '/company-news', { symbol, from, to });
+  return Array.isArray(data) ? data : [];
 }
 
 export async function newsSentiment(symbol: string): Promise<unknown> {
-  const res = await client().get('/news-sentiment', { params: { symbol } });
-  return res.data ?? null;
+  const { data } = await call('news', symbol, '/news-sentiment', { symbol });
+  return data;
 }
 
 export async function earningsCalendar(symbol: string): Promise<unknown> {
-  const res = await client().get('/calendar/earnings', { params: { symbol } });
-  return res.data ?? null;
+  const { data } = await call('earnings', symbol, '/calendar/earnings', { symbol });
+  return data;
 }
 
 export async function insiderTransactions(symbol: string): Promise<unknown> {
-  const res = await client().get('/stock/insider-transactions', { params: { symbol } });
-  return res.data ?? null;
+  const { data } = await call('insider', symbol, '/stock/insider-transactions', { symbol });
+  return data;
 }

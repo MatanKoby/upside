@@ -45,8 +45,9 @@ interface InstrumentOpts {
   conid?: number | null;
 }
 
-// Wraps an IB call to record duration / retries / status into ib_api_metrics.
-// Fire-and-forget on the metric insert so we don't block the hot path.
+// Wraps an IB call to record duration / retries / status into
+// external_api_metrics (provider: 'ib'). Fire-and-forget on the metric
+// insert so we don't block the hot path.
 async function instrumented<T>(
   opts: InstrumentOpts,
   fn: () => Promise<{ status: number; data: T }>,
@@ -68,8 +69,9 @@ async function instrumented<T>(
   } finally {
     const durationMs = Math.round(performance.now() - start);
     void supabase()
-      .from('ib_api_metrics')
+      .from('external_api_metrics')
       .insert({
+        provider: 'ib',
         endpoint: opts.endpoint,
         conid: opts.conid ?? null,
         duration_ms: durationMs,
@@ -77,7 +79,7 @@ async function instrumented<T>(
         status: lastStatus,
         succeeded,
       })
-      .then(() => undefined, (err) => console.error('[ib_metrics insert]', err?.message ?? err));
+      .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
   }
 }
 
@@ -109,8 +111,9 @@ async function instrumentedWithRetry<T>(
   } finally {
     const durationMs = Math.round(performance.now() - start);
     void supabase()
-      .from('ib_api_metrics')
+      .from('external_api_metrics')
       .insert({
+        provider: 'ib',
         endpoint: opts.endpoint,
         conid: opts.conid ?? null,
         duration_ms: durationMs,
@@ -118,7 +121,7 @@ async function instrumentedWithRetry<T>(
         status: lastStatus,
         succeeded,
       })
-      .then(() => undefined, (err) => console.error('[ib_metrics insert]', err?.message ?? err));
+      .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
   }
 }
 

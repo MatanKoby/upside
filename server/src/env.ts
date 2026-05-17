@@ -34,6 +34,9 @@ export const env = {
   openaiApiKey: optional('OPENAI_API_KEY'),
 
   finnhubApiKey: optional('FINNHUB_API_KEY'),
+  // Global token-bucket cap for Finnhub calls. Finnhub free tier is 60/min;
+  // we leave a 10-call buffer. See server/src/services/finnhubQueue.ts.
+  finnhubRateLimitPerMin: Number(optional('FINNHUB_RATE_LIMIT_PER_MIN', '50')),
 
   ibGatewayUrl: optional('IB_GATEWAY_URL', 'http://ib-gateway:5000'),
   redisUrl: optional('REDIS_URL', 'redis://redis:6379'),
