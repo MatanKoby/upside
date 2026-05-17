@@ -10,6 +10,7 @@ import debugRoutes from './routes/debug.js';
 import { startSignalRunner } from './cron/signalRunner.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startPricePoller } from './cron/pricePoller.js';
+import { startMetricsRetention } from './cron/metricsRetention.js';
 import { startTunnelWatcher } from './services/tunnelWatcher.js';
 import { notifyError, notifyCritical } from './services/notify.js';
 
@@ -47,4 +48,5 @@ app.listen(env.port, () => {
   startKeepalive();
   startPricePoller();
   startTunnelWatcher();
+  startMetricsRetention();
 });
