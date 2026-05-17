@@ -8,15 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 13.7 — Finnhub rate-limited request queue
-- Owner: claude
-- Started: 2026-05-17
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 13.7 — Finnhub rate-limited request queue + instrumentation audit
+- Owner: claude
+- Started: 2026-05-17
+- Finished: 2026-05-17
+- Commit: e468cc0 (instrumentation cleanup); arc: 9dc5fd8 (queue + migration) → 1e2e313 (retention cron) → e468cc0 (drop low-value endpoints)
+- Notes: finnhubQueue.ts (token bucket + per-(category,key) min-interval, no stale-cache returns). Migration 005 renames ib_api_metrics → external_api_metrics + adds provider column. All Finnhub HTTP calls in finnhub.ts route through the queue and write provider='finnhub' audit rows. 30-day retention cron landed mid-batch when user surfaced 11K rows after 2 days. Audit of the metrics table found no code reading it; reduced instrumentation to the endpoints with concrete tuning value (positions, snapshot, history, debug-passthrough, finnhub:*) and dropped 5 low-value endpoints (auth/status, tickle, logout, contract/info, secdef/search). Estimated ~70% row-volume reduction going forward.
 
 ### Batch 13.2 — Generic IB passthrough debug endpoint
 - Owner: claude
