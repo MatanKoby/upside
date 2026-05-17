@@ -135,43 +135,32 @@ async function instrumentedWithRetry<T>(
 // below let our BE talk to that session (tickle to keep alive, status to
 // query, logout to terminate).
 // ---------------------------------------------------------------------------
+// Not instrumented (Batch 13.7 cleanup): tickle is hammered every 30s with
+// near-zero info value per row, /healthz already surfaces auth/status, and
+// logout is rare + manual. Reliability problems with any of these surface
+// via /healthz and the Discord error notifier — no concrete tuning lever
+// reads these rows.
 export async function ibTickle(): Promise<boolean> {
   await rateLimit();
-  const { status } = await instrumented(
-    { endpoint: '/v1/api/tickle' },
-    async () => {
-      const res = await client().post('/v1/api/tickle');
-      return { status: res.status, data: res.data };
-    },
-  );
-  return status >= 200 && status < 300;
+  const res = await client().post('/v1/api/tickle');
+  return res.status >= 200 && res.status < 300;
 }
 
 export async function ibStatus(): Promise<{ authenticated: boolean; connected: boolean }> {
   await rateLimit();
-  const { data } = await instrumented(
-    { endpoint: '/v1/api/iserver/auth/status' },
-    async () => {
-      const res = await client().get<{ authenticated?: boolean; connected?: boolean }>('/v1/api/iserver/auth/status');
-      return { status: res.status, data: res.data };
-    },
+  const res = await client().get<{ authenticated?: boolean; connected?: boolean }>(
+    '/v1/api/iserver/auth/status',
   );
   return {
-    authenticated: !!data?.authenticated,
-    connected: !!data?.connected,
+    authenticated: !!res.data?.authenticated,
+    connected: !!res.data?.connected,
   };
 }
 
 export async function ibLogout(): Promise<boolean> {
   await rateLimit();
-  const { status } = await instrumented(
-    { endpoint: '/v1/api/logout' },
-    async () => {
-      const res = await client().post('/v1/api/logout');
-      return { status: res.status, data: res.data };
-    },
-  );
-  return status >= 200 && status < 300;
+  const res = await client().post('/v1/api/logout');
+  return res.status >= 200 && res.status < 300;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,30 +258,21 @@ export async function ibHistory(conid: number, period: string, bar: string): Pro
 // ---------------------------------------------------------------------------
 // Contract metadata + symbol resolution.
 // ---------------------------------------------------------------------------
+// Not instrumented (Batch 13.7 cleanup): contract info is lazy + weekly
+// refresh, secdef search is rare. Whatever cache-tuning question we'd ask
+// can be answered by querying the contracts table directly.
 export async function ibContractInfo(conid: number): Promise<RawIbContractInfo | null> {
   await rateLimit();
-  const { data, status } = await instrumented(
-    { endpoint: '/v1/api/iserver/contract/<conid>/info', conid },
-    async () => {
-      const res = await client().get<RawIbContractInfo>(`/v1/api/iserver/contract/${conid}/info`);
-      return { status: res.status, data: res.data };
-    },
-  );
-  return status >= 200 && status < 300 ? data : null;
+  const res = await client().get<RawIbContractInfo>(`/v1/api/iserver/contract/${conid}/info`);
+  return res.status >= 200 && res.status < 300 ? res.data : null;
 }
 
 export async function ibSecdefSearch(symbol: string): Promise<RawIbSecdefResult[]> {
   await rateLimit();
-  const { data } = await instrumented(
-    { endpoint: '/v1/api/iserver/secdef/search' },
-    async () => {
-      const res = await client().get<RawIbSecdefResult[]>('/v1/api/iserver/secdef/search', {
-        params: { symbol },
-      });
-      return { status: res.status, data: res.data };
-    },
-  );
-  return Array.isArray(data) ? data : [];
+  const res = await client().get<RawIbSecdefResult[]>('/v1/api/iserver/secdef/search', {
+    params: { symbol },
+  });
+  return Array.isArray(res.data) ? res.data : [];
 }
 
 // ---------------------------------------------------------------------------
