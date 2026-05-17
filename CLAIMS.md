@@ -8,15 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 13.8 — Multi-source price polling (IB primary, Finnhub fallback)
-- Owner: claude
-- Started: 2026-05-17
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 13.8 — Multi-source price polling (IB primary, Finnhub fallback)
+- Owner: claude
+- Started: 2026-05-17
+- Finished: 2026-05-17
+- Commit: 9577306
+- Notes: pricePoller.ts renamed → ibPricePoller.ts; new finnhubPricePoller.ts runs always-on at 60s cadence; both write to the same `positions` rows with `price_source` ('ib'|'finnhub') tracking the active provider. Migration 006 adds price_source + last_price_update_at + check constraint + lookup index. Finnhub poller skips positions whose IB-sourced update is fresher than 90s; on takeover updates only price-derived fields (current_price, market_value, unrealized_pnl, today_change/_pct) plus a recompute of portfolio_weight + portfolio_contribution across the user's full set. IB-authoritative fields (shares, avg_cost, vwap, daily_return, trading_days_held, industry) stay untouched by the fallback. Round-trip verified: IB→Finnhub takeover after ~120s of IB disconnect; IB regains on next IB poll. Small price discrepancies between providers (1c-50c on BBAI/OKLO weekend test) are normal multi-source aggregation drift, not a bug. Known follow-up: on Connect, ibPricePoller waits up to one full cadence (5min when markets closed) before its first cycle — could trigger an immediate poll on auth-transition for snappier reconnect UX.
 
 ### Batch 13.7 — Finnhub rate-limited request queue + instrumentation audit
 - Owner: claude
