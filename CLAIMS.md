@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 13.1 — Restore navigation + deeper /healthz
+- Owner: claude
+- Started: 2026-05-17
 
 ## Known issues (deferred fixes)
 
