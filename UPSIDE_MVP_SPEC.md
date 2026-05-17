@@ -537,14 +537,25 @@ This is "LLM as triage assistant," not "LLM as autonomous scanner." It scales th
 
 #### Data model
 
+Schema below incorporates findings from the Batch 13.2 live capture against real IBKR data (see `captures/iserver/watchlists/latest.json` and `captures/iserver/watchlist/id=*/latest.json`).
+
 ```sql
--- One row per IB watchlist mirrored into Upside.
+-- One row per IB user_list watchlist mirrored into Upside.
 -- Membership and metadata are IB-authoritative. Upside writes only on sync.
+--
+-- Sync filter: only `user_lists` from /v1/api/iserver/watchlists are mirrored.
+-- IBKR also returns `system_lists` (NAMED_USINDETF, CUSTOM_TIPRANKS_*, etc. —
+-- ~28 of them, pre-bundled IBKR templates), which are not personal curation
+-- and are explicitly skipped.
 create table watchlists (
-  id text primary key,                  -- IB watchlist ID
+  id text primary key,                  -- IB watchlist ID (e.g. "100", "105")
   user_id uuid not null references auth.users(id),
   name text not null,                   -- IB-supplied name
-  position int not null default 0,      -- IB-supplied display order
+  position int not null default 0,      -- derived from API response array order;
+                                        -- IBKR doesn't return an explicit position
+  read_only boolean not null default false,  -- from IB; user_lists are read_only=false
+  modified_at timestamptz null,         -- from IB's `modified` (ms epoch). Enables
+                                        -- skip-sync-if-unchanged optimization.
   last_synced_at timestamptz not null default now(),
   hidden_at timestamptz null,           -- Upside-side flag, user-set
   unique (user_id, id)
@@ -556,13 +567,23 @@ create table watchlists (
 create table watchlist_tickers (
   watchlist_id text not null references watchlists(id) on delete cascade,
   conid bigint not null,
-  symbol text not null,
-  position int not null default 0,      -- IB-supplied display order within watchlist
+  symbol text not null,                 -- from IB's `ticker` / `fullName`
+  name text null,                       -- company name from IB's `name`
+  asset_class text not null,            -- IB's `assetClass`: STK / OPT / FUT / CASH / etc.
+                                        -- Signal generation gated to STK in MVP.
+  position int not null default 0,      -- derived from API response array order
   added_at timestamptz not null default now(),  -- when first synced into Upside
   hidden_at timestamptz null,
   primary key (watchlist_id, conid)
 );
+
+create index if not exists watchlist_tickers_user_idx on watchlist_tickers (watchlist_id);
+create index if not exists watchlist_tickers_symbol_idx on watchlist_tickers (symbol);
 ```
+
+**Asset class scope.** Watchlists in IB can contain any instrument type — stocks (`STK`, which also covers ETFs), options (`OPT`), futures (`FUT`), forex (`CASH`), commodities (`CMDTY`), bonds (`BOND`), etc. Upside stores all of them in `watchlist_tickers` so the user sees their full watchlist as-is, but **Analyze is offered only on `asset_class = 'STK'` rows** — non-STK rows render the card without an Analyze affordance, with a small "Not analyzable" hint instead. Rationale: the signal engine's LLM prompts and indicator computations are built for equities; options/futures/FX need different analytical frameworks that aren't in MVP scope.
+
+**Index ETFs are `STK`** in IBKR's API (same asset class as common stocks), so they're naturally analyzable. Cryptocurrencies (`CRYPTO`) and forex (`CASH`) are out of scope for analysis in MVP.
 
 Active Watchlist is a derived view, not a stored table:
 
@@ -581,11 +602,13 @@ order by s.symbol, s.analyzed_at desc;
 
 #### Sync mechanism
 
-A new cron (`watchlistSyncer`, daily or on-demand) pulls IB watchlists via `/v1/api/iserver/watchlists` and per-watchlist `/v1/api/iserver/watchlist?id=<id>`. Upserts into `watchlists` and `watchlist_tickers`. Deletes (cascade) rows for watchlists no longer present in IB.
+A new cron (`watchlistSyncer`, daily or on-demand) pulls IB watchlists via `/v1/api/iserver/watchlists`. **Filter to `user_lists` only** — skip `system_lists` (IBKR's pre-bundled templates). For each user list, fetch `/v1/api/iserver/watchlist?id=<id>` and upsert into `watchlists` and `watchlist_tickers`. Deletes (cascade) rows for user lists no longer present in IB.
 
-User-set `hidden_at` flags are preserved across syncs (the sync writes to `name`, `position`, membership rows — not to `hidden_at`).
+Sync-skip optimization: if the cron sees a list's IB `modified` timestamp is ≤ the stored `modified_at`, skip the per-watchlist fetch for that list (membership hasn't changed). Cuts API calls on no-op syncs.
 
-**Capture the IB endpoints first.** Use the generic IB passthrough endpoint (added in Batch 13.2) to fetch real watchlist data from your live IB account and inspect the response shapes before locking the schema and sync logic in. Same pattern as Batch 7's local capture, but live and on-demand.
+User-set `hidden_at` flags are preserved across syncs (the sync writes to `name`, `position`, `modified_at`, membership rows — not to `hidden_at`).
+
+**Capture done in Batch 13.2.** Live API responses for `/v1/api/iserver/watchlists` and `/v1/api/iserver/watchlist?id=<user_list_id>` are in `captures/iserver/watchlists/latest.json` and `captures/iserver/watchlist/id=<id>/latest.json`. The schema above is built against those shapes.
 
 #### Build order within this track
 
