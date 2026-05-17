@@ -6,6 +6,7 @@ import portfolioRoutes from './routes/portfolio.js';
 import marketdataRoutes from './routes/marketdata.js';
 import signalRoutes from './routes/signals.js';
 import healthRoutes from './routes/health.js';
+import debugRoutes from './routes/debug.js';
 import { startSignalRunner } from './cron/signalRunner.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startPricePoller } from './cron/pricePoller.js';
@@ -33,6 +34,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/marketdata', marketdataRoutes);
 app.use('/api/signals', signalRoutes);
+app.use('/api/debug', debugRoutes);
 
 app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   void notifyError(`http.${req.method}.${req.path}`, err.message ?? 'internal error', err);

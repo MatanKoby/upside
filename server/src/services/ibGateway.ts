@@ -291,3 +291,34 @@ export async function ibSecdefSearch(symbol: string): Promise<RawIbSecdefResult[
   );
   return Array.isArray(data) ? data : [];
 }
+
+// ---------------------------------------------------------------------------
+// Raw passthrough (debug only — see server/src/routes/debug.ts).
+//
+// Returns the gateway's response untouched so debug callers can inspect
+// status, headers, and body. Caller is responsible for path-allowlisting.
+// Instrumented with a `debug-passthrough:<path>` endpoint tag so the audit
+// log distinguishes passthrough calls from production code paths.
+// ---------------------------------------------------------------------------
+export interface IbRawResponse {
+  status: number;
+  contentType: string;
+  data: unknown;
+}
+
+export async function ibRawGet(
+  path: string,
+  query?: Record<string, string | number | undefined>,
+): Promise<IbRawResponse> {
+  await rateLimit();
+  let contentType = 'application/json';
+  const { status, data } = await instrumented<unknown>(
+    { endpoint: `debug-passthrough:${path}` },
+    async () => {
+      const res = await client().get(path, { params: query });
+      contentType = (res.headers['content-type'] as string | undefined) ?? contentType;
+      return { status: res.status, data: res.data };
+    },
+  );
+  return { status, data, contentType };
+}
