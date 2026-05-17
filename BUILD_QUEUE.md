@@ -55,7 +55,7 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
 6. `ChartControls.tsx` — Line/Candle + VWAP/Vol/RSI toggles
 7. `TimeframeBar.tsx` — scrollable pills: 30m, 2h, 1D, 2D, 1W, 1M, 3M, 1Y, 5Y, All
 8. Collapsible sections (shared `CollapsibleSection.tsx`):
-   - `SignalSection.tsx` — signal pill + confidence + reasoning + Style A breakdown
+   - `SignalSection.tsx` — signal pill + Quality + reasoning + Style A breakdown
    - `PositionStats.tsx` — shares, avg cost, P&L, %/day, portfolio weight/contribution, days held
    - `IndicatorsSection.tsx` — RSI, VWAP, MACD, Volume, Bollinger, Earnings with status badges
 9. Extended mock data for ticker details
@@ -169,10 +169,10 @@ Read `UPSIDE_MVP_SPEC.md`: "Screen 2: Ticker Detail"
      - `supersededByAnalysisId` (null if current, else points to newer analysis)
      - `analyzedAt`, `expiresAt`
    - `user_preferences` table (signal_threshold, signal_min_market_value default 1000, suppressed_symbols, sort order, stat config, theme, quiet hours start/end, llm_provider)
-   - `position_history` table (daily snapshots)
+   - `position_history` table (daily snapshots) — **NOTE:** dropped in Batch 14.5 since it never had a real consumer.
    - `analysis_locks` table — for concurrency control:
      - `{ id, symbol, user_id, started_at, status: 'running' | 'failed' }`
-     - Auto-cleanup cron deletes locks older than 60 seconds (assumed crashed)
+     - Auto-cleanup cron deletes locks older than 60 seconds (assumed crashed) — **NOTE:** raised to 5 min in Batch 14a.
    - `access_attempts` table — for whitelist enforcement logging:
      - `{ id, email, granted: bool, ip_address, user_agent, attempted_at }`
    - Realtime enabled on `positions`, `signals`, `analysis_locks` tables
@@ -610,109 +610,458 @@ Kept as fallback (no change): `infra/clientportal.gw/Dockerfile` + `README.md` �
 
 ---
 
-## Batch 14: LLM signals analysis pipeline
+## Batch 13.1: Restore navigation + deeper /healthz
 
-**Depends on:** Batch 13 (full live stack working).
+**Depends on:** Batch 13.
 
-**Scope:** Implement the user-triggered signal analysis end-to-end. After this, "Analyze" button on a TickerDetail produces a real signal with reasoning.
+**Scope:** Re-wire the routing regression discovered after Batch 13. Components from Batches 2-3 (Ticker Detail screen, slide-in, chart, collapsible sections) still exist in `client/src/components/TickerDetail/*` but nothing routes to them. Tap on a PositionCard should open Ticker Detail. Bottom nav should reach Alerts and Settings (`ComingSoon` placeholders for now — real screens land in Batch 15).
 
-### Backend deliverables:
-1. Provider implementations in `server/src/services/llm.ts`:
-   - Real `GeminiProvider.analyze()` using the Gemini API.
-   - Stub `ClaudeProvider` / `OpenAiProvider` that throw a clear error pointing to the env var name (lit later when needed).
-2. New `server/src/services/signalEngine.ts` orchestrating the pipeline:
-   - Acquire `analysis_locks` row (already in `routes/signals.ts:25`).
-   - Ensure `contracts` row exists for the conid; lazy-fetch if not.
-   - Pull intraday + daily history; compute RSI, MACD, Bollinger, VWAP via `technicals.ts`.
-   - Pull current snapshot via `ibGateway.ibSnapshot` (subscribe-then-poll already in place from Batch 6).
-   - Pull news (Finnhub), earnings calendar, insider transactions.
-   - Assemble structured LLM prompt with all signals + raw data.
+**Also in scope (small, adjacent):** extend `/healthz` to return component statuses instead of `{ok:true}`. Lets us (and the Discord error notifier) diagnose without SSH.
+
+### Deliverables
+
+1. **Investigate and restore routing in `client/src/App.tsx` / `client/src/routes.tsx`**:
+   - Route `/ticker/:symbol` mounts `<TickerDetail />`.
+   - PositionCard tap handler navigates to `/ticker/${symbol}`.
+   - Bottom nav routes: `/` → Portfolio, `/alerts` → Alerts (ComingSoon), `/settings` → Settings (ComingSoon).
+   - Slide-in animation from Batch 2 should already work — verify CSS transform still in place.
+
+2. **Verify TickerDetail renders against real data**, not stale mock data. May need a small data-fetch fix where Batches 9/11 changed the source of truth. The screen should pull from Supabase (positions table) for held positions; non-held positions render with all sections except PositionStats (per spec "held vs unheld" note).
+
+3. **Extend `GET /healthz`** in `server/src/routes/`:
+   - Return `{ ok, env, ib: 'connected' | 'stopped' | 'disconnected', supabase: 'reachable' | 'unreachable', redis: 'reachable' | 'unreachable', lastPricePoll: <timestamp | null> }`.
+   - Each sub-check has its own 1s timeout; overall endpoint must respond within 3s even if a backend is down.
+   - `ok` becomes `false` only if `supabase` or `redis` is unreachable (IB being stopped is normal, not unhealthy).
+
+### Files this batch creates/edits
+- `client/src/App.tsx`, `client/src/routes.tsx` (or wherever routes live), `client/src/components/PortfolioHome/PositionCard.tsx` (tap handler), `server/src/routes/health.ts` (or wherever `/healthz` lives).
+
+### Does NOT touch
+- Signal engine, polling, IB code, schema.
+
+### Verification
+- Phone: tap any position → Ticker Detail screen slides in from right with that ticker's data → back arrow returns to portfolio.
+- Bottom nav reaches Alerts and Settings ComingSoon placeholders.
+- `curl https://<vercel-url>/healthz` → returns full component status JSON.
+- Stop the api container, hit `/healthz` from elsewhere → returns appropriate degraded status without timing out.
+
+---
+
+## Batch 13.5: Verify & implement `tradingDaysHeld` + MTD return
+
+**Depends on:** Batch 13.1.
+
+**Scope:** Two metrics flagged "⚠ Verification pending" in the spec — both currently unverified live. Resolve both, implement whichever is missing. After this batch, the spec's verification markers can be removed.
+
+### Deliverables
+
+1. **`tradingDaysHeld`** — for each held position, count of US trading days since entry:
+   - First investigation: query IB's transactions endpoint (`/v1/api/portfolio/<acctId>/transactions` — confirm exact name) for transaction history per held conid. Confirm response shape gives reliable entry dates including for positions held >1 year.
+   - If reliable: implement in `server/src/services/ibGateway.ts:ibTradingDaysHeld(conid)`, called by `pricePoller` once per position per session (cache result, only re-fetch if shares changed).
+   - If unreliable for older positions: fall back to Upside-tracked entry-date (write `first_seen_at` on `positions` when a new conid first appears, use that). Older positions show "≥N days" until the user's next change-in-shares event.
+
+2. **MTD return** — month-to-date portfolio return percent:
+   - First investigation: query IB's account summary (`/v1/api/portfolio/<acctId>/summary` or `/v1/api/iserver/account/<acctId>/summary` — confirm) for an MTD field.
+   - If present: surface via `GET /api/portfolio/summary` to the FE.
+   - If absent: implement via Redis-cached `portfolio_value_month_start` (set on first poll of each new month, never overwritten until the next month begins). MTD = `(current - cached) / cached`. Persists across api restarts via Redis durability.
+
+3. **FE wire-up**:
+   - `tradingDaysHeld` → `PositionStats` section's "Days held" row and `daysHeld`-derived "Return per day" row.
+   - MTD return → `SummaryStrip` right card.
+   - Both should render with reasonable fallback states (e.g. "—" if data unavailable rather than crashing).
+
+### Files this batch creates/edits
+- `server/src/services/ibGateway.ts`, `server/src/services/redis.ts` (month-start cache helper if needed), `server/src/routes/portfolio.ts`, `server/src/cron/pricePoller.ts` (capture month-start), possibly `supabase/migrations/00X_position_first_seen.sql` (if IB transactions unreliable), `client/src/components/TickerDetail/PositionStats.tsx`, `client/src/components/PortfolioHome/SummaryStrip.tsx`.
+
+### Does NOT touch
+- Signal engine, Discord, zone detection.
+
+### Verification
+- Portfolio screen shows real MTD return value (not "—" or placeholder).
+- Open any held position's detail → PositionStats shows real days-held + computed %/day.
+- Document the verification findings in the commit message / claim notes so the spec's "⚠ Verification pending" markers can be removed.
+
+---
+
+## Batch 13.7: Finnhub rate-limited request queue
+
+**Depends on:** Batch 13.
+
+**Scope:** Build the queue infrastructure that all future Finnhub callers will use. No actual Finnhub features added in this batch — just the plumbing. Per-category cadence tuning happens in Batch 13.9 once real callers exist.
+
+### Deliverables
+
+1. **`server/src/services/finnhubQueue.ts`**:
+   - Token-bucket limiter, 50 calls/min global (configurable via env `FINNHUB_RATE_LIMIT_PER_MIN`, default 50). 10-call buffer below Finnhub's 60/min free-tier ceiling.
+   - Per-category min-interval-per-key support. Categories: `quote`, `candle`, `news`, `insider`, `earnings`, `profile` (extensible). Config map; default all categories to 0s min-interval (no throttle) for this batch — tuning happens in 13.9.
+   - **No stale-cache returns** — requests for the same `(category, key)` within an in-flight or recent same-pair request **wait for the next eligible slot**, then get fresh data. Worst-case wait equals the category's min-interval.
+   - FIFO ordering within a category; global token bucket shared across categories.
+   - Exponential backoff + 1 retry on 429 (defensive only).
+   - Exposed API: `finnhubQueue.request<T>(category, key, fn: () => Promise<T>): Promise<T>`.
+
+2. **`server/src/services/finnhub.ts`** — existing stub gets a small refactor: every existing or skeleton Finnhub call goes through `finnhubQueue.request()`. Even if some functions are stubs, the queue wrapper is in place so 14a/14b can use them directly.
+
+3. **Metrics table — rename or extend `ib_api_metrics` → `external_api_metrics`** (add a `provider text not null` column, default `'ib'` for existing rows). Instrument each Finnhub call same as IB: endpoint/category, duration_ms, status, retries. Lightweight; foundation for future per-category cadence tuning.
+
+### Files this batch creates/edits
+- `server/src/services/finnhubQueue.ts` (new), `server/src/services/finnhub.ts` (refactor to route through queue), `server/src/env.ts` (add `FINNHUB_RATE_LIMIT_PER_MIN`), `supabase/migrations/00X_external_api_metrics.sql` (rename or extend the IB metrics table).
+
+### Does NOT touch
+- Any feature consumer of Finnhub (those come in 14a/b/d).
+
+### Verification
+- Unit-test or manual: fire 100 requests in a tight loop through the queue, confirm fan-out respects 50/min and no Finnhub 429s.
+- `external_api_metrics` shows rows for any test calls made.
+
+---
+
+## Batch 13.8: Multi-source price polling (IB primary, Finnhub fallback)
+
+**Depends on:** Batch 13.7.
+
+**Scope:** Make `current_price` updates IB-independent. When IB is connected, use IB. When IB is off, fall back to Finnhub quote endpoint via the queue. Both sources write to the same `positions` row. This is what makes the on-demand IBeam model actually viable as a daily-use product — the user can leave IB off and still see fresh-enough data.
+
+### Deliverables
+
+1. **Schema (`supabase/migrations/00X_price_source.sql`)**:
+   - Add `price_source text not null default 'ib'` to `positions` (enum-like: `'ib' | 'finnhub'`).
+   - Add `last_price_update_at timestamptz null` to `positions` (used by Finnhub poller to decide whether to skip).
+
+2. **`server/src/cron/pricePoller.ts`** — split / rename:
+   - `ibPricePoller`: keeps existing adaptive cadence (10s / 60s / 5min based on market period). Writes with `price_source: 'ib'` and updates `last_price_update_at`. Runs only when IB session `connected`.
+   - `finnhubPricePoller`: new. 60s cadence, always-on. For each held position, if `last_price_update_at` is null or older than 90s, fetch quote via `finnhubQueue.request('quote', symbol, ...)` and write with `price_source: 'finnhub'`.
+
+3. **Optional FE indicator (cheap to add now, deferred render):** PositionCard accepts `priceSource` prop. Default: render nothing extra. Behind a feature flag, render a small "F" badge near the price when source is Finnhub. Useful for debugging but no need to expose to user yet.
+
+### Files this batch creates/edits
+- `server/src/cron/ibPricePoller.ts` (renamed from / split off pricePoller.ts), `server/src/cron/finnhubPricePoller.ts` (new), `server/src/services/finnhub.ts` (add `getQuote(symbol)`), `supabase/migrations/00X_price_source.sql`, optional small PositionCard prop addition.
+
+### Does NOT touch
+- Signal engine, zone detection (those come in 14a/14c respectively but consume what this batch provides).
+
+### Verification
+- IB connected: positions update every 10-60s with `price_source = 'ib'`.
+- Disconnect IB via FE button → wait 90s → Supabase shows positions still updating, `price_source = 'finnhub'`.
+- Reconnect IB → next IB poll wins → `price_source` returns to `'ib'`, Finnhub poller goes idle.
+
+---
+
+## Batch 14a: Signal engine + manual SELL analysis end-to-end
+
+**Depends on:** Batch 13.1, 13.5, 13.7.
+
+**Scope:** The brain. User taps Analyze → 10-15s later a real signal lands in Supabase and renders on the ticker detail screen. Replaces the original Batch 14 in the queue; split into 14a (engine) and 14b (accuracy) for cleaner scope.
+
+### Deliverables
+
+#### Backend
+
+1. **Provider implementations in `server/src/services/llm.ts`**:
+   - Real `GeminiProvider.analyze(context)` using Gemini API.
+   - Stubs for `ClaudeProvider` / `OpenAiProvider` that throw a clear error pointing to the relevant env var.
+
+2. **`server/src/services/signalEngine.ts`** (new) — orchestrates a single analysis:
+   - Acquire `analysis_locks` row (lock cleanup TTL is 5 min — see step 7).
+   - Ensure `contracts` cache row exists (lazy-fetch).
+   - Pull intraday + daily history from IB; compute RSI, MACD, Bollinger, VWAP via `technicals.ts`.
+   - Pull current snapshot via `ibGateway.ibSnapshot`.
+   - Pull news / earnings / insider data via Finnhub (through the queue).
+   - **Read position's zone state** (`zone_entered_at`, `entered_zone_via_gap`). If `inZone`: populate `contextualTriggers.inProfitTakingZone = { thresholdPct, currentPnlPct, viaGap }`. Otherwise null.
+   - Assemble structured LLM prompt. **Reserve `contextualTriggers` section in prompt structure** — even though only `inProfitTakingZone` is populated in 14a (which gets meaningful values once 14c lands), the framework is in place for future trigger types.
    - Call `llm.analyze()`.
-   - Parse LLM response into `Signal` shape; insert into `signals` table.
+   - **Zod-validate the LLM response.** On malformed: retry once with a stricter prompt. On second failure: write a `no_signal` record with reason "LLM response malformed" and release lock.
+   - Insert validated signal into `signals` table.
    - Release lock.
-3. `server/src/routes/signals.ts` analyze route: replace the 501 with the engine call.
-4. Background cron remains the stale-lock cleanup only (already in `cron/signalRunner.ts`).
 
-### Frontend deliverables:
-5. On TickerDetail, "Analyze" button with two-step intentional friction (per spec: tap → grey out 1s → confirm).
-6. Disable button when an `analysis_locks` row exists for the (user, symbol) — subscribe to that table via Realtime.
-7. Render new signal in the Signal Section when it lands via Realtime.
+3. **`server/src/services/technicals.ts`** — full implementations: `rsi()`, `macd()`, `bollinger()`, `vwap()`. Use `technicalindicators` npm package.
 
-### Signal accuracy tracking (added per Batch 13 user request)
+4. **`server/src/services/finnhub.ts`** — flesh out `getCompanyNews`, `getInsiderTransactions`, `getEarningsCalendar` (all through the queue).
 
-The schema in `001_initial.sql` already has the accuracy-tracking columns on `signals` (`actual_max_since_analysis`, `actual_min_since_analysis`, `entered_range_at`, `exited_range_at`). Wire them up so we can measure short- and long-term signal accuracy from day 1, not retrofit later.
+5. **`server/src/routes/signals.ts`** — replace the 501 stub with a real handler:
+   - **Re-analyze soft-block**: check if a `signals` row exists for `(user_id, symbol)` with `analyzed_at` within last 5 min. If yes: return `429` with `{ lastAnalyzedAt, reason: 'recent_analysis' }` so FE can prompt "Last analyzed 3 min ago — re-analyze anyway?". FE re-sends with `force: true` to bypass.
+   - **Daily cost ceiling**: env var `MAX_LLM_CALLS_PER_DAY` (default 50). Per-day counter in Redis keyed `llm_calls:YYYY-MM-DD` with midnight-UTC TTL. If exceeded: return 429 with `{ reason: 'daily_limit_reached' }`.
+   - Invoke `signalEngine.analyze()` async, return 202 immediately. FE subscribes to `signals` Realtime to detect completion.
 
-8. **Continuous live-price updates** — extend `pricePoller` (or add a parallel cron) that, for every signal where `superseded_by_analysis_id IS NULL`, updates `actual_max_since_analysis` / `actual_min_since_analysis` from the latest market price. Also stamp `entered_range_at` the first time live price crosses into `[price_range_low, price_range_high]`, and `exited_range_at` when it crosses back out.
-9. **User-acted-on-signal flag** — new column `acted_on_at timestamptz` on `signals`. When the user views a signal in the FE, show "I acted on this" button → POST sets the flag. Used downstream to compare LLM's predicted price vs. user's actual entry/exit.
-10. **Aggregate accuracy metric endpoint** — `GET /api/signals/accuracy` returning rolling stats: hit-rate (% of sell signals where actual_max ≥ optimal_price within N days), median-distance-from-target, time-to-hit. Used by Batch 15's Alerts feed / future Performance screen.
-11. **Surface aggregate accuracy in the FE** — at minimum on the Alerts feed (Batch 15) and a placeholder on the Signal Section ("This signal type's recent hit-rate: 65%").
+6. **Note on idempotency**: explicitly **NOT** adding idempotency keys. The `analysis_locks` row already prevents concurrent double-runs (second tap sees lock, button disabled). Adding idempotency keys would only interfere with intentional re-analysis during testing.
 
-These together let us measure signal quality empirically — both retrospectively (did past signals work?) and prospectively (does this new signal pattern look promising?). Without them we'd be flying blind on whether the LLM is actually adding value.
+7. **Analysis lock TTL bumped to 5 min**: cron `lockCleanup.ts` cleans rows older than 5 min. Worst-case Gemini response is ~30s but we leave margin for network blips, retries, and slow third-party calls.
 
-**Files this batch creates/edits:** `server/src/services/llm.ts`, `server/src/services/signalEngine.ts`, `server/src/services/finnhub.ts` (real implementations replacing stubs), `server/src/routes/signals.ts`, `server/src/cron/pricePoller.ts` (or a sibling cron) to update accuracy fields, `supabase/migrations/00X_acted_on_at.sql` for the new column, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`.
+#### Frontend
 
-**Manual prerequisites (you):**
-- Get a Gemini API key at aistudio.google.com.
-- Get a Finnhub API key at finnhub.io.
-- Add both to `.env` on the VPS (`GEMINI_API_KEY`, `FINNHUB_API_KEY`), `docker compose restart api`.
+8. **`client/src/components/TickerDetail/SignalSection.tsx`** — wire to real signal data via Supabase Realtime. Latest non-superseded signal renders; "View history" expands the chronological list.
+9. **`client/src/hooks/useAnalysisLock.ts`** — subscribe to `analysis_locks` for the active (user, symbol) → disable Analyze button when locked.
+10. **Two-step Analyze button (per spec)**: tap → grey out 1s → "Confirm analyze" → tap again → POST `/api/signals/analyze`.
+11. **Re-analyze soft-block UI**: on 429 with `reason: 'recent_analysis'` + `lastAnalyzedAt`, render confirm prompt: "Last analyzed {N} min ago — re-analyze anyway?" with Yes/Cancel. On Yes, re-POST with `force: true`.
+12. **Daily-limit-reached UI**: on 429 with `reason: 'daily_limit_reached'`, show inline "Daily analysis limit reached — resets at midnight UTC" and disable button until then.
 
-**Verification:**
-- Tap "Analyze" on BBAI → confirm → spinner → ~10-15s later a signal appears with `signalQuality`, `priceRangeLow/High`, `optimalPrice`, `reasoning`, indicator bullets.
-- Tap "Analyze" again immediately → button disabled (lock present) → user can't double-trigger.
-- After completion, lock row removed; button re-enabled.
-- `signals` Supabase table has the new row; `ib_api_metrics` shows several IB calls.
+### Files this batch creates/edits
+- `server/src/services/llm.ts`, `server/src/services/signalEngine.ts` (new), `server/src/services/technicals.ts`, `server/src/services/finnhub.ts`, `server/src/services/redis.ts` (LLM cost counter helpers), `server/src/routes/signals.ts`, `server/src/cron/lockCleanup.ts` (renamed from signalRunner.ts, 5-min TTL), `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`, `client/src/hooks/useSignals.ts`.
+
+### Manual prerequisites (user)
+- Get Gemini API key at aistudio.google.com → add `GEMINI_API_KEY` to VPS `.env`.
+- Get Finnhub API key at finnhub.io → add `FINNHUB_API_KEY` to VPS `.env`.
+- `docker compose restart api`.
+
+### Verification
+- Tap Analyze on a held position → 1s greyed → tap again → ~10-15s later signal renders with quality score, price range, optimal price, reasoning, indicator bullets.
+- Tap Analyze again immediately → 429 with soft-block prompt → confirm → new analysis runs.
+- Force 51 analyses in a day (test mode) → 51st returns daily-limit-reached.
+- Crash mid-analysis via SIGKILL on the api → cron cleans up stale lock within 5 min → button re-enables.
+- Send a malformed LLM response (test mode) → retry happens → second failure writes `no_signal` with reason "LLM response malformed" → no crash.
+
+---
+
+## Batch 14b: Daily hindsight accuracy tracking cron
+
+**Depends on:** Batch 14a, 13.7.
+
+**Scope:** Once daily, after market close, update accuracy fields on all open signals using Finnhub intraday candles. Empirical foundation for "is the LLM actually good." IB-independent — works whether or not the user has IB connected.
+
+### Deliverables
+
+1. **`server/src/cron/accuracyUpdater.ts`** — runs daily at ~4:30 PM ET (after regular session close):
+   - For each signal where `superseded_by_analysis_id IS NULL` AND `analyzed_at` within last 30 days:
+     - Fetch intraday candles (5-min or hourly bars) from Finnhub for today's date for this symbol, through the queue with `category: 'candle'`.
+     - Compute today's high, low, and the time the high/low were reached.
+     - Update `actual_max_since_analysis = max(prior, today_high)`, `actual_min_since_analysis = min(prior, today_low)`.
+     - If price entered `[price_range_low, price_range_high]` for the first time: set `entered_range_at` to the candle timestamp.
+     - If price was in range and exited: set `exited_range_at`.
+
+2. **Schema migration `supabase/migrations/00X_acted_on_at.sql`**:
+   - Add `acted_on_at timestamptz null` to `signals`. Set by FE when user taps "I acted on this" in the Alerts feed (UI lands in Batch 15). Used downstream by post-MVP signal post-mortem feature.
+
+3. **`server/src/routes/signals.ts:GET /api/signals/accuracy`**:
+   - Returns rolling stats: hit-rate (% of sell signals where actual_max ≥ optimal_price within the predicted timeframe), median-distance-from-target, time-to-hit, signals-expired-without-hit.
+   - Aggregates over last 30 days, last 90 days, all-time.
+   - Used by Batch 15's Alerts feed.
+
+### Files this batch creates/edits
+- `server/src/cron/accuracyUpdater.ts` (new), `server/src/routes/signals.ts` (add `/accuracy`), `supabase/migrations/00X_acted_on_at.sql`.
+
+### Does NOT touch
+- pricePoller, zone detection, FE Signal Section.
+
+### Verification
+- Run cron manually → confirm `actual_max_since_analysis` updates for all open signals.
+- `GET /api/signals/accuracy` returns sensible JSON (empty stats are fine for early days).
+
+---
+
+## Batch 14c: Profit-taking zone detection + Discord notifications + card UI
+
+**Depends on:** Batch 13.8.
+
+**Scope:** Continuous detection that a position is in profit-taking zone (P&L crosses threshold). One Discord notification per zone-entry with 4h cooldown. Card UI emphasis with tooltip. LLM `contextualTriggers` field populated. Replaces the originally-planned pre-market gap detection — gap is now just one cause of zone-entry, marked with a small "GAP" badge for the day.
+
+### Deliverables
+
+#### Backend
+
+1. **Schema (`supabase/migrations/00X_profit_zone.sql`)**:
+   - Add to `positions`: `zone_entered_at timestamptz null`, `zone_exited_at timestamptz null`, `last_zone_notification_at timestamptz null`, `entered_zone_via_gap boolean not null default false`.
+   - Add to `user_preferences`: `profit_zone_threshold_pct numeric not null default 2.0`.
+
+2. **Zone state recomputation** — extend `ibPricePoller` and `finnhubPricePoller` (from Batch 13.8) to compute zone state on every write:
+   - Read user's threshold from `user_preferences`.
+   - `wasInZone = (priorRow.zone_entered_at !== null)`; `nowInZone = pnlPct >= threshold`.
+   - If `!wasInZone && nowInZone`: set `zone_entered_at = now()`, `entered_zone_via_gap = (now() < todays_regular_open_in_ET)`, call `discord.notifyZoneEntry()` (which checks cooldown internally).
+   - If `wasInZone && !nowInZone`: set `zone_exited_at = now()`, clear `zone_entered_at`.
+   - At end-of-regular-session each day: clear `entered_zone_via_gap` for all positions (small daily cleanup task).
+
+3. **`server/src/services/discord.ts`** — extend existing multi-channel notifier:
+   - New env var: `DISCORD_WEBHOOK_ZONES`.
+   - `notifyZoneEntry(position)` function. Internal cooldown check: if `last_zone_notification_at` is within 4h, skip silently. Else fire notification and set `last_zone_notification_at = now()`.
+   - Message format: `🔔 {symbol} entered profit-taking zone — P&L +{X.XX}% (threshold: +{Y}%){gap suffix if viaGap}`.
+
+4. **`contextualTriggers` populated in `signalEngine`** (cooperates with Batch 14a):
+   - When user taps Analyze, signalEngine reads position's `zone_entered_at` and `entered_zone_via_gap`.
+   - If `inZone`: populate `contextualTriggers.inProfitTakingZone = { thresholdPct, currentPnlPct, viaGap }`.
+   - The LLM prompt's contextual-triggers section interpolates: "This position is in profit-taking zone (P&L +X.X%, threshold +Y%). Address specifically: should we take profit here, or hold for more? {If viaGap: 'Zone entry was caused by an overnight gap, which often fades at open due to others taking profit.'}"
+   - This batch updates the prompt template; the framework hookup itself happened in 14a.
+
+#### Frontend
+
+5. **`client/src/components/PortfolioHome/PositionCard.tsx`**:
+   - When `position.zone_entered_at IS NOT NULL` (and not exited): render small icon (initial pick: `⇡` Unicode glyph or a lightning-bolt SVG — final choice during implementation) next to the P&L number on the card.
+   - **Tooltip**: hover (desktop) or long-press (mobile) shows: `"Profit-taking zone — P&L crossed +{threshold}% threshold. Consider analyzing."`. Use a small `Tooltip` common component (Radix UI tooltip is fine; or hand-rolled with proper a11y attributes).
+   - When `entered_zone_via_gap`: additionally render a small "GAP" mini-badge near the icon for the trading day.
+   - Card structural layout is NOT altered. Icon and GAP badge are inline with P&L.
+
+6. **`client/src/components/TickerDetail/SignalSection.tsx`** — when position `inZone`, show inline shortcut button "Analyze for profit-taking?" that triggers the normal Analyze flow (the `contextualTriggers` get auto-attached server-side based on current zone state).
+
+7. **Common `Tooltip` component** (`client/src/components/common/Tooltip.tsx`) — if it doesn't already exist. Hover for desktop, long-press for mobile. ESC dismisses. Used by the zone icon and gap badge here; potentially other future hover-help surfaces.
+
+### Files this batch creates/edits
+- `supabase/migrations/00X_profit_zone.sql`, `server/src/cron/ibPricePoller.ts` + `finnhubPricePoller.ts` (zone recompute), `server/src/services/discord.ts` (zones channel + notifyZoneEntry), `server/src/services/signalEngine.ts` (contextualTriggers populator), `client/src/components/PortfolioHome/PositionCard.tsx`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/components/common/Tooltip.tsx`, `client/src/types/index.ts` (Position type additions: `zone_entered_at`, `entered_zone_via_gap`, etc.).
+
+### Manual prerequisite (user)
+- Create new Discord channel `#upside-zones`, generate webhook, add `DISCORD_WEBHOOK_ZONES` to VPS `.env`, `docker compose restart api`.
+
+### Verification
+- Set threshold to 0.5% temporarily; positions cross threshold → Discord ping arrives in `#upside-zones`, card icon appears.
+- Tooltip on hover (desktop) and long-press (mobile) shows correct text.
+- Price flips in/out of zone within 4h → only first transition notifies.
+- Manually update a position to simulate overnight gap (write a zone-entry timestamp before today's open) → GAP badge renders alongside zone icon → clears at end of session.
+- Tap Analyze on a zone position → signal reasoning explicitly addresses profit-taking decision.
+
+---
+
+## Batch 14d: Signal-range Discord notifications
+
+**Depends on:** Batch 14a, 14c.
+
+**Scope:** Notify when live price enters an open signal's predicted range. Same Discord infrastructure as 14c, different trigger and channel.
+
+### Deliverables
+
+1. **`server/src/services/discord.ts`** — `notifySignalRangeEntry(signal, position)`. New env var: `DISCORD_WEBHOOK_SIGNALS_SELL`.
+   - Message format: `🎯 {symbol} entered SELL signal range — price ${price} ∈ [${low}, ${high}], optimal ${optimal}. Signal generated {when}.`
+
+2. **Trigger logic** — extend the same price pollers from 13.8:
+   - For each price write, check all open signals (`superseded_by_analysis_id IS NULL` AND not expired) for this position.
+   - If `current_price` is within `[price_range_low, price_range_high]` and `entered_range_at IS NULL`: fire notification, set `entered_range_at`.
+   - Cooldown not needed — signal-entry is a one-time event per signal (subsequent re-entries are recorded via accuracy tracking, not re-notified).
+
+3. **Future channels reserved**: `DISCORD_WEBHOOK_SIGNALS_BUY` (post-MVP for BUY signals), `DISCORD_WEBHOOK_EVENTS` (post-MVP for info badges like earnings/insider/volume). Document in `.env.example`.
+
+### Files this batch creates/edits
+- `server/src/services/discord.ts`, `server/src/cron/ibPricePoller.ts` + `finnhubPricePoller.ts` (range-check hook), `.env.example`.
+
+### Manual prerequisite (user)
+- Create `#upside-signals-sell` Discord channel + webhook → `DISCORD_WEBHOOK_SIGNALS_SELL` to `.env` → `docker compose restart api`.
+
+### Verification
+- Generate a sell signal with a range slightly above current price. Wait for price to drift up into range (or simulate via manual Supabase update). Discord ping arrives once in `#upside-signals-sell`; `entered_range_at` set on the signal row.
+- Re-trigger same condition → no duplicate notification (one-time event).
+
+---
+
+## Batch 14.5: Schema cleanup — remove `position_history`
+
+**Depends on:** Batch 13.
+
+**Scope:** Drop the unused `position_history` table and related references. MTD now comes from Redis cached month-start (Batch 13.5); accuracy lives on `signals`. The table was deferred-feature scaffolding that never had a real use case.
+
+### Deliverables
+1. **`supabase/migrations/00X_drop_position_history.sql`**: `drop table if exists position_history cascade;`.
+2. Edit `supabase/migrations/001_initial.sql` (the consolidated baseline) to remove the `position_history` table definition so a future fresh apply doesn't recreate it.
+3. Grep codebase for any imports / types referring to it → remove.
+4. Spec entry for `position_history` already removed (handled in spec edits).
+
+### Files this batch creates/edits
+- `supabase/migrations/00X_drop_position_history.sql`, `supabase/migrations/001_initial.sql`, possibly `server/src/types/index.ts`.
+
+### Does NOT touch
+- Active features.
+
+### Verification
+- `select * from position_history` errors with "relation does not exist".
+- `pnpm typecheck` clean (or equivalent).
+
+---
+
+## Batch 13.9: Finnhub call inventory + per-category cadence tuning
+
+**Depends on:** Batches 14a, 14b, 14c, 14d (all Finnhub callers must exist before tuning).
+
+**Scope:** Now that all Finnhub callers in the codebase are real, inventory them and set sensible per-category min-intervals on the queue.
+
+### Deliverables
+
+1. **Inventory document** — short markdown table inside this batch's commit listing every Finnhub call:
+   - Caller (`signalEngine`, `accuracyUpdater`, `finnhubPricePoller`, etc.)
+   - Category (`quote`, `candle`, `news`, ...)
+   - Trigger (user-action, cron, fallback-only)
+   - Acceptable staleness ("price needs <90s fresh"; "news every 15 min is fine")
+
+2. **Update default config in `finnhubQueue.ts`** with per-category min-intervals. Approximate starting values (tune empirically):
+   - `quote`: 60s per-key (fallback-only — when IB is on, this never fires)
+   - `candle`: 4h per-key (accuracy cron runs once daily)
+   - `news`: 15min per-key
+   - `insider`: 12h per-key
+   - `earnings`: 24h per-key
+   - `profile`: 7d per-key
+
+3. **Verify under load** — fire a synthetic burst of analyses + price polls; confirm no 429s and that all caller-side flows still complete (any waits should be acceptable given the categories).
+
+### Files this batch creates/edits
+- `server/src/services/finnhubQueue.ts` (config map), commit message contains the inventory table.
+
+### Does NOT touch
+- Anything else.
+
+### Verification
+- Burst test passes without 429s.
+- Real-world usage over a day shows no Finnhub error rows in `external_api_metrics`.
 
 ---
 
 ## Batch 15: Alerts feed (Screen 3) + Settings (Screen 4) wired
 
-**Depends on:** Batch 14.
+**Depends on:** Batch 14a, 14b, 14c.
 
-**Scope:** Replace the two `ComingSoon` placeholders with real screens.
+**Scope:** Replace the two `ComingSoon` placeholders with real screens. Now also includes profit-zone threshold control and aggregate accuracy display.
 
-### Deliverables:
-1. **Alerts feed (`/alerts`):** chronological list of signal records, newest first. Confidence threshold slider at top (default 50%). Filter pills: All / Sell / no_signal. Empty state: "No signals yet. Tap Analyze on any position to generate one."
-2. **Settings (`/settings`):** app-level only (per spec).
-   - IB Connection status + Reconnect button (re-triggers the IB login flow).
-   - Signal threshold (slider 0-100, persists to `user_preferences.signal_threshold`).
-   - Signal min market value ($, persists).
-   - Suppressed symbols (text list, persists to `user_preferences.suppressed_symbols`).
-   - Theme toggle (Dark / Light / System, persists).
-   - LLM provider dropdown (Gemini / Claude / OpenAI, persists; takes effect on next analyze).
-   - Sign out button.
+### Deliverables
 
-**Files this batch creates/edits:** `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx` (replace ComingSoon imports).
+1. **Alerts feed (`/alerts`)** — chronological list of generated signals AND zone-entry events, newest first.
+   - **Display filter slider**: "Show signals above ___% Quality" (range: 0-100, default 50). **Display filter only — does NOT affect generation.** Settings has the separate generation threshold.
+   - Filter pills: All / Sell / Zone-Entry / no_signal.
+   - Empty state: "No signals yet. Tap Analyze on any position to generate one."
 
-**Verification:**
-- Tap bell icon → Alerts list renders, shows signal generated in Batch 14.
+2. **"I acted on this" button** on each Alerts list item → POST sets `signals.acted_on_at`. Discord-published zone-entries get a similar lightweight "Mark as seen" affordance (post-MVP if scope tightens).
+
+3. **Aggregate accuracy display** at top of Alerts feed: pulls from `GET /api/signals/accuracy` from Batch 14b. Shows: "Recent SELL signals: X% hit-rate over 30d, median +Y% from optimal." Placeholder copy if data is sparse in early days.
+
+4. **Settings (`/settings`)** — app-level (per spec):
+   - **IB Connection**: status indicator + Connect/Disconnect button (uses existing on-demand IBeam flow from Batch 13).
+   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`). Clarify in copy: "BE-level minimum; the Alerts feed has a separate display filter."
+   - **Signal min market value** ($, persists to `user_preferences.signal_min_market_value`).
+   - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
+   - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
+   - **Theme** (Dark / Light / System, persists).
+   - **LLM provider** dropdown (Gemini / Claude / OpenAI, persists; takes effect on next analyze).
+   - **Sign out** button.
+
+5. **`PUT /api/user/preferences`** — BE endpoint validates + upserts the user_preferences row. FE writes through this rather than directly to Supabase to keep validation centralized.
+
+### Files this batch creates/edits
+- `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (new — preferences PUT/GET).
+
+### Verification
+- Tap bell icon → Alerts list renders, shows signals + zone-entries.
 - Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
+- Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
 - Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
 
 ---
 
-## Batch 16: Polish — error / loading / empty states, mobile install, a11y pass
+## Batch 16: Polish + PWA push notifications
 
 **Depends on:** Batch 15.
 
-**Scope:** Final pre-MVP-completion sweep. Catches edge cases and rough edges discovered during real usage between Batches 13-15.
+**Scope:** Final pre-MVP sweep. Loading/error/empty states, mobile install guidance, a11y pass, and PWA push notifications (replacing the originally-dropped MVP item).
 
-### Deliverables:
+### Deliverables
+
 1. **Loading states** for every async surface (initial portfolio load, chart load, analyze in progress, settings save).
-2. **Error states**: BE unreachable, IB session expired mid-action, Supabase Realtime disconnect with reconnect.
+2. **Error states**: BE unreachable, IB session stalled mid-action, Supabase Realtime disconnect with reconnect.
 3. **Empty states** with helpful guidance (no positions: "Connect IB"; no signals yet: same as Batch 15).
 4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
-5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored.
-6. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
+5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored. Tooltip semantics on the zone icon verified.
+6. **PWA push notifications**:
+   - Service worker push subscription on first launch (with permission prompt).
+   - VAPID key generation + backend dispatch logic via the `web-push` npm library.
+   - Subscribed devices get notified on the same triggers Discord uses (zone-entry, signal-range-entry). Discord stays as the developer/admin channel; PWA push is the user-facing channel.
+   - Quiet hours support in Settings (defer if scope creeps — Discord-only is acceptable for MVP).
+7. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
 
-**Files this batch creates/edits:** Scattered touches across `client/src/`.
+### Files this batch creates/edits
+- Scattered touches across `client/src/`, plus `server/src/services/webPush.ts` (new), `client/public/service-worker.js`.
 
-**Verification:**
+### Verification
 - Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
+- PWA push: grant permission on phone, kill the app, trigger a zone-cross from another device or by manual Supabase update → phone notification arrives within seconds.
 
 **🎯 Milestone: MVP per spec.**
-
-
-
-
-
