@@ -130,7 +130,11 @@ export type TickerDetailData = {
   dayHigh: number;
   currentInRange: number;
   marketStats: MarketStat[];
-  signal: TickerSignalDetail;
-  positionStats: PositionStatsDetail;
+  // Signal absent for positions that have never been analyzed. Populated by
+  // Batch 14a's signal engine once that lands.
+  signal: TickerSignalDetail | null;
+  // Position stats are held-only. Non-held tickers (post-MVP browsing case)
+  // render the same screen with this section omitted.
+  positionStats: PositionStatsDetail | null;
   indicators: IndicatorDetail[];
 };

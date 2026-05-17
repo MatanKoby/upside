@@ -29,3 +29,13 @@ export async function del(key: string): Promise<void> {
 export function ibSessionKey(userId: string): string {
   return `ib:session:${userId}`;
 }
+
+export async function pingRedis(): Promise<boolean> {
+  try {
+    const c = await redis();
+    const reply = await c.ping();
+    return reply === 'PONG';
+  } catch {
+    return false;
+  }
+}

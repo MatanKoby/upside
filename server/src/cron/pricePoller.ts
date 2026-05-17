@@ -45,6 +45,13 @@ const CONTRACTS_REFRESH_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 let running = false;
 let stopRequested = false;
+let lastSuccessfulCycleAt: number | null = null;
+
+/** Unix-ms timestamp of the most recent pollCycle that completed without
+ *  throwing. Null until the first success. Surfaced by /healthz. */
+export function getLastPricePollAt(): number | null {
+  return lastSuccessfulCycleAt;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -305,6 +312,7 @@ async function loop(): Promise<void> {
 
     try {
       await pollCycle(userId, accountId);
+      lastSuccessfulCycleAt = Date.now();
     } catch (e) {
       void notifyError('pricePoller.cycle', (e as Error).message ?? 'unknown', e);
     }

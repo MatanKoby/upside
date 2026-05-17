@@ -48,7 +48,13 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
       <MarketStats initialStats={detail.marketStats} />
 
       <section className="td-chart-shell" aria-label="Chart placeholder">
-        <PriceChart symbol={detail.symbol} timeframe={timeframe} mode={mode} overlays={overlays} entryPrice={detail.positionStats.avgCost} />
+        <PriceChart
+          symbol={detail.symbol}
+          timeframe={timeframe}
+          mode={mode}
+          overlays={overlays}
+          entryPrice={detail.positionStats?.avgCost}
+        />
         <ChartControls
           mode={mode}
           overlays={overlays}
@@ -60,13 +66,17 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
         <TimeframeBar active={timeframe} onChange={setTimeframe} />
       </section>
 
-      <CollapsibleSection title="Signal">
-        <SignalSection signal={detail.signal} />
-      </CollapsibleSection>
+      {detail.signal && (
+        <CollapsibleSection title="Signal">
+          <SignalSection signal={detail.signal} />
+        </CollapsibleSection>
+      )}
 
-      <CollapsibleSection title="Position stats">
-        <PositionStats stats={detail.positionStats} />
-      </CollapsibleSection>
+      {detail.positionStats && (
+        <CollapsibleSection title="Position stats">
+          <PositionStats stats={detail.positionStats} />
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection title="Indicators">
         <IndicatorsSection indicators={detail.indicators} />
