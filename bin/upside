@@ -40,7 +40,10 @@ case "$cmd" in
       echo "Usage: $0 restart <service>"
       exit 2
     fi
-    docker compose up -d --force-recreate "$arg"
+    # --build so source changes are picked up; --force-recreate so a fresh
+    # container reads the latest env vars. Without --build, a `restart` would
+    # silently re-deploy the OLD image — easy to miss, easy to debug-loop.
+    docker compose up -d --build --force-recreate "$arg"
     ;;
   reset)
     docker compose down --remove-orphans
