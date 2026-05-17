@@ -49,7 +49,7 @@ This spec is public. The repo is public. Security comes from proper secret isola
 - **Backend**: Node.js + Express (or Fastify), running on Oracle Cloud Always Free VPS
 - **Database**: Supabase (PostgreSQL + Auth + Realtime) — free tier (500 MB DB, 50K MAUs)
 - **Broker API**: IB Client Portal API (REST), gateway runs on same Oracle VPS
-- **Market Data**: IB API (prices, OHLCV bars, fundamentals — VWAP is computed BE-side, not provided by IB), Finnhub (news, sentiment, insider trades, earnings — free 60 calls/min)
+- **Market Data**: IB API (prices, OHLCV bars, fundamentals — VWAP is computed BE-side, not provided by IB), Finnhub (news, sentiment, insider trades, earnings, intraday candles — free 60 calls/min, all routed through a rate-limited queue)
 - **Technical Indicators**: Computed locally from IB price data using `technicalindicators` npm library (RSI, MACD, Bollinger, SMA/EMA, Stochastic, support/resistance, volume profile)
 - **AI/LLM**: Gemini free tier via Google AI Studio (initially). Provider-agnostic abstraction layer — swap to Claude/OpenAI via env var. No vendor lock-in.
 - **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
@@ -127,7 +127,7 @@ docker compose restart cloudflared
 - **Connect / Disconnect controls in the FE**: small status indicator in the header shows IB state (`stopped` / `connecting` / `connected` / `disconnected`). Tap to connect when stopped, tap to disconnect when connected.
   - **Connect**: FE POSTs `/api/auth/ib/connect` → the api uses its Docker-socket access to issue a Docker `start` on the `ib-gateway` container → IBeam boots, logs in (~15-25s), triggers a 2FA push to the user's IB Key app → user approves → gateway authenticated (~5s later). FE shows "Approve 2FA push on IB Key app" during this window and polls `/api/auth/status` every ~3s to detect the state change.
   - **Disconnect**: FE POSTs `/api/auth/ib/disconnect` → api issues Docker `stop` on `ib-gateway` → container exits cleanly in ~2-5s → IBKR Mobile is free to use.
-- **Cached-first portfolio display**: the FE shows portfolio positions from Supabase regardless of whether IB is currently connected. When connected, `pricePoller` writes fresh data and Supabase Realtime pushes updates. When disconnected (or stopped), the last-known state stays visible — the status indicator's color tells the user how fresh it is. **No more full-screen "session expired" takeover**; that interrupted user flow more than it helped.
+- **Cached-first portfolio display**: the FE shows portfolio positions from Supabase regardless of whether IB is currently connected. When connected, `pricePoller` writes fresh data and Supabase Realtime pushes updates. When IB is disconnected, the Finnhub fallback poller (see "Multi-source price polling") keeps `current_price` reasonably fresh. The status indicator's color tells the user how fresh data is. **No more full-screen "session expired" takeover**; that interrupted user flow more than it helped.
 - **Docker socket access**: the api container has `/var/run/docker.sock` mounted read-write. This gives the api full Docker control on the host — accepted security trade-off for a single-user self-hosted MVP. If the api is ever exposed multi-tenant, this needs to change (e.g., a tiny privileged "control" sidecar that only allows start/stop on a whitelist of container names).
 - **Tried and abandoned** (kept here as institutional memory so the next agent doesn't redo): (1) programmatic POST to `/v1/api/iserver/auth/ssodh/init` → 401; (2) api-side path proxy `/ib-portal/*` → gateway's absolute paths bypassed the prefix; (3) second dedicated Quick Tunnel to the gateway → "login succeeded" in the browser but internal queries still got 401; (4) full-time IBeam (auto-relogin) → "battle royale" with IBKR Mobile, user could not use phone app while Upside was deployed; (5) IBKR's own OAuth 1.0a Extended — works, would be the cleanest long-term answer (no session conflict with IBKR Mobile), but requires IBKR-side activation that retail accounts must request explicitly via email and may wait days-to-weeks for. OAuth implementation is parked on the `oauth-dev` branch for when approval lands.
 - **Credentials** live in two files on the VPS at `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt`, mode `0400`, owner `ubuntu`. The IBeam container mounts them read-only at `/run/secrets/ib_account` and `/run/secrets/ib_password`; IBeam reads them via `IBEAM_SECRETS_SOURCE=fs`. Files are gitignored. Credentials never appear in env vars, in `docker-compose.yml`, or in any committed code.
@@ -135,10 +135,9 @@ docker compose restart cloudflared
 - Multi-device support: IB session shared across all user's devices (both pull from same Redis-stored session)
 - Session keepalive via tickle endpoint every 30s
 - IB's nightly forced logout (~11:45 PM ET) ends session daily
-- On session expiry: full-screen block with "Reconnect" prompt (no cached data shown until restored)
-- On mid-session failure (IB hiccup): silent retry with exponential backoff, header status dot turns amber. If all retries fail, dot turns red, user can tap to reconnect via non-blocking side sheet.
-- Backend stops polling when session expires — no unnecessary API calls
-- If IB session is killed externally (user logged into TWS directly), next backend poll detects auth error → marks expired → all clients see block screen
+- On session expiry: status indicator turns red. UI does NOT full-screen takeover — portfolio remains visible from Supabase cache and Finnhub fallback poller keeps prices reasonably fresh. User taps status indicator to re-connect.
+- Backend stops polling IB when session expires — no unnecessary IB API calls. Finnhub fallback poller picks up the slack.
+- If IB session is killed externally (user logged into TWS directly), next backend poll detects auth error → marks expired → status indicator turns red.
 
 ### Connection Status Header
 - Always-visible status dot in header next to market period badge
@@ -148,31 +147,47 @@ docker compose restart cloudflared
 
 ### Signal Model (MVP — SELL signals on held positions only)
 
+**Naming consistency:** the LLM's confidence in its analysis is called `signalQuality` in the schema/code (0-100) and displayed as "Quality" in the UI. Avoid the word "confidence" outside LLM prompts to prevent ambiguity with the separate Price Proximity metric.
+
 **Trigger:** Manual only. Two-step intentional friction:
 1. User taps "Analyze" on ticker detail
 2. Button greys out for 1 second
 3. Button shows "Confirm analyze" — user taps again to confirm
 4. Analysis runs (~5-15 seconds)
 
+**Re-analyze soft-block:** if the user re-triggers Analyze on the same symbol within 5 minutes of the last completed analysis, the BE returns HTTP 429 with `{ lastAnalyzedAt }`. The FE renders "Last analyzed 3 min ago — re-analyze anyway?" with a confirm button. Confirm re-POSTs with `force: true`. Spends no LLM tokens by accident; doesn't get in the way of testing.
+
 **Concurrency lock (Supabase + Realtime):**
 - `analysis_locks` table with row per active analysis: `{ symbol, user_id, started_at, status }`
 - Supabase Realtime broadcasts lock to all connected clients → Analyze button disabled everywhere
 - On completion (success or error), lock row deleted → button re-enables, new signal appears via Realtime
-- Stale locks (>60s old) auto-cleaned by cron
+- Stale locks (>5 min old) auto-cleaned by cron. TTL chosen to comfortably exceed worst-case LLM response time.
 
 **Pre-LLM filters (skip analysis entirely):**
 - Skip positions with market value < $1,000 (configurable threshold)
 - Skip positions where user has manually disabled signal generation
 - DROPPED for MVP: "skip positions opened recently" filter (manual trigger means user controls timing)
 
+**Cost ceiling:** env `MAX_LLM_CALLS_PER_DAY` (default 50). Per-day counter in Redis, resets at midnight UTC. When exceeded, `/api/signals/analyze` returns 429 with `{ reason: 'daily_limit_reached' }` and the FE renders "Daily analysis limit reached — resets at midnight UTC". Cheap insurance against runaway spend, especially once a paid provider is in use.
+
+**LLM response validation:** every LLM response is parsed against a Zod schema. Malformed responses trigger one retry with a stricter "respond only in this JSON shape" prompt. Second failure writes a `no_signal` row with reason "LLM response malformed" and releases the lock — analysis fails soft, never crashes the api.
+
 **Signal structure (range-based, not point-based):**
 - Engine outputs SELL with a **price range** (e.g. $193-198) and **optimal price** (the HIGH of range, since selling high = better)
 - Signal is dormant until live price enters range
 - Client renders SELL badge when current price ≥ range low
-- **Two confidence metrics shown separately:**
-  - Signal Quality (0-100, LLM's confidence in the analysis — stable per signal)
+- **Two metrics shown separately:**
+  - Signal Quality (0-100, LLM's confidence in the analysis — **immutable** post-creation)
   - Price Proximity ("at optimal" / "approaching optimal" / "edge of range" — computed from live price)
 - Compact card shows: "Sell · 82% · $193–198 (target $198)"
+
+**Mutability rules for `signals` rows:**
+- **Immutable** (set on insert, never changed): `signalType`, `signalQuality`, `priceRangeLow`, `priceRangeHigh`, `optimalPrice`, `reasoning`, `indicatorBullets`, `indicatorSnapshot`, `analyzedAt`, `expiresAt`.
+- **Mutating** (updated by background jobs over time): `actualMaxSinceAnalysis`, `actualMinSinceAnalysis`, `enteredRangeAt`, `exitedRangeAt`, `actedOnAt`, `supersededByAnalysisId`.
+
+The LLM's call doesn't change after the fact; only the realized-outcome data accumulates.
+
+**Signal expiry:** `expiresAt = analyzedAt + LLM-provided timeframe` (e.g. analyzed Mon, timeframe "3-7 days" → expires Mon+7d). On expiry the signal is hidden from active position-card UI but kept forever in history. Accuracy fields keep updating for ~30 days post-expiry so "price hit target 2 days *after* the predicted window" is still recorded — useful learning data for future signal post-mortem.
 
 **No-signal as valid output:**
 - LLM can return `signalType: 'no_signal'` with a reason ("Indicators mixed: RSI overbought but volume increasing, earnings in 2 days adds uncertainty")
@@ -188,11 +203,13 @@ docker compose restart cloudflared
 - Latest signal shown on ticker detail by default with "Last analyzed: 3h ago · N previous analyses"
 - Signal History collapsible section shows full chronological list of past analyses for this ticker
 
-**Accuracy tracking (continuous, per signal):**
-- For each SELL signal: track `actualMaxSinceAnalysis` — highest price observed since signal generated
-- For each BUY signal (post-MVP): track `actualMinSinceAnalysis` — lowest price observed
-- Updated on every price tick during market hours
-- Stored in signal record for post-MVP accuracy view
+**Accuracy tracking (daily hindsight cron, not live):**
+- Once daily at ~4:30 PM ET, `accuracyUpdater` cron walks all non-superseded signals from the last 30 days.
+- For each: fetch today's intraday candles (5-min or hourly bars) from Finnhub via the rate-limited queue.
+- Update `actualMaxSinceAnalysis = max(prior, today_high)`, `actualMinSinceAnalysis = min(prior, today_low)`.
+- Stamp `enteredRangeAt` the first time intraday price entered `[priceRangeLow, priceRangeHigh]`; stamp `exitedRangeAt` on first subsequent exit.
+- This runs IB-independent (Finnhub-only), so accuracy tracking works even when the user has IB disconnected most of the time.
+- Daily granularity is sufficient — we don't need tick-level accuracy data to evaluate signal quality empirically over weeks/months.
 
 **Info badges (non-signal context, shown on cards):**
 - Earnings date proximity (e.g. "Earnings · 12d")
@@ -202,24 +219,59 @@ docker compose restart cloudflared
 - Material news (sentiment-flagged via Finnhub)
 - Analyst rating changes
 - Extreme social sentiment (very positive or very negative)
-- All shown in one row on compact card, trading signals shown FIRST, info badges AFTER
+- All shown horizontally on the compact card with right-edge ellipsis (a small "+N" pill) if there are more badges than fit. Trading signal pills render FIRST, info badges after. Card height stays fixed; overflow is signaled via the ellipsis pill, not by growing the card.
+
+### Profit-Taking Zone Detection (continuous)
+
+A position enters "profit-taking zone" when its unrealized P&L percent crosses a user-configurable threshold (default +2.0%, configurable in Settings under `user_preferences.profit_zone_threshold_pct`). This unifies what would otherwise be separate concepts (pre-market gap alerts, run-up alerts, news rallies, drawdown recoveries) into one mechanism: any cause that pushes P&L across the threshold triggers the same flow. Dedicated pre-market gap detection is **dropped** in favor of this unified model; gap-driven entries get a small visual marker but no separate notification.
+
+**State tracking (fields on `positions`):**
+- `zone_entered_at timestamptz null` — when current zone-membership began. NULL when not in zone.
+- `zone_exited_at timestamptz null` — when last zone-membership ended (kept for post-mortem).
+- `last_zone_notification_at timestamptz null` — cooldown anchor.
+- `entered_zone_via_gap boolean default false` — true if zone-entry happened between yesterday's close and today's open. Cleared at end of regular session.
+
+Zone state is recomputed on every `positions` row write by both `ibPricePoller` and `finnhubPricePoller` (see "Multi-source price polling"). A position is `inZone` when `pnl_percent >= profit_zone_threshold_pct`.
+
+**Notifications:**
+- On zone-entry (transition `!inZone → inZone`), fire one Discord notification to `#upside-zones` (separate channel from signal-range notifications so the user can independently tune Discord notification settings).
+- Re-entry suppressed by a 4-hour cooldown keyed on `last_zone_notification_at`. Position can enter, exit, and re-enter within the cooldown window without triggering a new notification. Avoids chop spamming the user near the threshold.
+- Zone-exit does NOT fire a notification in MVP (would create noise). Exit data is recorded for post-MVP analysis ("opportunity to take profit at +2.3% passed, position now at +0.8%" — useful for the signal post-mortem feature).
+
+**UI emphasis on PositionCard:**
+- When `inZone === true`, render a small icon (specific glyph TBD at implementation; candidates: ⇡, lightning bolt, upward arrow) next to the P&L number on the card.
+- On hover (desktop) or long-press (mobile), show tooltip: `"Profit-taking zone — P&L crossed +{threshold}% threshold. Consider analyzing."`.
+- When `entered_zone_via_gap`, additionally render a small "GAP" badge near the zone icon for the current trading day. Reasoning: gap-driven moves frequently fade at open due to overnight profit-taking by others — the badge tells the user "this is in zone because of a gap, watch for fade."
+- Gap badge persists from market open until end of regular session, then clears. Zone state itself persists as long as P&L stays above threshold.
+- Card structural layout is NOT altered — the icon and badge are the only affordances. Tapping either expands a small inline "Analyze for profit-taking?" shortcut that pre-fills the contextualTrigger so the LLM addresses the situation directly.
+
+**LLM context — `contextualTriggers`:**
+- `signalEngine` includes a `contextualTriggers` field on every LLM analysis request, structured as:
+  ```
+  {
+    inProfitTakingZone: { thresholdPct: number, currentPnlPct: number, viaGap: boolean } | null,
+    // post-MVP: imminentEarnings, recentInsiderTransaction, unusualVolume, etc.
+  }
+  ```
+- The LLM prompt reserves a "Contextual triggers" section. When triggers are non-null, the prompt instructs the LLM to address them specifically. For zone: "should we take profit here, or hold for more?" — and if `viaGap`, additionally: "zone entry was caused by an overnight gap, which often fades at open due to others taking profit."
+- The framework is forward-compatible: new trigger types can be added without prompt re-engineering. **Reserved in the prompt structure from Batch 14a onward** even though only `inProfitTakingZone` is populated initially.
 
 ### Realtime Update Architecture (no push notifications in MVP)
 - All clients subscribe to Supabase Realtime on `positions`, `signals`, `analysis_locks` tables
 - Backend writes to Supabase → Realtime pushes change notification to clients → clients pull latest data from Supabase (source of truth)
-- Push notifications DROPPED from MVP — Realtime handles online users. Offline users see updates when they next open the app.
-- Push notifications return post-MVP when automated signal scanning is added (user might be alerted when not in app)
+- Push notifications DROPPED from initial MVP and **re-added in Batch 16** as PWA push (web-push library, VAPID keys). Discord remains the developer/admin channel; PWA push is user-facing. Both fire on the same triggers (zone-entry, signal-range-entry).
+- Offline users see updates when they next open the app (Realtime catches them up).
 
 ### Supabase Schema (tables)
-- `positions` — current holdings per user, written by `pricePoller`, read via Realtime by the FE
-- `signals` — range-based signal records per analysis (range, indicators, reasoning, accuracy tracking)
-- `user_preferences` — sort order, theme, LLM provider, signal threshold, suppressed symbols
-- `analysis_locks` — concurrency control for signal analysis
+- `positions` — current holdings per user, written by `pricePoller`, read via Realtime by the FE. Includes zone-tracking fields (`zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap`) and source-tracking (`price_source` enum `'ib' | 'finnhub'`, `last_price_update_at`) for multi-source polling.
+- `signals` — range-based signal records per analysis (range, indicators, reasoning, accuracy tracking). Includes `acted_on_at` for user judgment data.
+- `user_preferences` — sort order, theme, LLM provider, signal threshold (generation-time minimum), suppressed symbols, `profit_zone_threshold_pct` (default 2.0)
+- `analysis_locks` — concurrency control for signal analysis (5-min TTL)
 - `access_attempts` — Google OAuth attempts (granted + non-whitelisted)
 - `contracts` — per-conid metadata cache (company_name, industry, category, currency, exchange). Populated lazily; weekly refresh
-- `ib_api_metrics` — per-IB-call instrumentation (endpoint, duration_ms, retries, status). 30-day TTL. Foundation for empirical perf tuning
+- `external_api_metrics` — per-API-call instrumentation (provider: `'ib' | 'finnhub'`, endpoint/category, duration_ms, retries, status). 30-day TTL. Replaces the original `ib_api_metrics` table by adding a `provider` column. Foundation for empirical perf tuning of both IB and Finnhub call patterns.
 - `app_config` — key/value runtime config (`{ key, value, updated_at }`). Currently holds `api_url` (current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription). Public read via RLS, service-role write only. See "Public URL Discovery" in Architecture for the self-healing mechanism. Designed as a generic home for future runtime flags too.
-- `position_history` — **DROPPED from MVP**. Originally planned for daily snapshots; not needed because MTD comes from IB account summary and accuracy tracking lives on the signals row itself. Re-add when we want historical P&L charts.
+- `position_history` — **DROPPED entirely.** Originally planned for daily snapshots. Not needed because MTD comes from a Redis-cached month-start portfolio value (set on first poll of each new month) and accuracy tracking lives on the `signals` row itself. If post-MVP historical P&L charts ever need this, IB transactions API can rebuild the data on demand — no live retention required.
 
 ### LLM Provider Abstraction
 - Provider-agnostic interface in backend: `analyzePosition(context: PositionContext) → Signal`
@@ -236,9 +288,9 @@ docker compose restart cloudflared
 
 ### Data Sources (simplified)
 - **IB API provides**: real-time prices (subscribe-then-poll snapshot), OHLCV bars (any interval/timeframe), volume, historical data (20+ years), fundamentals (P/E, EPS, market cap, beta, 52-week range), position/account data, transactions, account summary (incl. MTD return).
-- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance, volume profile, **VWAP** (IB's snapshot endpoint does NOT expose VWAP as a field; we compute it from intraday history bars in `server/src/services/technicals.ts`), VWAP divergence, **`tradingDaysHeld`** (intended source: IB's transactions endpoint — find entry date for each held position, count trading days since. **⚠ Verification pending at Batch 9 implementation**: confirm the transactions endpoint exists, returns the data we need, and is reliable for all positions. Fallback if not: track entry-date in Upside from when we first see a position, accept that pre-Upside positions show 0 until next user-confirmed entry).
-- **From IB account summary**: month-to-date (MTD) return — intended source is `/v1/api/portfolio/<acctId>/summary` or equivalent (**⚠ Verification pending at Batch 9 implementation**: confirm endpoint name and response shape for MTD field). Fallback if missing: compute from a lightweight position-value-at-month-start snapshot kept in Redis.
-- **Finnhub provides**: company news + sentiment scores, insider transactions, earnings calendar + estimates, basic financials (supplementary)
+- **Computed locally from IB data**: RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance, volume profile, **VWAP** (IB's snapshot endpoint does NOT expose VWAP as a field; we compute it from intraday history bars in `server/src/services/technicals.ts`), VWAP divergence, **`tradingDaysHeld`** (intended source: IB's transactions endpoint — find entry date for each held position, count trading days since. **⚠ Verification pending at Batch 13.5 implementation**: confirm the transactions endpoint exists, returns the data we need, and is reliable for all positions. Fallback if not: track entry-date in Upside from when we first see a position, accept that pre-Upside positions show 0 until next user-confirmed entry).
+- **From IB account summary**: month-to-date (MTD) return — intended source is `/v1/api/portfolio/<acctId>/summary` or equivalent (**⚠ Verification pending at Batch 13.5 implementation**: confirm endpoint name and response shape for MTD field). Fallback if missing: compute from a lightweight position-value-at-month-start snapshot kept in Redis.
+- **Finnhub provides**: company news + sentiment scores, insider transactions, earnings calendar + estimates, basic financials (supplementary), intraday candles (fallback price source when IB is disconnected, and primary source for daily hindsight accuracy tracking). All Finnhub calls route through the rate-limited request queue (see below).
 - **Alpha Vantage**: DROPPED — 25 calls/day too limiting, all technicals computed locally instead
 - **Sparklines**: fetched live from IB (7 daily bars per ticker), current day updates in real-time. No overnight batch needed.
 
@@ -246,6 +298,39 @@ docker compose restart cloudflared
 - Global: 10 requests/second via Client Portal API
 - Historical data: no hard limit for bars ≥1 min, but soft pacing — avoid >60 requests/10 min
 - With <10 positions, rate limits are not a concern. Redis cache prevents redundant calls.
+
+### Finnhub Rate-Limited Queue
+
+All Finnhub calls in the codebase route through `server/src/services/finnhubQueue.ts` — a fair scheduler that prevents rate-limit errors even under burst load.
+
+**Design:**
+- Token-bucket limiter at 50 calls/min globally (10-call buffer below Finnhub's 60/min free-tier ceiling). Configurable via env `FINNHUB_RATE_LIMIT_PER_MIN`.
+- Each request declares a `category` (`quote`, `candle`, `news`, `insider`, `earnings`, `profile`, etc.) and a `key` (typically ticker symbol).
+- **Per-category min-interval-per-key**: requests for the same `(category, key)` within the configured min-interval **wait for the next eligible slot** rather than firing immediately or returning cached data. No stale-cache returns — a waiting caller always gets fresh data when their request eventually fires. Worst-case wait equals the category's min-interval (e.g. 60s for `quote` in fallback mode).
+- FIFO ordering within a category; categories share the global token bucket.
+- Exponential backoff + 1 retry on any 429 response (defensive — shouldn't happen given the buffer).
+- Exposed API: `finnhubQueue.request<T>(category, key, fn: () => Promise<T>): Promise<T>`.
+
+**Initial config (Batch 13.7):** all categories default to 0s min-interval (queue acts purely as a rate limiter, not a throttle).
+
+**Tuned config (Batch 13.9, post-feature-implementation):** per-category min-intervals set based on actual usage. Approximate initial values to be refined empirically:
+- `quote`: 60s per-key (fallback-only — when IB is on, this never fires)
+- `candle`: 4h per-key (accuracy cron runs once daily)
+- `news`: 15min per-key
+- `insider`: 12h per-key
+- `earnings`: 24h per-key
+- `profile`: 7d per-key
+
+### Multi-source price polling (IB primary, Finnhub fallback)
+
+The "real-time loop" in the Three Loops section is implemented as two cooperating pollers that write to the same `positions` row:
+
+- **Primary (`ibPricePoller`)**: runs only when IB session is `connected`. Adaptive cadence (10s / 60s / 5min depending on market period). Writes to Supabase with `price_source: 'ib'` and stamps `last_price_update_at`. Best granularity, best data, but requires user to have IB connected.
+- **Fallback (`finnhubPricePoller`)**: runs continuously, 60s cadence, always-on. For each held position, if `last_price_update_at` is null or older than 90s, fetches a quote via `finnhubQueue.request('quote', symbol, ...)` and writes with `price_source: 'finnhub'`. Routes through the rate-limited queue, so no risk of 429s even with many positions.
+
+Both pollers recompute zone state on every write (see "Profit-Taking Zone Detection"). The FE renders `current_price` agnostic to source. A small "Live IB" / "Finnhub backup" indicator on cards can be added in a polish pass if useful — deferred from MVP since the freshness signal is already in the IB status dot in the header.
+
+**Why this is better than the original always-IB design:** matches the on-demand IBeam model from Batch 13. Prices update in Supabase even when the user has IB disconnected to use IBKR Mobile. Zone notifications and signal-range notifications keep firing. The user gets a working app whether or not IB is currently up; IB just makes things sharper.
 
 ### Supabase Keepalive
 - Backend pings Supabase with a lightweight query every few hours to prevent 7-day inactivity pause
@@ -258,15 +343,20 @@ docker compose restart cloudflared
 - Can decompose later if needed (e.g., Python ML service), but unnecessary for MVP
 
 ### Three Loops in the Node.js App
-1. **Real-time loop** (every 5-15s during market hours): Poll IB → cache in Redis → write to Supabase → Supabase Realtime pushes to client
-2. **Signal loop** (every 15-30 min during market hours): For each eligible position → fetch IB bars → compute technicals → fetch Finnhub news → send to LLM → write signal to Supabase → client pulls on Realtime notification → push notification if above threshold
-3. **Keepalive loop** (every few hours): Supabase ping + IB session tickle
+1. **Multi-source price polling** (continuous, IB primary + Finnhub fallback):
+   - `ibPricePoller`: runs only when IB session is `connected`. Adaptive cadence (10s / 60s / 5 min by market period). Writes with `price_source: 'ib'`.
+   - `finnhubPricePoller`: runs continuously, 60s cadence, only writes if `ibPricePoller` hasn't written within the last 90s. Routes through the Finnhub rate-limited queue. Writes with `price_source: 'finnhub'`.
+   - Both pollers recompute zone state on each write and trigger any zone/signal-range Discord notifications inline.
+2. **Daily hindsight accuracy cron** (`accuracyUpdater`, once daily at ~4:30 PM ET): for each non-superseded signal in the last 30 days, pull today's intraday candles from Finnhub, update `actualMaxSinceAnalysis` / `actualMinSinceAnalysis`, stamp `enteredRangeAt` / `exitedRangeAt` as appropriate. IB-independent.
+3. **Keepalive loop** (every few hours): Supabase ping + IB session tickle (when IB is connected).
+
+Signal generation is **user-triggered only** in MVP — there is no automated signal scanning cron. Automated scanning is post-MVP, paired with PWA push notifications so users get alerted when not in the app.
 
 ---
 
 ## MVP Build Order
 
-> **Operational sequencing lives in `BUILD_QUEUE.md`.** The Sprint outline below is a planning ladder describing what gets built and roughly in what phase. The actual execution unit is the **batch**, tracked in `BUILD_QUEUE.md`, with per-batch claims in `CLAIMS.md`. When the two disagree, the queue wins. The "data-only live" milestone (phone shows real portfolio + auth working, no signals yet) is reached after Batch 13 in the queue.
+> **Operational sequencing lives in `BUILD_QUEUE.md`.** The Sprint outline below is a planning ladder describing what gets built and roughly in what phase. The actual execution unit is the **batch**, tracked in `BUILD_QUEUE.md`, with per-batch claims in `CLAIMS.md`. When the two disagree, the queue wins. The "data-only live" milestone (phone shows real portfolio + auth working, no signals yet) was reached at Batch 13. Remaining MVP work is laid out as Batches 13.1, 13.5, 13.7, 13.8, 14a, 14b, 14c, 14d, 14.5, 13.9, 15, and 16.
 
 ### Sprint 1 — Get data on screen (~1 week)
 1. IB gateway + Node.js API proxy on Oracle VPS
@@ -274,7 +364,7 @@ docker compose restart cloudflared
 3. Supabase setup + Google OAuth auth + email whitelist
 
 ### Sprint 2 — Make it live (~1 week)
-4. Real-time price updates (WebSocket/polling from IB, all sessions)
+4. Real-time price updates (multi-source: IB primary, Finnhub fallback)
 5. Sparklines (7-day daily closes) + P&L tint intensity
 6. VWAP computed BE-side from intraday bars (IB doesn't expose VWAP as a snapshot field; `server/src/services/technicals.ts:vwap()`)
 7. Sort views (P&L, custom drag)
@@ -286,30 +376,39 @@ docker compose restart cloudflared
 11. Signal detail view (Style A analytical breakdown)
 12. Signal history per ticker
 13. Analysis lock pattern (concurrent-safe via Supabase Realtime)
+14. Profit-taking zone detection with Discord notifications
 
 ### Sprint 4 — Polish (~1 week)
-14. Alerts feed screen (Positions only in MVP)
-15. Settings screen (MVP scope: IB connection, signal preferences, theme, LLM provider)
-16. Multi-device sync via shared IB session in Redis
+15. Alerts feed screen (Positions only in MVP)
+16. Settings screen (MVP scope: IB connection, signal preferences, theme, LLM provider, profit-zone threshold)
+17. PWA push notifications (same triggers as Discord)
+18. Multi-device sync via shared IB session in Redis
 
 ### Out of MVP — DROPPED
-- ❌ Push notifications (Supabase Realtime handles online users; users not in app don't need urgent alerts in MVP)
 - ❌ Watchlists (regular and active) — first thing post-MVP
 - ❌ BUY signals (only SELL signals in MVP since BUY relates to entries/watchlist)
 - ❌ Automated signal scanning / cron-based analysis
 - ❌ Alpha Vantage (all technicals computed locally)
 - ❌ Upstash Redis external (self-hosted in Docker)
-- ❌ IBeam / automated IB login (manual via browser autofill)
+- ❌ IBeam / automated IB login (manual via browser autofill) — superseded by **on-demand IBeam** in Batch 13
+- ❌ Pre-market gap detection as a separate cron — replaced by continuous profit-taking zone detection (a gap that crosses the threshold fires the same notification as any other cause). Pre-market gap context is preserved as a UI badge on cards for the day.
+- ❌ Live tick-by-tick accuracy tracking — replaced by daily hindsight cron from Finnhub intraday candles. Cheap, IB-independent, sufficient granularity.
+- ❌ `position_history` table — never had a real consumer; MTD comes from Redis cache, accuracy lives on `signals`.
 
 ### Post-MVP (in priority order)
 1. Active Watchlist (BUY signals on whatever ticker)
 2. Regular Watchlists (read-only mirror from IB)
-3. Push notifications (when automated scanning is added)
-4. AI chat (conversational portfolio Q&A)
-5. Natural language ticker screener
-6. Trade journal with %/day metric
-7. Signal accuracy tracking view (aggregated stats from per-signal accuracy data)
-8. Options / shorts / trade execution
+3. **Signal post-mortem with thumbs-up/down feedback** — auto-generates one-line outcome per expired/hit signal ("Sell signal on NVDA at $193-198 expired after 7 days, price peaked at $196.40 — didn't reach optimal"), aggregates over time into "your accuracy on this LLM provider"
+4. **"What changed" digest** — morning summary of overnight moves, upcoming earnings, new insider activity, zone-state changes. Discord-deliverable too. High signal density per screen.
+5. **Position thesis** — user-editable text per position included in LLM analysis context. Forces articulation of why you hold what you hold, makes signals more personal.
+6. AI chat (conversational portfolio Q&A)
+7. Natural language ticker screener
+8. Trade journal with %/day metric
+9. **Additional `contextualTriggers`** — imminent earnings (<24h), recent insider transactions, unusual volume, news-event proximity. Wire into the same `contextualTriggers` field reserved in Batch 14a.
+10. **"Why didn't this fire?" inverse query** — cheap LLM call explaining why a position has no current signal. Different from full Analyze: cheaper, faster, no commitment. Builds trust in the no-signal state.
+11. **Replay mode** — view historical app state ("what would the app have shown 5 days ago?"). Killer feature for evaluating whether the system would have caught a move.
+12. **Voice quick-analyze** — "Hey Upside, what about NVDA?" via Web Speech API. Free; matches the phone-first product shape.
+13. Options / shorts / trade execution
 
 ---
 
@@ -346,12 +445,12 @@ Each card represents one held position. Layout per card:
 
 ```
 ┌──────────────────────────────────────────────┐
-│ NVDA          +$3,240 (+18.2%)  ▁▂▃▄▅  $140.40 │
+│ NVDA       ⇡ +$3,240 (+18.2%)  ▁▂▃▄▅  $140.40 │
 │ NVIDIA Corp                          +$1.82 (+1.3%) │
 │                                      ↑ +0.8% VWAP │
 │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░ (portfolio weight bar) │
 ├──────────────────────────────────────────────┤
-│ [Sell · 82%] Resistance $141 + RSI 74, exit 1–3d  > │
+│ [Sell · 82%] [Earnings · 12d]    [+2] >  │
 └──────────────────────────────────────────────┘
 ```
 
@@ -360,6 +459,8 @@ Each card represents one held position. Layout per card:
 - Company name (10px, tertiary color, truncated with ellipsis at ~76px)
 
 **Center area (flex):**
+- Optional zone icon (⇡) immediately before the P&L number when `inZone === true`. Hover/long-press tooltip: "Profit-taking zone — P&L crossed +X% threshold. Consider analyzing."
+- Optional "GAP" mini-badge after the zone icon when `entered_zone_via_gap === true` (current trading day only).
 - Unrealized P&L combined: `+$3,240 (+18.2%)` — dollars first, percent in brackets (13px, weight 500)
   - Green for gain, red for loss, gray for near-zero (threshold: ±1%)
 - Sparkline (44x20px inline SVG) — 7-day price shape
@@ -391,25 +492,27 @@ Each card represents one held position. Layout per card:
   - 10-20%: opacity ~0.10
   - 20%+: opacity ~0.14
 
-**Signal row (conditional — only shown when a signal exists):**
+**Signal + badge row (conditional — only shown when at least one badge or signal exists):**
 - Separated by a thin border-top (0.5px)
-- Signal pill badge: `[Sell · 82%]`, `[Add · 71%]`, `[Earnings · 12d]`
-  - Sell pill: red background, dark red text
-  - Buy/Add pill: green background, dark green text
-  - Event pill: blue background, dark blue text
-  - Watch pill: amber background, dark amber text
-- Short signal summary text (11px, secondary color)
+- Horizontal flex layout, scroll/clip to single line, right-edge ellipsis pill ("+N") if overflow
+- Trading signal pills render FIRST in priority order: `[Sell · 82%]`, `[Buy · 71%]` (post-MVP)
+- Then info badges: `[Earnings · 12d]`, `[Insider · sell]`, `[Vol · 2.3x]`, etc.
+- Signal pill colors:
+  - Sell: bg #FCEBEB / text #791F1F (dark: bg #501313 / text #F09595)
+  - Buy: bg #EAF3DE / text #173404 (dark: bg #173404 / text #97C459)
+  - Event: bg #E6F1FB / text #042C53 (dark: bg #042C53 / text #85B7EB)
+  - Watch (info badges): bg #FAEEDA / text #633806 (dark: bg #412402 / text #FAC775)
+- "+N" overflow pill is muted gray
 - Chevron-right arrow at far right indicating tap-to-expand
-- Tapping opens the Signal Detail view (Style A)
+- Tapping anywhere on the signal pill opens the Signal Detail view (Style A); tapping an info badge opens the relevant section in TickerDetail
 
-**Cards without signals** have no signal row — clean, compact card.
+**Cards without any signal or badge** have no signal row — clean, compact card.
 
 #### Bottom Navigation Bar
-Four tabs with icons + labels:
+Three tabs with icons + labels (MVP scope — Watchlist and Chat dropped):
 - Portfolio (ti-chart-pie) — active
-- Screener (ti-search) — post-MVP, can show "coming soon"
-- Chat (ti-message-chatbot) — post-MVP
 - Alerts (ti-bell)
+- Settings (ti-settings)
 
 ---
 
@@ -474,12 +577,13 @@ Dense, customizable stats panel:
 
 **Signal Section** (only if active signal exists):
 - Icon: ti-alert-triangle (colored by signal type)
-- Header: signal type + confidence (e.g. "Sell · 82%")
+- Header: signal type + Quality (e.g. "Sell · 82%")
 - Body contains:
   - Signal summary text (1-2 sentences)
+  - If position `inZone`: inline "Analyze for profit-taking?" shortcut button that triggers a normal Analyze flow (the `contextualTriggers` get auto-attached server-side based on current zone state)
   - "Full signal breakdown" expandable section
   - Full breakdown (Style A):
-    - Confidence bar (0-100%, colored fill)
+    - Quality bar (0-100%, colored fill)
     - Timeframe: "3-7 days" / "Intraday" / "1-2 weeks"
     - Target price range: "$136-138"
     - Risk/reward ratio: "1:2.4"
@@ -512,20 +616,24 @@ Dense, customizable stats panel:
 
 ### Screen 3: Alerts Feed
 
-Chronological list of all generated signals and notifications. 
+Chronological list of all generated signals, zone-entries, and (post-MVP) info badges that fired notifications.
 
 #### Top Controls
-- Confidence threshold slider: "Show signals above ___%" (range: 0-100, default 50)
-- Filter pills: All, Sell, Buy, Events
+- **Display filter slider**: "Show signals above ___% Quality" (range: 0-100, default 50). **This is a display filter only — it does NOT affect what gets generated.** Settings has a separate "Signal generation threshold" which is the BE-level minimum for bothering to generate at all.
+- Filter pills: All / Sell / Zone-Entry / no_signal
+
+#### Aggregate Accuracy Display (top of feed)
+Pulled from `GET /api/signals/accuracy` (Batch 14b). Format: "Recent SELL signals: X% hit-rate over 30d, median +Y% from optimal price." Placeholder copy if data is sparse in early days.
 
 #### Feed Items
 Each item:
 - Timestamp (relative: "2h ago", "Yesterday 3:42 PM")
-- Ticker + signal pill badge
+- Ticker + signal pill badge (or zone-entry pill for zone events)
 - Short description
+- "I acted on this" button → POST sets `signals.acted_on_at` (or equivalent for zone events). Used in post-mortem feature later to compare LLM prediction vs. user action.
 - Tap to open signal detail
 
-Empty state for MVP: "No signals yet. Signals will appear here once the analysis engine is active."
+Empty state for MVP: "No signals yet. Tap Analyze on any position to generate one."
 
 ---
 
@@ -533,16 +641,19 @@ Empty state for MVP: "No signals yet. Signals will appear here once the analysis
 
 > **Settings are global, not per-ticker.** Every ticker detail screen looks the same — same layout, same market-stats panel, same chart controls. Whether you hold the position or not, the screen renders identically except that held positions display their position-stats section (shares, avg cost, P&L, etc.) and non-held positions don't. The inline edit panel inside TickerDetail's MarketStats component is a *convenience* surface for adjusting display preferences — but the resulting settings are stored once in `user_preferences.stat_config` and apply to **all** ticker screens.
 
-**Settings persistence:** All user-settable preferences live in the `user_preferences` Supabase table (one row per user, keyed by Supabase user ID). The FE writes through the BE (`PUT /api/user/preferences` or equivalent — to be added in Batch 15) which validates and upserts the row. On app load, the FE reads the row once and subscribes to Realtime so multi-device users see changes propagate.
+**Settings persistence:** All user-settable preferences live in the `user_preferences` Supabase table (one row per user, keyed by Supabase user ID). The FE writes through the BE (`PUT /api/user/preferences` — added in Batch 15) which validates and upserts the row. On app load, the FE reads the row once and subscribes to Realtime so multi-device users see changes propagate.
 
 **App-level Settings (MVP scope):**
 
-- **IB Connection**: Status indicator (connected/disconnected/session expired), last sync time, reconnect button
-- **Signal Preferences**: Confidence threshold slider (same as alerts), signal_min_market_value, suppressed symbols list
-- **Notifications**: DROPPED from MVP (no push notifications). Quiet-hours UI deferred until push returns post-MVP.
-- **Display**: Dark/light mode toggle (or system default), market period display preferences, market-stats config (which 6-8 stats appear on the TickerDetail MarketStats panel)
-- **LLM Provider**: Dropdown (Gemini / Claude / OpenAI) — selects which provider the user-triggered signal analysis uses
-- **Account**: Email, sign out
+- **IB Connection**: Status indicator (connected/disconnected/session expired/stopped), last sync time, Connect/Disconnect button (uses on-demand IBeam flow from Batch 13).
+- **Signal Generation Threshold**: minimum `signalQuality` below which the BE doesn't generate a signal (or marks it `no_signal`). Acts at generation time. **Distinct from the Alerts feed display filter.**
+- **Signal min market value** ($): persists to `user_preferences.signal_min_market_value`.
+- **Suppressed symbols**: text list — symbols where Analyze is disabled.
+- **Profit-Taking Zone Threshold**: slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`. Determines when a position enters profit-taking zone and triggers Discord notification + card icon.
+- **Theme**: Dark / Light / System.
+- **LLM Provider**: Dropdown (Gemini / Claude / OpenAI). Selects which provider the next signal analysis uses.
+- **Notifications** (Batch 16): PWA push permission status, quiet-hours toggle. Discord-only is acceptable MVP if scope tightens.
+- **Account**: Email, sign out.
 
 ---
 
@@ -592,50 +703,75 @@ Must be fully supported. All colors must work in both modes. Use CSS variables t
 ## Data Flow
 
 ### IB API → Backend (Container 2 → Container 1)
-1. Node.js app communicates with IB Client Portal Gateway via localhost:5000
+1. Node.js app communicates with IB Client Portal Gateway via internal hostname `ib-gateway:5000`
 2. Key endpoints used:
    - `GET /portfolio/{accountId}/positions` — current positions
-   - `GET /portfolio/{accountId}/summary` — account summary (total value, P&L)
+   - `GET /portfolio/{accountId}/summary` — account summary (total value, P&L, MTD)
    - `GET /iserver/marketdata/snapshot` — live quotes (price, VWAP, volume)
    - `GET /iserver/marketdata/history` — historical bars for sparklines/charts/technicals
+   - `GET /portfolio/{accountId}/transactions` — for `tradingDaysHeld` (verify in Batch 13.5)
    - `GET /portfolio/{accountId}/ledger` — P&L breakdown
    - `POST /tickle` — session keepalive (every 30s)
    - `POST /iserver/auth/ssodh/init` — re-initialize session after expiry
 
 ### Backend → Frontend (Oracle VPS → Vercel)
-- REST API for initial data load
+- REST API for initial data load (with public URL discovered from `app_config.api_url`)
 - Supabase Realtime for live updates: backend writes to Supabase → Supabase pushes change notification to client → client pulls updated data from Supabase (source of truth)
-- Push notifications (PWA) as a separate alert channel when app is not open
+- PWA push notifications (Batch 16) as a separate alert channel when app is not open
 
 ### Backend → Supabase
-- Position data (latest state + historical snapshots)
-- User preferences (sort order, confidence threshold, stat customization, signal suppression per position)
-- Generated signals and their outcomes (for future accuracy tracking)
-- Auth (user session, JWT tokens)
+- Position data (latest state, written by both IB and Finnhub pollers)
+- User preferences (sort order, thresholds, stat customization, signal suppression, profit-zone threshold)
+- Generated signals and their accumulating accuracy data
+- Auth (user session, JWT tokens via Supabase Auth)
+- Runtime config (`app_config.api_url`)
+- API call instrumentation (`external_api_metrics`)
 
 ### Backend → Redis (Container 2 → Container 3)
+- Daily LLM call counter (`llm_calls:YYYY-MM-DD`, midnight-UTC TTL) for cost ceiling
 - Cache IB market data responses (TTL: 5-15s) to prevent redundant calls within polling interval
-- Cache Finnhub responses (TTL: 5-15 min) to avoid hitting 60 calls/min limit
-- Cache computed technicals per position (TTL: matches signal loop interval)
-- Session data if needed
+- Cache computed technicals per position (TTL: matches analysis cadence)
+- Portfolio-value-at-month-start cache for MTD fallback computation (set once per month, no TTL)
+- Session-related data if needed
 
-### Signal Engine Flow (runs every 15-30 min during market hours)
-1. **Filter**: Check each position against signal filters (market value ≥ $200, not suppressed, not too new)
-2. **Collect**: Fetch OHLCV bars from IB for each eligible position (from Redis cache if fresh, else from IB)
-3. **Compute**: Calculate RSI, MACD, Bollinger, VWAP divergence, support/resistance, volume profile using `technicalindicators` library
-4. **Enrich**: Fetch news + sentiment + insider trades + earnings from Finnhub for each position
-5. **Synthesize**: Send structured indicator state + news context to LLM (Gemini free tier) via provider-agnostic abstraction layer
-6. **Output**: LLM returns signal type (sell/buy/watch/event), confidence score (0-100), reasoning text, timeframe, target price range
-7. **Store**: Write signal to Supabase signals table
-8. **Notify**: Supabase Realtime notifies client of signals table change → client pulls new signal data → signal pill appears on position card. If confidence > user threshold and app is not open, send PWA push notification.
-6. Notify: If confidence > user threshold, trigger push notification
+### Backend → Finnhub
+- All calls route through `finnhubQueue.request(category, key, fn)`
+- Categories: `quote` (fallback polling), `candle` (accuracy cron), `news`, `insider`, `earnings`, `profile`
+- Per-category min-intervals set in Batch 13.9 once usage patterns are known
+
+### Signal Engine Flow (user-triggered, manual)
+1. **Pre-check**: re-analyze soft-block (last analysis within 5 min?) → 429 with confirm prompt if so. Daily cost ceiling → 429 if exceeded. Lock acquisition.
+2. **Filter**: skip if market value < threshold or symbol suppressed.
+3. **Collect**: Fetch OHLCV bars from IB (Redis cache if fresh).
+4. **Compute**: RSI, MACD, Bollinger, VWAP via `technicalindicators` library.
+5. **Enrich**: News + sentiment + insider + earnings from Finnhub (through the queue).
+6. **Context triggers**: read position's zone state; populate `contextualTriggers.inProfitTakingZone` if applicable.
+7. **Synthesize**: send structured indicator state + news context + contextualTriggers to LLM via the provider-agnostic abstraction.
+8. **Validate**: Zod-parse LLM response. On malformed: retry once with stricter prompt. Second failure: write `no_signal` row.
+9. **Store**: write signal to Supabase. Release lock.
+10. **Notify**: Supabase Realtime pushes new signal to FE → signal pill appears on position card and TickerDetail's SignalSection updates.
+
+### Profit-Taking Zone Flow (continuous, automated)
+1. **Both pollers** (IB and Finnhub) recompute zone state on every `positions` row write.
+2. On transition `!inZone → inZone`: check 4h cooldown on `last_zone_notification_at`. If outside cooldown, fire Discord notification to `#upside-zones`, set `last_zone_notification_at = now()`.
+3. Determine `entered_zone_via_gap` (zone-entry timestamp before today's market open) → set boolean flag for the day.
+4. Supabase Realtime pushes updated position to FE → zone icon (and gap badge if applicable) appears on card.
+
+### Signal-Range Entry Flow (continuous, automated)
+1. **Both pollers** check all open signals (not superseded, not expired) for the position being written.
+2. If `current_price` enters `[priceRangeLow, priceRangeHigh]` and `enteredRangeAt IS NULL`: fire Discord notification to `#upside-signals-sell`, set `enteredRangeAt`.
+
+### Accuracy Cron Flow (daily, ~4:30 PM ET)
+1. For each non-superseded signal in last 30 days: fetch today's intraday candles via Finnhub queue.
+2. Update `actualMaxSinceAnalysis`, `actualMinSinceAnalysis` based on today's high/low.
+3. Stamp `enteredRangeAt` / `exitedRangeAt` if intraday price crossed thresholds.
 
 ---
 
 ## PWA Requirements
 - Service worker for offline caching (show last-known portfolio state)
 - Web app manifest for home screen installation
-- Push notification support (Web Push API)
+- Push notification support via Web Push API (Batch 16)
 - Responsive: optimized for 375-430px width (iPhone/Android), usable on desktop
 - Target: <2s initial load, <500ms for subsequent navigations
 
@@ -668,57 +804,71 @@ upside/
 │   │   │   ├── Settings/
 │   │   │   │   └── IBLoginFlow.tsx
 │   │   │   └── common/
-│   │   │       └── CollapsibleSection.tsx
+│   │   │       ├── CollapsibleSection.tsx
+│   │   │       └── Tooltip.tsx           # used by zone icon hover/long-press
 │   │   ├── hooks/
 │   │   │   ├── usePositions.ts
 │   │   │   ├── useRealtimePrices.ts
-│   │   │   └── useSignals.ts
+│   │   │   ├── useSignals.ts
+│   │   │   ├── useAnalysisLock.ts
+│   │   │   └── useUserPreferences.ts
 │   │   ├── services/
 │   │   │   ├── supabase.ts
-│   │   │   └── api.ts           # REST calls to backend
+│   │   │   ├── api.ts                    # REST calls to backend (URL from apiUrl.ts)
+│   │   │   └── apiUrl.ts                 # public URL discovery
 │   │   ├── types/
 │   │   │   └── index.ts
 │   │   ├── utils/
-│   │   │   ├── formatters.ts    # currency, percent, P&L formatting
-│   │   │   └── calculations.ts  # tint opacity, VWAP comparison, %/day
+│   │   │   ├── formatters.ts             # currency, percent, P&L formatting
+│   │   │   └── calculations.ts           # tint opacity, VWAP comparison, %/day
 │   │   ├── App.tsx
 │   │   └── main.tsx
 │   ├── public/
-│   │   └── manifest.json
+│   │   ├── manifest.json
+│   │   └── service-worker.js             # added in Batch 16
 │   └── index.html
 ├── server/                 # Node.js backend — runs in Docker on Oracle VPS
 │   ├── src/
 │   │   ├── routes/
 │   │   │   ├── portfolio.ts
 │   │   │   ├── marketdata.ts
-│   │   │   ├── signals.ts
-│   │   │   └── auth.ts          # IB login proxy
+│   │   │   ├── signals.ts                # incl. /accuracy
+│   │   │   ├── auth.ts                   # IB + Google OAuth
+│   │   │   ├── user.ts                   # preferences PUT/GET
+│   │   │   └── health.ts                 # deep /healthz
 │   │   ├── services/
-│   │   │   ├── ibGateway.ts     # IB Client Portal API wrapper
-│   │   │   ├── ibMappers.ts     # Boundary transformers: raw IB shapes → our types
-│   │   │   ├── finnhub.ts       # News, sentiment, earnings
-│   │   │   ├── signalEngine.ts  # Technical analysis + LLM synthesis (Batch 14)
-│   │   │   ├── technicals.ts    # RSI, MACD, Bollinger, VWAP computation
-│   │   │   ├── llm.ts           # Provider-agnostic LLM abstraction layer
-│   │   │   ├── redis.ts         # Redis cache wrapper
-│   │   │   └── supabase.ts      # Supabase client for server-side writes
+│   │   │   ├── ibGateway.ts              # IB Client Portal API wrapper
+│   │   │   ├── ibMappers.ts              # Boundary transformers
+│   │   │   ├── finnhub.ts                # News, sentiment, earnings, quotes, candles
+│   │   │   ├── finnhubQueue.ts           # Rate-limited fair scheduler
+│   │   │   ├── signalEngine.ts           # Technical analysis + LLM synthesis
+│   │   │   ├── technicals.ts             # RSI, MACD, Bollinger, VWAP computation
+│   │   │   ├── llm.ts                    # Provider-agnostic LLM abstraction
+│   │   │   ├── discord.ts                # Multi-channel notifier (errors, zones, signals)
+│   │   │   ├── webPush.ts                # PWA push (Batch 16)
+│   │   │   ├── redis.ts                  # Redis cache wrapper + LLM cost counter + MTD cache
+│   │   │   ├── supabase.ts               # Supabase client for server-side writes
+│   │   │   └── tunnelWatcher.ts          # Watches cloudflared log → upserts app_config.api_url
 │   │   ├── scripts/
-│   │   │   └── captureIb.ts     # One-shot capture script (Batch 7 deliverable)
+│   │   │   └── captureIb.ts              # One-shot capture script (Batch 7 deliverable)
 │   │   ├── cron/
-│   │   │   ├── pricePoller.ts   # Real-time loop (5-15s)
-│   │   │   ├── signalRunner.ts  # Signal loop (15-30 min)
-│   │   │   └── keepalive.ts     # Supabase + IB session keepalive
+│   │   │   ├── ibPricePoller.ts          # Real-time loop, IB-only, adaptive cadence
+│   │   │   ├── finnhubPricePoller.ts     # Fallback poller, continuous, 60s
+│   │   │   ├── accuracyUpdater.ts        # Daily hindsight accuracy (Batch 14b)
+│   │   │   ├── lockCleanup.ts            # Stale analysis_locks cleanup (5-min TTL)
+│   │   │   └── keepalive.ts              # Supabase + IB tickle
 │   │   ├── middleware/
 │   │   └── index.ts
 │   ├── Dockerfile
 │   └── package.json
 ├── infra/
-│   └── clientportal.gw/      # Dockerfile that wraps IB's official clientportal.gw zip
+│   └── clientportal.gw/      # Fallback Dockerfile (not used in live stack; IBeam is)
 ├── supabase/
-│   └── migrations/           # 001_initial.sql, 002_align_with_ib.sql
+│   └── migrations/           # 001_initial.sql + sequential follow-ons
 ├── captures/                 # Raw IB JSON dumps (gitignored, Batch 7 output)
-├── docker-compose.yml       # 3 containers: IB Gateway, Node.js, Redis (+ optional cloudflared)
-├── .env.example             # LLM_PROVIDER, FINNHUB_KEY, SUPABASE_URL, etc.
+├── secrets/                  # IB credential files (gitignored)
+├── docker-compose.yml        # 4 services: ib-gateway (IBeam, on-demand), api, redis, cloudflared
+├── .env.example
 ├── package.json
 └── README.md
 ```
@@ -746,6 +896,25 @@ function getPnlColor(pnlPercent: number): 'gain' | 'loss' | 'neutral' {
   if (pnlPercent < -1) return 'loss';
   return 'neutral';
 }
+```
+
+### Zone Membership
+```
+function isInZone(pnlPercent: number, thresholdPct: number): boolean {
+  return pnlPercent >= thresholdPct;
+}
+
+// On each positions write:
+//   wasInZone = (priorRow.zone_entered_at !== null);
+//   nowInZone = isInZone(newPnlPct, prefs.profit_zone_threshold_pct);
+//   if (!wasInZone && nowInZone) {
+//     zone_entered_at = now();
+//     entered_zone_via_gap = (now() < todays_market_open);
+//     maybeFireDiscordNotification();  // with 4h cooldown check
+//   } else if (wasInZone && !nowInZone) {
+//     zone_exited_at = now();
+//     zone_entered_at = null;
+//   }
 ```
 
 ### %/Day Return
