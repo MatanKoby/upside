@@ -395,20 +395,260 @@ Signal generation is **user-triggered only** in MVP — there is no automated si
 - ❌ Live tick-by-tick accuracy tracking — replaced by daily hindsight cron from Finnhub intraday candles. Cheap, IB-independent, sufficient granularity.
 - ❌ `position_history` table — never had a real consumer; MTD comes from Redis cache, accuracy lives on `signals`.
 
-### Post-MVP (in priority order)
-1. Active Watchlist (BUY signals on whatever ticker)
-2. Regular Watchlists (read-only mirror from IB)
-3. **Signal post-mortem with thumbs-up/down feedback** — auto-generates one-line outcome per expired/hit signal ("Sell signal on NVDA at $193-198 expired after 7 days, price peaked at $196.40 — didn't reach optimal"), aggregates over time into "your accuracy on this LLM provider"
-4. **"What changed" digest** — morning summary of overnight moves, upcoming earnings, new insider activity, zone-state changes. Discord-deliverable too. High signal density per screen.
-5. **Position thesis** — user-editable text per position included in LLM analysis context. Forces articulation of why you hold what you hold, makes signals more personal.
-6. AI chat (conversational portfolio Q&A)
-7. Natural language ticker screener
-8. Trade journal with %/day metric
-9. **Additional `contextualTriggers`** — imminent earnings (<24h), recent insider transactions, unusual volume, news-event proximity. Wire into the same `contextualTriggers` field reserved in Batch 14a.
-10. **"Why didn't this fire?" inverse query** — cheap LLM call explaining why a position has no current signal. Different from full Analyze: cheaper, faster, no commitment. Builds trust in the no-signal state.
-11. **Replay mode** — view historical app state ("what would the app have shown 5 days ago?"). Killer feature for evaluating whether the system would have caught a move.
-12. **Voice quick-analyze** — "Hey Upside, what about NVDA?" via Web Speech API. Free; matches the phone-first product shape.
-13. Options / shorts / trade execution
+---
+
+## Post-MVP Roadmap
+
+This section captures the design intent for features that will be built **after** MVP completion (Batch 16). MVP scope is sealed; items here cannot enter MVP unless they become hard dependencies of an MVP item. This section is the design-lock for these features so when their batches eventually get written, the agent doesn't have to re-litigate architecture.
+
+Items are listed in approximate build order, with the Watchlist track first since it's the largest cohesive block and unlocks everything that follows it.
+
+---
+
+### Contextual Settings Pattern
+
+Before the post-MVP screens land, lock in a UX convention used throughout: **settings are contextual to the screen they affect, not centralized into one mega-settings-screen.**
+
+- **App-level Settings** (Settings tab in bottom nav) — only truly app-wide concerns: IB Connection, signal generation threshold, profit-zone threshold, theme, LLM provider, sign out.
+- **Per-screen Settings** — accessed via a gear icon (ti-settings) in the top-right of the screen header. Tapping opens a sheet/modal scoped to that context, not a full screen takeover.
+  - **Portfolio screen**: sort defaults, custom-sort drag order management.
+  - **Watchlists tab** (the list-of-watchlists view): "Unhide watchlists," reorder visible watchlists.
+  - **Single watchlist screen**: "Unhide tickers in this watchlist," watchlist-specific display preferences.
+  - **TickerDetail screen**: already exists as the inline "Edit" link on MarketStats; stays.
+  - **Alerts screen**: display-filter defaults, "Mark all seen" controls (if added).
+
+The pattern keeps the app-level Settings screen clean and lets each surface own its own concerns. When adding a new screen in the future, check if any of its preferences are screen-scoped — if yes, they belong in that screen's gear icon, not in app-level Settings.
+
+---
+
+### Track 1: Watchlists + BUY Signals
+
+**Goal:** unlock buy-side intelligence. User can see all tickers they're tracking in IB, hide noise, get BUY signals on demand for any tracked ticker, and have an auto-populated "Active Watchlist" of tickers currently showing live BUY signals.
+
+#### Architecture: three list-of-tickers surfaces
+
+All flow into the same TickerDetail screen. Three contexts differ in **how the list is populated**:
+
+1. **Portfolio** — system-written from IB positions. User has zero curation.
+2. **Watchlists (regular)** — one-way mirror from IB watchlists. System-written from IB. User has zero curation **in MVP-style write semantics** — Upside cannot create, rename, or edit membership. Watchlists in Upside follow IB's lead the same way Portfolio does.
+3. **Active Watchlist** — system-written, derived from signal state. Contains every ticker (from any watchlist) that currently has a live, non-superseded, non-expired BUY signal.
+
+User curation lives in a single Upside-side mechanism: **hide**. Watchlists can be hidden from the tab strip. Tickers within a watchlist can be hidden from the list. Hiding is reversible via per-screen Settings. Hiding ≠ deleting — the IB-mirrored data is untouched, only the visibility flag is Upside-side.
+
+When the user truly wants a watchlist (or ticker on it) gone permanently, they delete it in IB. Upside's next sync removes it. **One source of truth for membership: IB.**
+
+This is the same trust pattern as Portfolio. The user trusts IB to be the system of record for what they own and what they're tracking; Upside layers intelligence and presentation on top, but doesn't try to be a second source of truth.
+
+#### Two-way creation: deferred
+
+Letting Upside create or edit IB-side watchlists is **explicitly deferred to a later post-MVP track**. Until that lands, the one-way model is the design.
+
+#### Bottom navigation expands to 4 tabs
+
+Order: **Portfolio · Watchlists · Alerts · Settings**
+
+(Chat icon dropped per MVP scope; no plans to bring it back at this stage.)
+
+#### Watchlists screen — top-level (the tab)
+
+Lists all visible watchlists. Tab-strip-style horizontal scroll across the top:
+
+```
+[ Active · ⭐ NVDA Watch · Earnings Week · Megacap · +hide-toggle gear ]
+```
+
+- **Active** is pinned leftmost. Cannot be hidden. Cannot be renamed. Cannot be deleted.
+- Regular watchlists come from IB in IB's order. User can hide; ordering follows IB.
+- Gear icon at far right → contextual settings sheet:
+  - "Unhide watchlists" — checklist of all currently-hidden IB watchlists, tap to unhide.
+  - (Future) "Reorder visible watchlists" if Upside-side reorder makes sense without conflicting with IB sync.
+
+Below the tab strip: the currently-selected watchlist's list of TickerCards.
+
+#### Single watchlist screen
+
+What you see when you tap into a specific watchlist tab. Vertical scroll of TickerCards (same component as Portfolio). Top-right gear icon → contextual settings sheet:
+- "Unhide tickers" — checklist of tickers in this watchlist that the user has hidden. Tap to unhide.
+- Display preferences if any emerge.
+
+Long-press on a ticker card → action menu including "Hide from this watchlist." Hiding a ticker only affects this watchlist; the same ticker on another watchlist (or in Portfolio) is unaffected.
+
+#### The Active Watchlist
+
+A derived virtual list. No stored membership — it's computed from `signals`:
+
+> Active = { all tickers where there exists a signal row with `signalType = 'buy'` AND `superseded_by_analysis_id IS NULL` AND `expires_at > now()` AND current price is within range OR within an "approaching" threshold of range }
+
+Recomputed on every signal change (Realtime) and every price write (poller). Rendered with the same TickerCard component. BUY signal pill always present (it's the membership criterion).
+
+User cannot manually add or remove items. Removal happens when the signal expires, gets superseded by a `no_signal`, or the user explicitly dismisses (which becomes a Settings option later — for now, the signal lifecycle handles it).
+
+#### TickerCard generalization
+
+Today's `PositionCard` becomes `TickerCard` with variants:
+
+```ts
+type TickerCardVariant =
+  | { kind: 'held'; position: Position }        // current PositionCard rendering
+  | { kind: 'watchlist'; ticker: WatchlistTicker; signal?: Signal };
+```
+
+**Held variant** (current MVP card) includes: P&L combined, P&L tint, portfolio weight bar.
+
+**Watchlist variant** strips: P&L tint, portfolio weight bar, today's P&L lines (you don't own it, no P&L exists). Keeps: sparkline, current price, today's change, VWAP indicator, signal pill row, info badges. When there's a BUY signal, the card shows the target buy range/optimal price prominently in the same row that holds the P&L numbers on held cards.
+
+Both variants share: ticker symbol, company name, sparkline, current price, today's change %, VWAP arrow, signal pill row with info badges, +N overflow pill, tap-to-open TickerDetail.
+
+This is a small refactor of the existing PositionCard, not a new component from scratch.
+
+#### BUY signal generation
+
+BUY signals coupled into the same batch as Watchlists screen + Active Watchlist (one cohesive feature).
+
+Engine changes:
+- `signalEngine.analyze()` learns to emit `signalType: 'buy'` in addition to `'sell'` / `'no_signal'`.
+- For BUY: `priceRangeLow` = optimal entry price, `priceRangeHigh` = maximum acceptable entry, `optimalPrice` = `priceRangeLow` (entering cheap = better).
+- LLM prompt expands its contract to consider buy-side reasoning when analyzing a non-held ticker. Held tickers still primarily get SELL analysis (you don't typically buy more of something you already hold, though the LLM can choose `no_signal` or BUY in special cases — leave it open).
+- Accuracy tracking: `actualMinSinceAnalysis` becomes the relevant field for BUY signals (lowest price seen since signal generated — did the price actually come down to optimal?). The schema already has both `actualMaxSinceAnalysis` and `actualMinSinceAnalysis` from MVP, so no migration needed.
+
+UI for BUY:
+- Same Analyze button on TickerDetail, regardless of variant. For non-held tickers (watchlist-only), Analyze is the only action available — no PositionStats section to render.
+- BUY signal pill colors: green (`bg #EAF3DE / text #173404` in dark mode), distinct from SELL's red.
+- Signal-range Discord channel for BUY: `DISCORD_WEBHOOK_SIGNALS_BUY` (already reserved in MVP Batch 14d notes).
+
+#### Signal triggering — explicit cost-control philosophy
+
+**Manual, one-ticker-at-a-time, user-initiated. Permanently.**
+
+There is no automated scanning cron and no plans to add one. The user goes ticker by ticker and clicks Analyze on what they care about. This is the system's cost control — every LLM call is a deliberate user action.
+
+Future *manual-but-faster* workflows that respect this constraint:
+- **Multi-select Analyze**: select N tickers (checkbox on cards) → tap "Analyze selected" → queue runs them sequentially, respecting daily cost ceiling. Still user-gated.
+- **Analyze all visible**: on a single watchlist screen, "Analyze all" runs every visible ticker in that list through the engine. Single user action, sequential execution, cost-capped.
+- **LLM-recommended triage** ← most interesting future workflow. Two LLM round-trips:
+  1. User taps "Recommend tickers to analyze" on a watchlist screen.
+  2. BE collects light snapshots (price, today change, VWAP, latest news headlines, basic technicals) of all visible watchlist tickers — one batched LLM call: *"Given these snapshots, which 3-5 tickers look most worth a deep analysis right now, and why? Prefer undervalued + good news + good fundamentals + hasn't broken out yet."*
+  3. LLM returns ranked short list with one-line reason each.
+  4. FE renders the recommendations, user reviews and approves which ones to deep-analyze.
+  5. Approved tickers go through the normal Analyze flow one by one.
+  6. Two LLM round-trips per ticker that gets analyzed (recommend prompt + analyze prompt). Zero LLM cost on rejected recommendations. Still 100% user-gated.
+
+This is "LLM as triage assistant," not "LLM as autonomous scanner." It scales the user's attention without abandoning their cost control.
+
+#### Data model
+
+```sql
+-- One row per IB watchlist mirrored into Upside.
+-- Membership and metadata are IB-authoritative. Upside writes only on sync.
+create table watchlists (
+  id text primary key,                  -- IB watchlist ID
+  user_id uuid not null references auth.users(id),
+  name text not null,                   -- IB-supplied name
+  position int not null default 0,      -- IB-supplied display order
+  last_synced_at timestamptz not null default now(),
+  hidden_at timestamptz null,           -- Upside-side flag, user-set
+  unique (user_id, id)
+);
+
+-- One row per (watchlist, ticker) pair.
+-- Membership is IB-authoritative; Upside writes only on sync.
+-- hidden_at is Upside-side, user-set.
+create table watchlist_tickers (
+  watchlist_id text not null references watchlists(id) on delete cascade,
+  conid bigint not null,
+  symbol text not null,
+  position int not null default 0,      -- IB-supplied display order within watchlist
+  added_at timestamptz not null default now(),  -- when first synced into Upside
+  hidden_at timestamptz null,
+  primary key (watchlist_id, conid)
+);
+```
+
+Active Watchlist is a derived view, not a stored table:
+
+```sql
+create view active_watchlist as
+select distinct on (s.symbol)
+  s.symbol, s.conid, s.* as signal
+from signals s
+where s.signal_type = 'buy'
+  and s.superseded_by_analysis_id is null
+  and s.expires_at > now()
+order by s.symbol, s.analyzed_at desc;
+```
+
+(Refinement TBD: whether to filter to "live or approaching range" in the view, or in the FE. Probably FE so the view stays cheap.)
+
+#### Sync mechanism
+
+A new cron (`watchlistSyncer`, daily or on-demand) pulls IB watchlists via `/v1/api/iserver/watchlists` and per-watchlist `/v1/api/iserver/watchlist?id=<id>`. Upserts into `watchlists` and `watchlist_tickers`. Deletes (cascade) rows for watchlists no longer present in IB.
+
+User-set `hidden_at` flags are preserved across syncs (the sync writes to `name`, `position`, membership rows — not to `hidden_at`).
+
+**Capture the IB endpoints first.** Use the generic IB passthrough endpoint (added in Batch 13.2) to fetch real watchlist data from your live IB account and inspect the response shapes before locking the schema and sync logic in. Same pattern as Batch 7's local capture, but live and on-demand.
+
+#### Build order within this track
+
+1. **IB watchlist import (one-way mirror)** — schema, sync cron, FE plumbing to read `watchlists` and `watchlist_tickers`. No BUY signals yet, no Active Watchlist yet, no screen yet. Internal foundation.
+2. **Watchlists screen + tab strip + TickerCard variants + BUY signals + Active Watchlist** — one cohesive batch. Most of the code already exists from MVP (signal engine, TickerDetail, signal pills, Discord notifier); the surface area is the UI plus extending the engine to emit BUY.
+
+Two batches total for the Watchlist track. Both depend on Batch 16 (MVP complete) at minimum and Batch 13.2 (passthrough endpoint, used for capturing IB watchlist shapes ahead of design).
+
+---
+
+### Track 2: Two-Way Watchlist Editing
+
+Upside can create / rename / edit-membership of IB watchlists. Requires figuring out whether IB Client Portal exposes write endpoints for watchlists (TBD via passthrough capture) and the conflict-resolution model when both Upside and IB-native UI modify the same watchlist. Likely uses last-write-wins with a "modified in Upside" indicator.
+
+Deferred until Track 1 has been in use long enough to know whether two-way is actually wanted (vs. accepted that IB is the editing surface).
+
+---
+
+### Track 3: Smarter Analyze Workflows
+
+In priority order:
+
+1. **Multi-select Analyze** — checkbox on cards, "Analyze selected" button, sequential execution, cost-capped.
+2. **Analyze all visible** — single button on a watchlist or portfolio screen, runs the full visible list through the engine.
+3. **LLM-recommended triage** — two-round-trip flow described above.
+
+Each is a small additive feature on top of the existing engine. No new schema; just routing.
+
+---
+
+### Track 4: Signal Quality Feedback Loop
+
+1. **Signal post-mortem with thumbs-up/down feedback** — auto-generates one-line outcome per expired/hit signal ("Sell signal on NVDA at $193-198 expired after 7 days, price peaked at $196.40 — didn't reach optimal"). User thumbs-up/down. Aggregates over time into "your accuracy on this LLM provider, this signal type, this market regime."
+2. **"What changed" digest** — morning summary delivered via Discord and PWA push: overnight moves, upcoming earnings (next 7 days), new insider activity, zone-state changes since yesterday's close. High signal-density per screen.
+3. **Position thesis** — user-editable text per position included in LLM analysis context. Forces articulation of why you hold what you hold; makes the LLM's reasoning specifically address your thesis ("you bought NVDA on AI capex tailwind; that thesis is intact but valuation has stretched...").
+4. **Additional `contextualTriggers`** — imminent earnings (<24h), recent insider transactions, unusual volume, news-event proximity. Wires into the same `contextualTriggers` field reserved in MVP Batch 14a.
+
+---
+
+### Track 5: New Surfaces
+
+1. **AI chat** — conversational portfolio Q&A. Tap chat icon (returns to bottom nav as 5th tab or replaces something), ask "why is BBAI down today?", get sourced answer pulling from positions + signals + news. Expensive (every message = LLM call) — gate behind a daily message ceiling.
+2. **Natural language ticker screener** — "show me tickers with RSI > 70 and earnings in the next 5 days." Replaces traditional screener UI with LLM-as-query-translator.
+3. **"Why didn't this fire?" inverse query** — cheap LLM call explaining why a position has no current signal. Different from full Analyze: cheaper, faster, no commitment. Builds trust in the no-signal state.
+4. **Trade journal** — per-trade notes, %/day metric, post-trade reflection. Hooks into IB transactions endpoint for the entry/exit data, user adds the reasoning.
+
+---
+
+### Track 6: Time Travel
+
+1. **Replay mode** — view historical app state ("what would the app have shown 5 days ago?"). Killer feature for evaluating whether the system would have caught a move retrospectively. Requires keeping enough historical position + signal data to reconstruct; small change since signals are already kept forever.
+
+---
+
+### Track 7: New Modalities
+
+1. **Voice quick-analyze** — "Hey Upside, what about NVDA?" via Web Speech API. Free; matches the phone-first product shape.
+
+---
+
+### Track 8: New Asset Classes
+
+1. **Options / shorts / trade execution** — separate concern, separate scope. Likely never enters this app's domain (Upside is intelligence, not execution); execution stays in IBKR Mobile / TWS. Listed here for completeness.
 
 ---
 
