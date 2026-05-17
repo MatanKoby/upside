@@ -647,6 +647,93 @@ Kept as fallback (no change): `infra/clientportal.gw/Dockerfile` + `README.md` �
 
 ---
 
+## Batch 13.2: Generic IB passthrough debug endpoint
+
+**Depends on:** Batch 13 (live IB available via IBeam).
+
+**Scope:** A single auth-gated, read-only, allowlist-enforced HTTP endpoint that proxies any IB Client Portal path the user supplies and returns the raw response untouched. Lets us pull live IB data shapes from the laptop with one `curl`, without spinning up the local Client Portal Gateway and re-authenticating in a browser. Strictly debug infrastructure; no FE surface.
+
+**Why now (not post-MVP):** post-MVP Watchlist track will need to inspect the real shape of `/v1/api/iserver/watchlists` and friends to lock the schema. Having this tool available *during* MVP work means we can capture watchlist payloads any time without blocking on post-MVP starting. The endpoint is tiny (~50-100 lines), strictly debug-only, and doesn't expand MVP user-facing scope.
+
+### Deliverables
+
+1. **New route** `GET /api/debug/ib-passthrough?path=<IB-PATH>[&...querystring]` in `server/src/routes/debug.ts`:
+   - **Auth-gated**: requires Bearer token from a whitelisted email. Non-whitelisted bearers → 403. Anonymous → 401.
+   - **IB session required**: if IBeam container is not running or session not authenticated → 503 with `{ reason: 'ib_not_connected' }`.
+   - **Path allowlist enforced**: the `path` query param must match one of an explicit allowlist of safe, read-only IB endpoints. Any other path → 400 with `{ reason: 'path_not_allowed', allowed: [...] }`.
+   - **Method is GET only.** No body. No way to POST / PUT / DELETE through this endpoint.
+   - **Response**: the raw IB response, content-type preserved, status code preserved (so 4xx/5xx from IB pass through transparently for debugging).
+
+2. **Allowlist** (in `server/src/services/ibPassthroughAllowlist.ts`) — explicit list of regexes matching safe IB Client Portal paths. Initial set:
+   ```
+   ^/v1/api/iserver/accounts$
+   ^/v1/api/iserver/account/[^/]+/summary$
+   ^/v1/api/iserver/auth/status$
+   ^/v1/api/iserver/contract/\d+/info$
+   ^/v1/api/iserver/marketdata/history$
+   ^/v1/api/iserver/marketdata/snapshot$
+   ^/v1/api/iserver/secdef/search$
+   ^/v1/api/iserver/watchlists$
+   ^/v1/api/iserver/watchlist$
+   ^/v1/api/portfolio/accounts$
+   ^/v1/api/portfolio/[^/]+/ledger$
+   ^/v1/api/portfolio/[^/]+/positions/\d+$
+   ^/v1/api/portfolio/[^/]+/summary$
+   ^/v1/api/portfolio/[^/]+/transactions$
+   ^/v1/api/tickle$
+   ```
+   **Explicitly forbidden** (never add to allowlist, document why): anything under `/v1/api/iserver/account/[^/]+/orders`, `/v1/api/iserver/reply/`, `/v1/api/iserver/scanner/`, or any path containing `order` / `place` / `cancel` / `modify`. Order operations would let a compromised auth token execute trades. Even though the IB allowlist is positive (only listed paths pass), document this rule in `ibPassthroughAllowlist.ts` so future additions don't accidentally cross the line.
+
+3. **Logging**: every passthrough call logs `{ caller_email, path, status, duration_ms }` to `external_api_metrics` with `provider: 'ib'` and a marker tag (e.g. `endpoint: 'debug-passthrough:<path>'`). Treats this surface as auditable from day one.
+
+4. **Local capture workflow**: user runs from laptop:
+   ```bash
+   TOKEN=$(... fetch from Supabase session, or paste from browser dev tools)
+   API_URL=https://<current-vercel-or-tunnel-url>
+
+   curl -sS -H "Authorization: Bearer $TOKEN" \
+     "$API_URL/api/debug/ib-passthrough?path=/v1/api/iserver/watchlists" \
+     > captures/watchlists-$(date -u +%Y-%m-%d).json
+
+   curl -sS -H "Authorization: Bearer $TOKEN" \
+     "$API_URL/api/debug/ib-passthrough?path=/v1/api/iserver/watchlist&id=<wl_id>" \
+     > captures/watchlist-<id>-$(date -u +%Y-%m-%d).json
+   ```
+   Files land in the gitignored `captures/` directory (already established in Batch 7).
+
+5. **README note** in `server/README.md` or a new `docs/debug.md` documenting the endpoint, the allowlist policy, the curl workflow, and the security model.
+
+### Files this batch creates/edits
+- `server/src/routes/debug.ts` (new)
+- `server/src/services/ibPassthroughAllowlist.ts` (new)
+- `server/src/index.ts` (mount the debug route)
+- `server/src/services/ibGateway.ts` (potentially add a generic `ibRawGet(path, query)` helper if one isn't already exposed)
+- `docs/debug.md` (new, brief)
+
+### Does NOT touch
+- Any FE files.
+- Any production routes or business logic.
+- Schema.
+- Discord.
+
+### Manual prerequisites
+- None new — uses existing whitelisted-email auth and the already-running IBeam.
+
+### Verification
+- Whitelisted email + connected IB + allowlisted path → JSON response from IB.
+- Whitelisted email + connected IB + non-allowlisted path (e.g. `/v1/api/iserver/account/<id>/orders`) → 400 `path_not_allowed`.
+- Non-whitelisted bearer → 403.
+- No bearer → 401.
+- IB disconnected → 503 `ib_not_connected`.
+- Method other than GET → 405.
+- After a few captures, `external_api_metrics` shows audit rows tagged `debug-passthrough:*`.
+
+### Acceptance use-case (proof of utility, runs during this batch as the verification capstone)
+- Capture `/v1/api/iserver/watchlists` and one specific `/v1/api/iserver/watchlist?id=<id>` from live IB.
+- Paste the file list back into the chat with Claude so the post-MVP Watchlist track's data model can be locked against real shapes ahead of when its batch is built.
+
+---
+
 ## Batch 13.5: Verify & implement `tradingDaysHeld` + MTD return
 
 **Depends on:** Batch 13.1.
