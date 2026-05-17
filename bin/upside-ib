@@ -2,25 +2,35 @@
 # bin/upside-ib — call /api/debug/ib-passthrough from the project folder.
 #
 # Discovers the current tunnel URL from Supabase, reads your JWT from a
-# local file, calls the allowlisted IB path you supply, prints the result
-# and saves it to captures/.
+# local file, calls the allowlisted IB path you supply. Prints the result
+# AND saves it under captures/ in a stable per-call folder, always with a
+# `latest.json` pointer so the most recent result for any path is one
+# `Read` away.
 #
 # Usage:
 #   ./bin/upside-ib <ib-path> [key=value ...]
 #
-# Examples:
+# Examples (with output paths):
 #   ./bin/upside-ib /v1/api/iserver/accounts
+#     → captures/iserver/accounts/latest.json
 #   ./bin/upside-ib /v1/api/iserver/watchlists
+#     → captures/iserver/watchlists/latest.json
 #   ./bin/upside-ib /v1/api/iserver/watchlist id=12345
+#     → captures/iserver/watchlist/id=12345/latest.json
 #   ./bin/upside-ib /v1/api/iserver/contract/265598/info
-#   ./bin/upside-ib /v1/api/iserver/marketdata/snapshot 'conids=265598' 'fields=31,70,71'
+#     → captures/iserver/contract/265598/info/latest.json
+#   ./bin/upside-ib /v1/api/iserver/marketdata/snapshot conids=265598 fields=31,84,86
+#     → captures/iserver/marketdata/snapshot/conids=265598&fields=31,84,86/latest.json
+#
+# History: every call ALSO writes captures/<...>/2026-05-17T08-30Z.json so
+# diffs over time are preserved. `latest.json` is just the most recent
+# result by copy.
 #
 # One-time setup:
 #   1. Open Upside in browser (laptop Chrome), log in.
 #   2. DevTools → Application → Local Storage → https://upside-client.vercel.app
-#      → expand the `sb-<ref>-auth-token` entry → copy the `access_token` value.
-#   3. Save it to .upside-token at the project root (gitignored):
-#        echo 'paste-the-token-here' > .upside-token
+#      → expand sb-<ref>-auth-token → copy the `access_token` value.
+#   3. echo 'paste-the-token' > .upside-token
 #
 # JWTs expire after ~1 hour. Re-paste when calls start returning 401.
 
@@ -38,10 +48,8 @@ Missing $TOKEN_FILE.
 One-time setup:
   1. Log into Upside in your browser.
   2. DevTools → Application → Local Storage → https://upside-client.vercel.app
-     → expand the sb-<ref>-auth-token entry → copy the access_token value.
+     → expand sb-<ref>-auth-token → copy the access_token value.
   3. echo 'paste-the-token' > .upside-token
-
-JWTs expire after ~1 hour; re-paste when calls start returning 401.
 EOF
   exit 2
 fi
@@ -53,7 +61,7 @@ fi
 
 # ---- Supabase env (publishable key — safe to read from FE env) ----
 if [[ ! -f client/.env.local ]]; then
-  echo "Missing client/.env.local — expected VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY there." >&2
+  echo "Missing client/.env.local — expected VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY." >&2
   exit 2
 fi
 # shellcheck disable=SC1091
@@ -61,7 +69,7 @@ source client/.env.local
 SUPA_URL="${VITE_SUPABASE_URL:-}"
 SUPA_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-}"
 if [[ -z "$SUPA_URL" || -z "$SUPA_KEY" ]]; then
-  echo "client/.env.local missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY" >&2
+  echo "client/.env.local missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY." >&2
   exit 2
 fi
 
@@ -87,37 +95,61 @@ if [[ -z "$IB_PATH" ]]; then
 fi
 shift
 
-# Build the passthrough URL — `path` first, then any extra k=v args appended
-# verbatim. Caller is responsible for url-escaping values if needed.
-QUERY="path=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$IB_PATH")"
+# ---- Build the passthrough URL ----
+# Path is url-encoded so things like /watchlist?id=... never confuse the
+# outer query parser. Caller-supplied k=v args are appended verbatim;
+# caller is responsible for url-escaping values that need it.
+ENCODED_PATH=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$IB_PATH")
+QUERY="path=$ENCODED_PATH"
 for kv in "$@"; do
   QUERY="$QUERY&$kv"
 done
 
-# ---- Output naming ----
-SLUG=$(echo "$IB_PATH" \
-  | sed 's|^/v1/api/||' \
-  | sed 's|/|-|g' \
-  | sed 's|[^a-zA-Z0-9._-]|_|g')
-DATE=$(date -u +%Y-%m-%dT%H-%M)
-mkdir -p captures
-OUT="captures/${SLUG}-${DATE}.json"
+# ---- Capture directory layout ----
+# Folder mirrors the IB path under captures/ (sans /v1/api/), with extra
+# k=v args appended as deeper subfolders so re-running with the same args
+# always lands in the same place.
+#
+#   /v1/api/iserver/watchlists           → captures/iserver/watchlists/
+#   /v1/api/iserver/watchlist?id=12345   → captures/iserver/watchlist/id=12345/
+#   /v1/api/iserver/contract/265598/info → captures/iserver/contract/265598/info/
+PATH_NO_PREFIX="${IB_PATH#/v1/api/}"
+PATH_NO_PREFIX="${PATH_NO_PREFIX#/}"        # strip leading slash if any
+SUBDIR="captures/${PATH_NO_PREFIX}"
+if [[ $# -gt 0 ]]; then
+  # Sort args so the same set in any order yields the same folder.
+  SORTED_ARGS=$(printf '%s\n' "$@" | LC_ALL=C sort | paste -sd'&' -)
+  SUBDIR="${SUBDIR}/${SORTED_ARGS}"
+fi
+# Filesystem-safe: strip anything that isn't a-z, 0-9, dash, dot, slash, =, &
+SUBDIR=$(echo "$SUBDIR" | sed 's|[^a-zA-Z0-9./=&_-]|_|g')
+
+mkdir -p "$SUBDIR"
+TS=$(date -u +%Y-%m-%dT%H-%MZ)
+TS_FILE="${SUBDIR}/${TS}.json"
+LATEST_FILE="${SUBDIR}/latest.json"
 
 # ---- Call + save ----
 HTTP_STATUS=$(
   curl -sS \
     -H "Authorization: Bearer $TOKEN" \
-    -o "$OUT" \
+    -o "$TS_FILE" \
     -w '%{http_code}' \
     "$API_URL/api/debug/ib-passthrough?$QUERY"
 )
+cp "$TS_FILE" "$LATEST_FILE"
 
-echo "HTTP $HTTP_STATUS — $OUT" >&2
+# Print summary to stderr, body to stdout.
+{
+  echo
+  echo "HTTP $HTTP_STATUS"
+  echo "  latest : $LATEST_FILE"
+  echo "  archive: $TS_FILE"
+} >&2
 
-# Pretty-print to stdout if it's JSON.
 if command -v python3 >/dev/null 2>&1; then
-  python3 -m json.tool < "$OUT" 2>/dev/null || cat "$OUT"
+  python3 -m json.tool < "$LATEST_FILE" 2>/dev/null || cat "$LATEST_FILE"
 else
-  cat "$OUT"
+  cat "$LATEST_FILE"
 fi
 echo
