@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# bin/upside-ib — call /api/debug/ib-passthrough from the project folder.
+#
+# Discovers the current tunnel URL from Supabase, reads your JWT from a
+# local file, calls the allowlisted IB path you supply, prints the result
+# and saves it to captures/.
+#
+# Usage:
+#   ./bin/upside-ib <ib-path> [key=value ...]
+#
+# Examples:
+#   ./bin/upside-ib /v1/api/iserver/accounts
+#   ./bin/upside-ib /v1/api/iserver/watchlists
+#   ./bin/upside-ib /v1/api/iserver/watchlist id=12345
+#   ./bin/upside-ib /v1/api/iserver/contract/265598/info
+#   ./bin/upside-ib /v1/api/iserver/marketdata/snapshot 'conids=265598' 'fields=31,70,71'
+#
+# One-time setup:
+#   1. Open Upside in browser (laptop Chrome), log in.
+#   2. DevTools → Application → Local Storage → https://upside-client.vercel.app
+#      → expand the `sb-<ref>-auth-token` entry → copy the `access_token` value.
+#   3. Save it to .upside-token at the project root (gitignored):
+#        echo 'paste-the-token-here' > .upside-token
+#
+# JWTs expire after ~1 hour. Re-paste when calls start returning 401.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# ---- Token ----
+TOKEN_FILE=".upside-token"
+if [[ ! -f "$TOKEN_FILE" ]]; then
+  cat >&2 <<EOF
+Missing $TOKEN_FILE.
+
+One-time setup:
+  1. Log into Upside in your browser.
+  2. DevTools → Application → Local Storage → https://upside-client.vercel.app
+     → expand the sb-<ref>-auth-token entry → copy the access_token value.
+  3. echo 'paste-the-token' > .upside-token
+
+JWTs expire after ~1 hour; re-paste when calls start returning 401.
+EOF
+  exit 2
+fi
+TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+if [[ -z "$TOKEN" ]]; then
+  echo "$TOKEN_FILE is empty." >&2
+  exit 2
+fi
+
+# ---- Supabase env (publishable key — safe to read from FE env) ----
+if [[ ! -f client/.env.local ]]; then
+  echo "Missing client/.env.local — expected VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY there." >&2
+  exit 2
+fi
+# shellcheck disable=SC1091
+source client/.env.local
+SUPA_URL="${VITE_SUPABASE_URL:-}"
+SUPA_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-}"
+if [[ -z "$SUPA_URL" || -z "$SUPA_KEY" ]]; then
+  echo "client/.env.local missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY" >&2
+  exit 2
+fi
+
+# ---- Discover api URL from app_config ----
+API_URL=$(
+  curl -sSf \
+    -H "apikey: $SUPA_KEY" \
+    -H "Authorization: Bearer $SUPA_KEY" \
+    "$SUPA_URL/rest/v1/app_config?select=value&key=eq.api_url" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["value"] if d else "")'
+)
+if [[ -z "$API_URL" ]]; then
+  echo "Couldn't read app_config.api_url from Supabase." >&2
+  exit 1
+fi
+
+# ---- Args ----
+IB_PATH="${1:-}"
+if [[ -z "$IB_PATH" ]]; then
+  echo "Usage: $0 <ib-path> [key=value ...]" >&2
+  echo "Allowlist: see server/src/services/ibPassthroughAllowlist.ts" >&2
+  exit 2
+fi
+shift
+
+# Build the passthrough URL — `path` first, then any extra k=v args appended
+# verbatim. Caller is responsible for url-escaping values if needed.
+QUERY="path=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$IB_PATH")"
+for kv in "$@"; do
+  QUERY="$QUERY&$kv"
+done
+
+# ---- Output naming ----
+SLUG=$(echo "$IB_PATH" \
+  | sed 's|^/v1/api/||' \
+  | sed 's|/|-|g' \
+  | sed 's|[^a-zA-Z0-9._-]|_|g')
+DATE=$(date -u +%Y-%m-%dT%H-%M)
+mkdir -p captures
+OUT="captures/${SLUG}-${DATE}.json"
+
+# ---- Call + save ----
+HTTP_STATUS=$(
+  curl -sS \
+    -H "Authorization: Bearer $TOKEN" \
+    -o "$OUT" \
+    -w '%{http_code}' \
+    "$API_URL/api/debug/ib-passthrough?$QUERY"
+)
+
+echo "HTTP $HTTP_STATUS — $OUT" >&2
+
+# Pretty-print to stdout if it's JSON.
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m json.tool < "$OUT" 2>/dev/null || cat "$OUT"
+else
+  cat "$OUT"
+fi
+echo

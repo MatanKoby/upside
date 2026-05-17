@@ -65,6 +65,11 @@ logs/
 # into the IBeam container at /run/secrets/. Never commit them.
 /secrets/
 
+# === Local Supabase JWT for ./bin/upside-ib ===
+# Single line with the access_token copied from browser DevTools. Expires
+# every ~1h. Re-paste when calls start 401'ing.
+/.upside-token
+
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.
 captures/
