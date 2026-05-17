@@ -6,7 +6,7 @@
 #   ./bin/upside down               # stop everything
 #   ./bin/upside ps                 # list containers incl. stopped
 #   ./bin/upside logs [service]     # follow all, or one service
-#   ./bin/upside restart api        # force-recreate a single service
+#   ./bin/upside rebuild <service>  # rebuild image + recreate container
 #   ./bin/upside reset              # down --remove-orphans, then up
 #
 # Mirrors the docker:* scripts in the root package.json (which require
@@ -35,14 +35,15 @@ case "$cmd" in
       docker compose logs -f --tail 100
     fi
     ;;
-  restart)
+  rebuild)
     if [[ -z "$arg" ]]; then
-      echo "Usage: $0 restart <service>"
+      echo "Usage: $0 rebuild <service>"
       exit 2
     fi
-    # --build so source changes are picked up; --force-recreate so a fresh
-    # container reads the latest env vars. Without --build, a `restart` would
-    # silently re-deploy the OLD image — easy to miss, easy to debug-loop.
+    # Build the image fresh, then force-recreate the container so it reads
+    # the latest env vars. Named `rebuild` rather than `restart` because the
+    # word "restart" implies "stop + start, same image" — what this command
+    # actually does is heavier.
     docker compose up -d --build --force-recreate "$arg"
     ;;
   reset)
@@ -59,7 +60,7 @@ Commands:
   down                  stop everything
   ps                    list containers (incl. stopped)
   logs [service]        follow logs (all services or one)
-  restart <service>     force-recreate one service
+  rebuild <service>     rebuild image + recreate one service
   reset                 down --remove-orphans, then up
 EOF
     ;;

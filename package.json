@@ -20,7 +20,7 @@
     "docker:logs:api": "docker compose logs -f --tail 100 api",
     "docker:logs:ib": "docker compose logs -f --tail 100 ib-gateway",
     "docker:logs:cf": "docker compose logs -f --tail 100 cloudflared",
-    "docker:restart:api": "docker compose up -d --build --force-recreate api",
+    "docker:rebuild:api": "docker compose up -d --build --force-recreate api",
     "docker:reset": "docker compose down --remove-orphans && docker compose up -d --build && docker compose --profile manual create ib-gateway"
   }
 }
