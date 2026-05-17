@@ -15,7 +15,7 @@ import { getIbContainerState } from '../services/ibContainer.js';
 import { ibStatus } from '../services/ibGateway.js';
 import { pingSupabase } from '../services/supabase.js';
 import { pingRedis } from '../services/redis.js';
-import { getLastPricePollAt } from '../cron/pricePoller.js';
+import { getLastIbPricePollAt } from '../cron/ibPricePoller.js';
 
 const router = Router();
 
@@ -58,7 +58,7 @@ router.get('/', async (_req: Request, res: Response) => {
     checkRedis(),
   ]);
 
-  const lastPricePollMs = getLastPricePollAt();
+  const lastPricePollMs = getLastIbPricePollAt();
   const ok = supabase === 'reachable' && redis === 'reachable';
 
   res.status(ok ? 200 : 503).json({

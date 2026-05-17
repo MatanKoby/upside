@@ -87,3 +87,28 @@ export async function insiderTransactions(symbol: string): Promise<unknown> {
   const { data } = await call('insider', symbol, '/stock/insider-transactions', { symbol });
   return data;
 }
+
+// Real-time-ish quote for one symbol. Used by the fallback finnhubPricePoller
+// when IB is disconnected. Shape (Finnhub):
+//   c  = current price
+//   h  = today's high
+//   l  = today's low
+//   o  = today's open
+//   pc = previous close
+//   t  = unix-seconds timestamp
+export interface FinnhubQuote {
+  c: number | null;
+  h: number | null;
+  l: number | null;
+  o: number | null;
+  pc: number | null;
+  t: number | null;
+}
+
+export async function getQuote(symbol: string): Promise<FinnhubQuote | null> {
+  const { data } = await call<FinnhubQuote>('quote', symbol, '/quote', { symbol });
+  if (!data || typeof data !== 'object') return null;
+  // Finnhub returns 0s for unknown symbols rather than throwing — let the
+  // caller decide whether 0 is meaningful.
+  return data;
+}

@@ -49,7 +49,7 @@ let lastSuccessfulCycleAt: number | null = null;
 
 /** Unix-ms timestamp of the most recent pollCycle that completed without
  *  throwing. Null until the first success. Surfaced by /healthz. */
-export function getLastPricePollAt(): number | null {
+export function getLastIbPricePollAt(): number | null {
   return lastSuccessfulCycleAt;
 }
 
@@ -107,7 +107,7 @@ async function ensureContractCached(conid: number, symbol: string): Promise<Cont
     refreshed_at: contract.refreshedAt,
   };
   const { error: upErr } = await supabase().from('contracts').upsert(row, { onConflict: 'conid' });
-  if (upErr) void notifyError('pricePoller.contracts.upsert', upErr.message);
+  if (upErr) void notifyError('ibPricePoller.contracts.upsert', upErr.message);
   return row;
 }
 
@@ -144,6 +144,10 @@ interface AssembledPosition {
   asset_class: string;
   industry: string | null;
   category: string | null;
+  // Batch 13.8: source-tracking for multi-source price polling. ibPricePoller
+  // always writes 'ib'; finnhubPricePoller writes 'finnhub'.
+  price_source: 'ib';
+  last_price_update_at: string;
   updated_at: string;
 }
 
@@ -193,6 +197,8 @@ async function assemblePosition(
     asset_class: partial.assetClass,
     industry: contract?.industry ?? null,
     category: contract?.category ?? null,
+    price_source: 'ib',
+    last_price_update_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 }
@@ -260,7 +266,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   const { error } = await supabase()
     .from('positions')
     .upsert(toUpsert, { onConflict: 'user_id,symbol' });
-  if (error) void notifyError('pricePoller.positions.upsert', error.message);
+  if (error) void notifyError('ibPricePoller.positions.upsert', error.message);
 
   // Delete rows for symbols no longer held.
   const heldSymbols = new Set(assembled.map((r) => r.symbol));
@@ -314,28 +320,28 @@ async function loop(): Promise<void> {
       await pollCycle(userId, accountId);
       lastSuccessfulCycleAt = Date.now();
     } catch (e) {
-      void notifyError('pricePoller.cycle', (e as Error).message ?? 'unknown', e);
+      void notifyError('ibPricePoller.cycle', (e as Error).message ?? 'unknown', e);
     }
 
     await sleep(intervalFor(marketPeriodAt()));
   }
 }
 
-export function startPricePoller(): void {
+export function startIbPricePoller(): void {
   if (running) return;
   running = true;
   stopRequested = false;
   console.log(
-    `[pricePoller] starting; intervals: regular=${POLL_INTERVAL_REGULAR_MS}ms, ` +
+    `[ibPricePoller] starting; intervals: regular=${POLL_INTERVAL_REGULAR_MS}ms, ` +
     `extended=${POLL_INTERVAL_EXTENDED_MS}ms, closed=${POLL_INTERVAL_CLOSED_MS}ms`,
   );
   void loop().catch((e) => {
-    void notifyCritical('pricePoller.loop.crashed', 'loop terminated unexpectedly', e);
+    void notifyCritical('ibPricePoller.loop.crashed', 'loop terminated unexpectedly', e);
     running = false;
   });
 }
 
-export function stopPricePoller(): void {
+export function stopIbPricePoller(): void {
   stopRequested = true;
   running = false;
 }
