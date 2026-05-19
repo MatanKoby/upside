@@ -4,7 +4,7 @@ Single source of truth for how the two AI agents collaborate on this project. Bo
 
 ## Project pointer
 
-**Upside** is a mobile-first PWA portfolio intelligence layer for Interactive Brokers. The product spec is `UPSIDE_MVP_SPEC.md` (frozen reference). Work batches are declared in `BUILD_QUEUE.md`. Active and historical claim state is in `CLAIMS.md`. This file does not duplicate any of those.
+**Upside** is a mobile-first PWA portfolio intelligence layer for Interactive Brokers. The product spec is in the `spec/` directory (see "Spec layout" below). Work batches are declared in `BUILD_QUEUE.md`. Active and historical claim state is in `CLAIMS.md`. This file does not duplicate any of those.
 
 ## Repo & branches
 
@@ -16,11 +16,30 @@ Single source of truth for how the two AI agents collaborate on this project. Bo
 
 | File | Owner | Notes |
 |---|---|---|
-| `UPSIDE_MVP_SPEC.md` | user | Frozen reference. Agents may propose `spec:` edits but should not freelance changes. |
+| `spec/**` | user | Frozen reference. Agents may propose `spec:` edits but should not freelance changes. See "Spec layout" below for the file split. |
 | `BUILD_QUEUE.md` | user | Declares the work. The user updates it by pasting their offline working copy, so agents must **never** write state into it. Status tags like `[READY]` / `[PENDING]` reflect user intent only. |
 | `CLAIMS.md` | agents | Records active claims and completion log. The user does not normally edit this. |
 | `AGENTS.md`, `CLAUDE.md` | shared | Either party may edit; use `meta:` commits. |
 | `client/`, `server/`, etc. | shared | Use `batch-N:` commits when working on a claimed batch. |
+
+## Spec layout
+
+The spec lives in the `spec/` directory, split across 6 domain files plus an archive. Each file is one concern, edited as a unit. Read only the files relevant to the work in front of you — don't read the whole spec on every turn.
+
+| File | Domain |
+|------|--------|
+| `spec/README.md` | Index + cross-references. Start here. |
+| `spec/architecture.md` | Tech stack, infrastructure, Docker containers, public URL discovery, Upside auth, IB auth (on-demand IBeam), multi-source price polling, three loops, security, project structure, MVP build order. |
+| `spec/signal-model.md` | Unified SELL+BUY analysis, Zod output schema, atomic-snapshot supersede semantics, signal pill rendering, mutability rules, held+watchlisted behavior, accuracy tracking, profit-taking zone detection, LLM provider abstraction, data sources. |
+| `spec/flows.md` | Signal engine flow, profit-taking zone flow, signal-range entry flow, accuracy cron flow, connect/disconnect flow, data flows between components. |
+| `spec/schema.md` | Supabase tables (positions, analyses, signals, etc.), Redis usage, Finnhub rate-limited queue, IB API rate limits. |
+| `spec/screens.md` | All screens (Portfolio, TickerDetail, Alerts, Settings — plus Watchlists / Single Watchlist as post-MVP forward-spec). Design system, primitives catalog, TickerCard generalization, PWA requirements, key metrics & calculations. |
+| `spec/roadmap.md` | Post-MVP tracks 1-8. Design intent for features deferred past Batch 16. Contextual settings pattern. |
+| `spec/archive.md` | Historical content not reflecting current code: abandoned IB-auth approaches, dropped features, deprecated decisions. Read when investigating "why didn't we do X?". |
+
+**Editing convention:** when you edit the spec, edit the file matching the concern. If a change naturally crosses multiple files, that's a signal the concern might be miscarved — flag it before duplicating content. Cross-reference by file path (`see schema.md → Supabase Schema`) rather than restating.
+
+The spec describes the **current intended design** — not the history of how we got there. Move historical context to `archive.md` when it stops being part of the live system.
 
 ## The work queue
 
@@ -122,13 +141,13 @@ Use sparingly — prefer to wait or ping the user.
 | `meta: handoff batch-N` | Mid-batch hand-off (Owner cleared) |
 | `meta: reclaim batch-N from <prior owner>` | Stale-claim recovery |
 | `meta: <other>` | Changes to `AGENTS.md`, `CLAUDE.md`, `CLAIMS.md` structure (not entries), tooling, lint config |
-| `spec: <change>` | Edits to `UPSIDE_MVP_SPEC.md` |
+| `spec: <change>` | Edits to any `spec/*.md` file |
 
 `git log --oneline` is the change log — there is no separate `CHANGELOG.md`.
 
 ## Editing rules
 
-- Treat `BUILD_QUEUE.md` and `UPSIDE_MVP_SPEC.md` as user-owned in terms of execution state (claim/Owner/timestamps live in `CLAIMS.md`, not here). Design intent may be written to both files per the "Design and spec decisions" section below.
+- Treat `BUILD_QUEUE.md` and `spec/**` as user-owned in terms of execution state (claim/Owner/timestamps live in `CLAIMS.md`, not here). Design intent may be written to both per the "Design and spec decisions" section below.
 - Anyone may add new entries to `CLAIMS.md`, but only the current Owner of a batch should mutate that batch's entry (except for stale-claim recovery).
 - Always `git pull` before claiming so you don't race the other agent.
 
@@ -139,7 +158,7 @@ persist it to the spec and queue before moving on. The path depends on where
 the decision originated:
 
 **Decision made in a working session with the user:**
-1. Update `UPSIDE_MVP_SPEC.md` to reflect the new design, with a `spec:` commit.
+1. Update the relevant file(s) in `spec/` to reflect the new design, with a `spec:` commit. Match the change to the file's concern (architecture vs. signal-model vs. screens vs. etc.).
 2. Update `BUILD_QUEUE.md` to revise the relevant in-flight batch or add new
    batches that flow from the decision, with a `meta:` commit.
 3. Then proceed to implementation.
@@ -165,7 +184,7 @@ state*.
 
 ## What does NOT belong in this file
 
-- The product spec, file paths for components, design tokens — all in `UPSIDE_MVP_SPEC.md`.
+- The product spec, file paths for components, design tokens — all in `spec/`.
 - The batch list — in `BUILD_QUEUE.md`.
 - Per-batch state, timestamps, ownership — in `CLAIMS.md`.
 - Per-language style guides — create a `STYLE.md` later if needed.
