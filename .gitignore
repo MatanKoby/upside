@@ -65,10 +65,13 @@ logs/
 # into the IBeam container at /run/secrets/. Never commit them.
 /secrets/
 
-# === Local Supabase JWT for ./bin/upside-ib ===
-# Single line with the access_token copied from browser DevTools. Expires
-# every ~1h. Re-paste when calls start 401'ing.
-/.upside-token
+# === Postgres connection string for the read-only inspection role ===
+# Single line: postgresql://upside_readonly:<password>@<host>:5432/postgres?sslmode=require
+# The role has SELECT-only grants on public.* (Postgres permissions are
+# positive-only — no write surface exists for it) plus BYPASSRLS so dev
+# inspection sees all rows regardless of RLS. Rotate by dropping the role
+# and re-creating with a new password.
+/.upside-readonly-db
 
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.

@@ -10,7 +10,36 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ### Batch 13.5 — Verify & implement `tradingDaysHeld` + MTD return
 - Owner: claude
-- Started: 2026-05-23 (today)
+- Started: 2026-05-23
+- Status note (2026-05-23): code complete + deployed + Supabase migration applied. Awaiting verification of real IB data flows. **Verification blocked on read-only DB access setup, not on code.**
+
+  **Code state (commit 4cc5536, pushed to dev):**
+  - Migration 007 (`first_seen_at` + `first_seen_source` on positions) — applied to Supabase ✓
+  - ibGateway: `ibTransactions` (POST /v1/api/pa/transactions) + `deduceEntryDate` walker
+  - ibPricePoller: `resolveEntryInfo` runs on first sight of a conid (or NULL `first_seen_at`), reconciles via IB transactions, falls back to `now()` + `source='observed'`. Computes `trading_days_held` + `daily_return` every cycle.
+  - `marketHours.tradingDaysHeld`: weekday + US-holiday-aware day counter.
+  - `services/mtdCache`: per-user Redis SET-NX anchor at first poll of each month (TTL 60d).
+  - `/api/portfolio/summary` returns `mtdReturn` + `mtdReturnPercent` from the anchor, null when no anchor recorded yet.
+  - FE: `PositionStatsDetail.daysHeldSource` + `dailyReturnPercent`; `PositionStats` renders "≥N days" + "≤X%/d" floor when source=observed, exact when source=ib_transactions. `usePortfolioSummary` hook polls /api/portfolio/summary + Realtime nudges; `SummaryStrip` handles null MTD with "—".
+  - VPS deployed (user confirmed). IB connected (user confirmed). Polls should be running with the new fields.
+
+  **Verification access setup state:**
+  - Approach landed on: dedicated read-only Postgres role `upside_readonly` with login+password+BYPASSRLS, SELECT-only on `public.*`. Modern (no legacy JWT secret).
+  - Role created in Supabase via SQL Editor ✓. Password rotated to hex-only (no URL-special chars) ✓.
+  - Connection string saved to `.upside-readonly-db` (gitignored). Project ref: `qkvegpfzstylyekmusnk`, region us-east-1.
+  - `psql` installed on dev WSL ✓.
+  - **Blocker**: Session pooler connection (`aws-0-us-east-1.pooler.supabase.com:5432`) returns "FATAL: Tenant or user not found". Likely either (a) Supavisor cache lag after role creation (try again later), (b) username-format drift from current Supabase Dashboard, or (c) custom role not propagated to pooler tenant list.
+  - **Next session pickup**:
+    1. Have user paste verbatim Dashboard Session-pooler connection string (with `postgres.<ref>` user, password masked) so we can compare format to what we templated.
+    2. OR try Direct connection (`db.<ref>.supabase.co:5432`) — bypasses pooler entirely, needs IPv6 on WSL.
+    3. OR fall back to user pasting query results from Supabase SQL Editor for one-shot verification — abandons the long-lived read access goal but unblocks 13.5 finish.
+
+  **Verification query to run once access works:**
+  ```
+  select symbol, first_seen_at, first_seen_source, trading_days_held, daily_return, price_source, last_price_update_at from positions order by symbol;
+  curl /api/portfolio/summary  -- check mtdAnchor populated
+  ```
+  Then visually confirm PWA shows days-held + return/day in PositionStats, MTD in SummaryStrip. Then move to Finish protocol (task #8).
 
 ## Known issues (deferred fixes)
 
