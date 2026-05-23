@@ -154,6 +154,94 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ---
 
+## Batch 13.3: Secondary IBKR user + desired-state IBeam toggle
+
+**Status: ON HOLD — pending IBKR support inquiry.** Per IBKR policy, "the account will be assessed a separate market data subscription fee for each user account added" and "user account market data subscriptions are tied to and cannot vary from that of the account holder." Unclear whether the **free** Cboe One + IEX real-time US streaming (the entitlement MVP relies on) is doubled in cost or stays free for a 2nd user. Verify with IBKR support before claiming. Open IBeam-side question too: [Voyz/ibeam#137](https://github.com/Voyz/ibeam/issues/137) — no community validation of the secondary-user pattern with IBeam yet.
+
+**Depends on:** Batch 13.
+
+**Scope:** Two changes that ship together:
+1. Create a second IBKR username on the same account and swap IBeam to use it. IBKR's single-session limit is per *username*, not per account — the secondary user holds a continuous session for Upside while the primary stays free for IBKR Mobile. Eliminates the "battle royale" risk that drove the on-demand model in Batch 13.
+2. Replace the imperative Connect/Disconnect FE buttons with a **desired-state toggle**. FE writes "should be on" or "should be off" to `app_config`; a backend reconciler continuously drives the `ib-gateway` container to match. Default desired state = `'on'`, so the always-on behavior takes effect automatically after deploy. The toggle stays available for maintenance, debugging, or freeing the session intentionally.
+
+**Why this and not the alternatives:** Read-only Portal-tier sessions (skip `/iserver/auth/ssodh/init`) coexist with IBKR Mobile but lose `/iserver/marketdata/*` (snapshot, history). IBC's `ReadOnlyLogin=yes` is a TWS UI mode, not a server-side session class — still claims a brokerage session and conflicts the same way. A second username is IBKR's own recommended pattern for this use case, requires no fork, and keeps full Client Portal API access. The desired-state toggle is a cleaner replacement for the imperative endpoints than deleting them outright: same FE affordance the user already likes, but the reconciler makes it self-healing (e.g. survives nightly forced logout without user action when desired=on).
+
+### Deliverables
+
+**Manual (user):**
+1. In IBKR Account Management: add a secondary user on the same account. Pick a read-only/view-only role template if offered (still works if not — IBeam doesn't trade either way). Enroll the new user in 2FA; prefer TOTP over IB Key push so IBeam can automate login without a phone tap.
+2. Verify market data is accessible on the new user (free Cboe One + IEX real-time on US stocks is sufficient for MVP).
+3. On the VPS, replace `~/upside/secrets/ib_account.txt` and `~/upside/secrets/ib_password.txt` with the new user's credentials. Keep `chmod 0400`.
+
+**Code — compose / config:**
+4. `docker-compose.yml`: remove `profiles: [manual]` from `ib-gateway` so it boots with the stack. Set `IBEAM_RESTART_FAILED_SESSIONS=True` and flip `IBEAM_AUTHENTICATION_STRATEGY` to `B` — both were turned off in Batch 13 specifically to avoid the battle royale; safe to re-enable now that the username is dedicated. Even with these on, the reconciler (deliverable 7) is what *starts* the container; IBeam's restart loop only handles re-auth within an already-running container.
+
+**Code — desired-state toggle:**
+5. Migration `supabase/migrations/00X_ib_desired_state.sql`: insert `('ib_desired_state', 'on')` into `app_config` if not present. Idempotent. New deploys come up with the container already targeted to run.
+6. `POST /api/auth/ib/desired-state` (body: `{ on: boolean }`) in `server/src/routes/auth.ts`:
+   - Auth-gated (whitelisted email).
+   - Writes `ib_desired_state` value to `app_config`.
+   - Returns 200 immediately with the persisted state (the "received" ack). Does NOT block on container action.
+   - Kicks the reconciler so it doesn't have to wait for its next tick.
+   - Replaces the imperative `POST /api/auth/ib/connect` and `/disconnect` endpoints — both removed in this batch.
+7. `server/src/services/ibReconciler.ts` (new):
+   - Loop every ~10s, plus on api startup, plus woken by the desired-state POST.
+   - Reads `ib_desired_state` from `app_config` and current container state from Docker.
+   - desired=on, actual=stopped → `docker start ib-gateway`.
+   - desired=off, actual=running → `docker stop ib-gateway`.
+   - desired=on, actual=running → no-op; IBeam's own `RESTART_FAILED_SESSIONS=True` handles re-auth within the container.
+   - Exponential backoff on repeated start failures (cap ~5 min between attempts) so bad creds don't churn the container.
+   - On sustained start failure: surface via existing status indicator (red + short reason) and one Discord critical ping per failure streak (not per attempt).
+
+**Code — frontend:**
+8. `client/src/components/common/IbStatusIndicator.tsx` refactor:
+   - Replace Connect / Disconnect / Cancel buttons with a single toggle (on/off).
+   - Toggle reflects *desired* state, read from `app_config` via Supabase Realtime (so multi-device toggles stay in sync).
+   - Status dot continues to reflect *actual* state (green/amber/red) — unchanged logic.
+   - Tap → optimistic flip → `POST /api/auth/ib/desired-state` → on error, revert + toast.
+9. `client/src/hooks/` (or wherever `app_config` is already subscribed): extend the existing `app_config` Realtime subscription from Batch 11 to also surface `ib_desired_state`.
+
+**Code — spec:**
+10. `spec/architecture.md`: rewrite the "IB Authentication Flow" section. Replace the on-demand narrative with the two-username + desired-state toggle + reconciler model. Document that the toggle defaults to `on` and most users never touch it.
+11. `spec/archive.md`: move the on-demand explanation + rationale here with the note "superseded by Batch 13.3 (secondary user + desired-state toggle)."
+
+### Files this batch creates/edits
+- `~/upside/secrets/ib_account.txt`, `~/upside/secrets/ib_password.txt` (manual, on VPS)
+- `docker-compose.yml`
+- `supabase/migrations/00X_ib_desired_state.sql` (new)
+- `server/src/routes/auth.ts` (replace connect/disconnect with desired-state endpoint)
+- `server/src/services/ibReconciler.ts` (new)
+- `server/src/index.ts` (start the reconciler on boot)
+- `server/src/services/ibContainer.ts` (likely keep the start/stop primitives, called from the reconciler instead of the routes)
+- `client/src/components/common/IbStatusIndicator.tsx`
+- `spec/architecture.md`, `spec/archive.md`
+
+### Does NOT touch
+- IBeam itself (no fork, no env-var overrides beyond the two flipped flags).
+- pricePoller / Finnhub fallback (Finnhub stays as a defense-in-depth fallback per Batch 13.8 even though IB will now be up continuously).
+- `app_config` schema (existing key/value table from Batch 11 — just a new key).
+
+### Verification
+
+**Always-on path (typical case):**
+- After deploy: `ib_desired_state = 'on'` (default). Reconciler starts the container without any user action. `docker compose logs ib-gateway | grep -i authenticated` shows successful login.
+- Supabase `positions.last_price_update_at` updates continuously with `price_source = 'ib'` at the adaptive cadence.
+- IBKR Mobile logged in on the primary user shows portfolio normally, no interruption.
+- Open IBKR Mobile, navigate for 5+ min → Upside keeps updating, IBKR Mobile not kicked out.
+- Survives one nightly forced logout (~11:45 PM ET) → next morning IBeam has auto-relogged via TOTP without intervention.
+
+**Toggle path:**
+- Tap toggle off in FE → `app_config.ib_desired_state` flips to `'off'` (verify via Supabase). Within ~10s reconciler stops the container. Status dot goes red. Finnhub fallback keeps prices reasonably fresh.
+- Tap toggle back on → desired-state flips to `'on'`, reconciler starts the container within ~10s, status dot goes amber then green.
+- On a second device, the toggle position updates via Realtime within ~1s of the first device's tap.
+- Kill the api mid-cycle → on restart, reconciler reads desired-state and immediately re-syncs the container.
+
+**Failure path:**
+- Temporarily corrupt `ib_password.txt` → reconciler attempts start, IBeam fails to auth, container exits → reconciler backs off exponentially (not a tight loop). Status dot shows red + reason; Discord critical ping fires once for the failure streak.
+- Fix the password → next reconciler tick succeeds; status returns to green.
+
+---
+
 ## Batch 13.5: Verify & implement `tradingDaysHeld` + MTD return
 
 **Depends on:** Batch 13.1.
