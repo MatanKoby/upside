@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 13.5 — Verify & implement `tradingDaysHeld` + MTD return
+- Owner: claude
+- Started: 2026-05-23 (today)
 
 ## Known issues (deferred fixes)
 
