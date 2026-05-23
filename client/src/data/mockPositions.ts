@@ -161,6 +161,8 @@ export const mockTickerDetails: Record<string, TickerDetailData> = {
       portfolioWeightPercent: 25.8,
       contributionPercent: 1.2,
       daysHeld: 96,
+      daysHeldSource: 'ib_transactions',
+      dailyReturnPercent: 18.2 / 96,
     },
     indicators: [
       { name: 'RSI (14)', value: '74.1', status: 'bearish', note: 'Overbought' },
@@ -226,6 +228,8 @@ export function getTickerDetail(symbol: string): TickerDetailData | null {
         ? 0
         : (fallbackPosition.unrealizedPnL / mockAccount.mtdReturn) * 100,
       daysHeld: 0,
+      daysHeldSource: 'observed',
+      dailyReturnPercent: null,
     },
     indicators: [
       { name: 'RSI (14)', value: '-', status: 'neutral' },

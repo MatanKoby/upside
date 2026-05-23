@@ -5,6 +5,7 @@ import { SummaryStrip } from '../components/PortfolioHome/SummaryStrip';
 import { SortBar } from '../components/PortfolioHome/SortBar';
 import { PositionList } from '../components/PortfolioHome/PositionList';
 import { usePositions } from '../hooks/usePositions';
+import { usePortfolioSummary } from '../hooks/usePortfolioSummary';
 import type { MarketSessionState } from '../hooks/useMarketSession';
 import type { SortKey } from '../types';
 
@@ -12,14 +13,12 @@ export default function PortfolioHome() {
   const [sort, setSort] = useState<SortKey>('signals');
   const session = useOutletContext<MarketSessionState>();
   const { positions, isLoading } = usePositions();
+  const { mtdReturn, mtdReturnPercent } = usePortfolioSummary();
 
+  // Portfolio value is computed FE-side from the live `positions` rows so it
+  // ticks instantly on Realtime updates. MTD comes from /api/portfolio/summary
+  // because it needs the BE-cached month-start anchor to compute against.
   const portfolioValue = positions.reduce((acc, p) => acc + p.marketValue, 0);
-
-  // MTD return is sourced from IB's account summary endpoint (TODO Batch 9.x
-  // verification). For now render 0 until that wiring lands; the SummaryStrip
-  // is the only consumer.
-  const mtdReturn = 0;
-  const mtdReturnPercent = 0;
 
   return (
     <div className="portfolio-home">

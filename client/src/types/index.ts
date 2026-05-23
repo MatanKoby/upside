@@ -74,6 +74,14 @@ export type PositionStatsDetail = {
   portfolioWeightPercent: number;
   contributionPercent: number;
   daysHeld: number;
+  // Provenance of the entry date the above two derive from. 'ib_transactions'
+  // = exact (deduced from IB's transaction history); 'observed' = floor
+  // (Upside's first sight, real entry may be earlier). FE renders "N days" vs
+  // "≥N days" accordingly.
+  daysHeldSource: 'observed' | 'ib_transactions';
+  // unrealizedPnLPercent / tradingDaysHeld. Null when entry date unknown or
+  // first poll hasn't completed.
+  dailyReturnPercent: number | null;
 };
 
 export type IndicatorStatus = 'bullish' | 'neutral' | 'bearish' | 'event';

@@ -179,6 +179,105 @@ export async function ibPositions(accountId: string): Promise<RawIbPosition[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Transactions (Batch 13.5).
+//
+// POST /v1/api/pa/transactions with body { acctIds, conids, days }. Used by
+// ibPricePoller to deduce a position's true entry date on first sight, by
+// walking the user's last ~90 days of fills for the most recent 0→non-zero
+// share-balance transition (the true open of the currently-held position).
+//
+// IB returns dates in a "Sat Mar 22 00:00:00 EDT 2026" string format which
+// `new Date()` parses natively. Quantities arrive as unsigned `qty` plus a
+// `type` field ("Buy" / "Sell" / "Dividend" / ...); deduceEntryDate signs
+// them itself and walks the running balance.
+// ---------------------------------------------------------------------------
+
+export interface RawIbTransaction {
+  date?: string;
+  cur?: string;
+  pr?: number;
+  qty?: number;
+  amt?: number;
+  fee?: number;
+  type?: string;
+  desc?: string;
+  conid?: number;
+  acctid?: string;
+}
+
+export async function ibTransactions(
+  acctId: string,
+  conid: number,
+  days = 90,
+): Promise<RawIbTransaction[]> {
+  await rateLimit();
+  const endpoint = '/v1/api/pa/transactions';
+  const { data, status } = await instrumented<{ transactions?: RawIbTransaction[] } | RawIbTransaction[]>(
+    { endpoint, conid },
+    async () => {
+      const res = await client().post(endpoint, { acctIds: [acctId], conids: [conid], days });
+      return { status: res.status, data: res.data };
+    },
+  );
+  if (status < 200 || status >= 300) return [];
+  // IB has historically returned either { transactions: [...] } or a bare
+  // array depending on version — accept both shapes.
+  if (Array.isArray(data)) return data;
+  const arr = (data as { transactions?: RawIbTransaction[] } | null)?.transactions;
+  return Array.isArray(arr) ? arr : [];
+}
+
+/**
+ * Walk a conid's transaction history chronologically and return the date of
+ * the most recent 0→non-zero share-balance transition — the "true entry" of
+ * the position currently held. Returns null if the window doesn't include
+ * the entry (running sum after the walk doesn't match `currentShares`,
+ * meaning earlier fills happened before the window) — caller should fall
+ * back to the observation timestamp.
+ */
+export function deduceEntryDate(
+  transactions: RawIbTransaction[],
+  currentShares: number,
+): Date | null {
+  const events = transactions
+    .map((tx) => {
+      const d = tx.date ? new Date(tx.date) : null;
+      if (!d || Number.isNaN(d.getTime())) return null;
+      const qty = typeof tx.qty === 'number' ? tx.qty : 0;
+      // Sign by `type` (preferred — IB returns positive qty + a side field).
+      // Fall back to `amt` sign as a defensive proxy: buys debit cash (amt<0),
+      // sells credit cash (amt>0).
+      let signed = 0;
+      if (tx.type) {
+        const t = tx.type.toLowerCase();
+        if (t.includes('buy')) signed = qty;
+        else if (t.includes('sell')) signed = -qty;
+        else return null;        // skip dividends, fees, journal entries, etc.
+      } else if (typeof tx.amt === 'number') {
+        signed = tx.amt < 0 ? qty : -qty;
+      } else {
+        return null;
+      }
+      return { date: d, qty: signed };
+    })
+    .filter((e): e is { date: Date; qty: number } => e !== null)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  let running = 0;
+  let entryDate: Date | null = null;
+  for (const e of events) {
+    const prev = running;
+    running += e.qty;
+    if (prev <= 0 && running > 0) entryDate = e.date;
+    if (running <= 0) entryDate = null;
+  }
+  // Sanity: deduced final balance must match IB-reported current shares.
+  // Allow a tiny epsilon for fractional-share float drift.
+  if (Math.abs(running - currentShares) > 0.0001) return null;
+  return entryDate;
+}
+
+// ---------------------------------------------------------------------------
 // Market data.
 //
 // SNAPSHOT — subscribe-then-poll pattern. IB's first response only contains

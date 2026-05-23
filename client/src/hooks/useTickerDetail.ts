@@ -9,7 +9,6 @@ import type { TickerDetailData } from '../types';
 //   - signal: Batch 14a (signal engine)
 //   - indicators: Batch 14a (computed in signalEngine)
 //   - dayLow/High/Market stats: when /api/marketdata/snapshot lands
-//   - positionStats.daysHeld: Batch 13.5
 
 interface DbPosition {
   symbol: string;
@@ -25,6 +24,8 @@ interface DbPosition {
   portfolio_weight: number | string | null;
   portfolio_contribution: number | string | null;
   trading_days_held: number | string | null;
+  daily_return: number | string | null;
+  first_seen_source: string | null;
 }
 
 function num(v: number | string | null | undefined): number {
@@ -72,6 +73,8 @@ function rowToTickerDetail(r: DbPosition, totalPortfolioValue: number): TickerDe
       portfolioWeightPercent: weightPct,
       contributionPercent: contributionPct,
       daysHeld: num(r.trading_days_held),
+      daysHeldSource: r.first_seen_source === 'ib_transactions' ? 'ib_transactions' : 'observed',
+      dailyReturnPercent: r.daily_return == null ? null : num(r.daily_return),
     },
     indicators: [],
   };

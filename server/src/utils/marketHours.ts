@@ -90,3 +90,30 @@ export function marketPeriodAt(now: Date = new Date()): MarketPeriod {
 export function isMarketActive(period: MarketPeriod): boolean {
   return period !== 'closed';
 }
+
+/**
+ * US trading days from `entry` through `now`, both ET-calendar-day inclusive.
+ * Returns 1 on the entry day itself (so the %/day metric never divides by 0),
+ * incrementing each subsequent weekday that isn't a market holiday. Returns 0
+ * if `entry` is in the future relative to `now`.
+ *
+ * Used by ibPricePoller to compute `trading_days_held` from `first_seen_at`.
+ */
+export function tradingDaysHeld(entry: Date, now: Date = new Date()): number {
+  const entryParts = partsInTimezone(entry);
+  const nowParts = partsInTimezone(now);
+  // Walk noon-UTC of each calendar day so partsInTimezone resolves to the
+  // intended ET date regardless of DST.
+  let cursor = Date.UTC(entryParts.year, entryParts.month - 1, entryParts.day, 12);
+  const endDay = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12);
+  if (cursor > endDay) return 0;
+  let count = 0;
+  while (cursor <= endDay) {
+    const p = partsInTimezone(new Date(cursor));
+    const isWeekday = p.weekday >= 1 && p.weekday <= 5;
+    const isHoliday = US_MARKET_HOLIDAYS.has(isoDate(p.year, p.month, p.day));
+    if (isWeekday && !isHoliday) count++;
+    cursor += 24 * 60 * 60 * 1000;
+  }
+  return count;
+}

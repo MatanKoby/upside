@@ -7,10 +7,14 @@ export function SummaryStrip({
   mtdReturnPercent,
 }: {
   portfolioValue: number;
-  mtdReturn: number;
-  mtdReturnPercent: number;
+  // Null when the api was offline at the first poll of the current month —
+  // no anchor was captured, so MTD can't be computed honestly. Renders "—"
+  // until the next month rolls over.
+  mtdReturn: number | null;
+  mtdReturnPercent: number | null;
 }) {
-  const tone = getPnlColor(mtdReturnPercent);
+  const hasMtd = mtdReturn != null && mtdReturnPercent != null;
+  const tone = hasMtd ? getPnlColor(mtdReturnPercent) : 'neutral';
   return (
     <div className="summary-strip">
       <div className="summary-card">
@@ -19,8 +23,13 @@ export function SummaryStrip({
       </div>
       <div className="summary-card">
         <div className="summary-label">MTD return</div>
-        <div className={`summary-value summary-value-${tone}`}>
-          {formatSignedCurrency(mtdReturn, false)} ({formatSignedPercent(mtdReturnPercent)})
+        <div
+          className={`summary-value summary-value-${tone}`}
+          title={hasMtd ? undefined : 'No month-start anchor recorded yet — MTD will populate next month.'}
+        >
+          {hasMtd
+            ? `${formatSignedCurrency(mtdReturn, false)} (${formatSignedPercent(mtdReturnPercent)})`
+            : '—'}
         </div>
       </div>
     </div>

@@ -19,6 +19,8 @@ import {
   ibHistory,
   ibContractInfo,
   ibStatus,
+  ibTransactions,
+  deduceEntryDate,
 } from '../services/ibGateway.js';
 import {
   ibPositionToPartial,
@@ -28,7 +30,8 @@ import {
 } from '../services/ibMappers.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
 import { notifyError, notifyCritical } from '../services/notify.js';
-import { marketPeriodAt } from '../utils/marketHours.js';
+import { marketPeriodAt, tradingDaysHeld } from '../utils/marketHours.js';
+import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 
 // Polling cadences, in ms. We always poll at least once when IB is connected;
@@ -140,6 +143,11 @@ interface AssembledPosition {
   portfolio_contribution: number;
   daily_return: number | null;
   trading_days_held: number | null;
+  // Batch 13.5: entry-date provenance. 'ib_transactions' = deduced exactly
+  // from /v1/api/pa/transactions; 'observed' = stamped at first sight, FE
+  // renders as a floor ("≥N days").
+  first_seen_at: string;
+  first_seen_source: 'observed' | 'ib_transactions';
   currency: string;
   asset_class: string;
   industry: string | null;
@@ -149,6 +157,44 @@ interface AssembledPosition {
   price_source: 'ib';
   last_price_update_at: string;
   updated_at: string;
+}
+
+interface EntryInfo {
+  firstSeenAt: string;
+  firstSeenSource: 'observed' | 'ib_transactions';
+}
+
+// On first sight of a conid (or a row whose `first_seen_at` is NULL from the
+// Batch-13.5 migration), try to deduce the true entry date from IB's last 90
+// days of transactions. Fall back to now() with source='observed' if IB
+// returns nothing useful — that's the floor case the FE renders as "≥N days".
+async function resolveEntryInfo(
+  raw: RawIbPosition,
+  accountId: string,
+  existingFirstSeenAt: string | null,
+  existingFirstSeenSource: string | null,
+): Promise<EntryInfo> {
+  if (existingFirstSeenAt) {
+    return {
+      firstSeenAt: existingFirstSeenAt,
+      firstSeenSource: existingFirstSeenSource === 'ib_transactions' ? 'ib_transactions' : 'observed',
+    };
+  }
+  try {
+    const txs = await ibTransactions(accountId, raw.conid);
+    const partial = ibPositionToPartial(raw);
+    const entry = deduceEntryDate(txs, partial.shares);
+    if (entry) {
+      return { firstSeenAt: entry.toISOString(), firstSeenSource: 'ib_transactions' };
+    }
+  } catch (e) {
+    void notifyError(
+      `ibPricePoller.transactions.${raw.conid}`,
+      (e as Error).message ?? 'unknown',
+      e,
+    );
+  }
+  return { firstSeenAt: new Date().toISOString(), firstSeenSource: 'observed' };
 }
 
 function snapNum(snap: RawIbSnapshot | undefined, code: string): number | null {
@@ -161,6 +207,7 @@ async function assemblePosition(
   snap: RawIbSnapshot | undefined,
   contract: ContractsCacheRow | null,
   userId: string,
+  entryInfo: EntryInfo,
 ): Promise<AssembledPosition> {
   const partial = ibPositionToPartial(raw);
   const bars = await todaysBars(partial.conid);
@@ -170,6 +217,10 @@ async function assemblePosition(
   const todayChangePct = todayChange != null && prevClose ? (todayChange / prevClose) * 100 : null;
   const costBasis = partial.shares * partial.avgCost;
   const unrealizedPnlPct = costBasis !== 0 ? (partial.unrealizedPnl / costBasis) * 100 : null;
+
+  const daysHeld = tradingDaysHeld(new Date(entryInfo.firstSeenAt));
+  const dailyReturn =
+    unrealizedPnlPct != null && daysHeld > 0 ? unrealizedPnlPct / daysHeld : null;
 
   return {
     user_id: userId,
@@ -191,8 +242,10 @@ async function assemblePosition(
     // Portfolio-level fields filled after we have the full set:
     portfolio_weight: 0,
     portfolio_contribution: 0,
-    daily_return: null,            // TODO Batch 9-followup: needs trading_days_held first
-    trading_days_held: null,       // TODO Batch 9-followup: pull from IB transactions
+    daily_return: dailyReturn,
+    trading_days_held: daysHeld > 0 ? daysHeld : null,
+    first_seen_at: entryInfo.firstSeenAt,
+    first_seen_source: entryInfo.firstSeenSource,
     currency: partial.currency,
     asset_class: partial.assetClass,
     industry: contract?.industry ?? null,
@@ -222,6 +275,16 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     return;
   }
 
+  // Pull existing rows once — used both for entry-date preservation and the
+  // change-detection skip below.
+  const { data: existing } = await supabase()
+    .from('positions')
+    .select('symbol, current_price, market_value, unrealized_pnl, vwap_value, shares, avg_cost, first_seen_at, first_seen_source')
+    .eq('user_id', userId);
+
+  const existingMap = new Map<string, Record<string, unknown>>();
+  for (const r of existing ?? []) existingMap.set(r.symbol, r);
+
   const conids = positions.map((p) => p.conid);
   const snapshots = await ibSnapshot(conids);
   const snapByConid = new Map<number, RawIbSnapshot>();
@@ -231,24 +294,36 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   for (const raw of positions) {
     const contract = await ensureContractCached(raw.conid, raw.contractDesc);
     const snap = snapByConid.get(raw.conid);
-    assembled.push(await assemblePosition(raw, snap, contract, userId));
+    const partial = ibPositionToPartial(raw);
+    const existingRow = existingMap.get(partial.symbol);
+    const entryInfo = await resolveEntryInfo(
+      raw,
+      accountId,
+      (existingRow?.first_seen_at as string | null) ?? null,
+      (existingRow?.first_seen_source as string | null) ?? null,
+    );
+    assembled.push(await assemblePosition(raw, snap, contract, userId, entryInfo));
   }
   finalizePortfolioMetrics(assembled);
 
-  // Upsert (user_id, symbol). Skip a row if nothing changed.
-  const { data: existing } = await supabase()
-    .from('positions')
-    .select('symbol, current_price, market_value, unrealized_pnl, vwap_value, shares, avg_cost')
-    .eq('user_id', userId);
-
-  const existingMap = new Map<string, Record<string, unknown>>();
-  for (const r of existing ?? []) existingMap.set(r.symbol, r);
+  // MTD: stamp the portfolio value at the start of each calendar month so
+  // /api/portfolio/summary can compute month-to-date return. Fire-and-forget;
+  // a Redis hiccup must not block the position write below.
+  const portfolioTotal = assembled.reduce((acc, r) => acc + (r.market_value || 0), 0);
+  void recordPortfolioValueForMtd(userId, portfolioTotal).catch((err) => {
+    void notifyError('ibPricePoller.mtdCache', (err as Error).message ?? 'unknown', err);
+  });
 
   const toUpsert: AssembledPosition[] = [];
   for (const r of assembled) {
     const e = existingMap.get(r.symbol);
     if (!e) { toUpsert.push(r); continue; }
-    // change detection — only the fields users see ticking
+    // change detection — only the fields users see ticking.
+    // first_seen_at / first_seen_source are intentionally excluded: they're
+    // stable per (user, symbol), but trading_days_held + daily_return derived
+    // from them will tick at most once per day. We catch that via the
+    // unrealized_pnl path (which moves intraday) — when PnL moves, daily_return
+    // is recomputed and persisted alongside.
     if (
       Number(e.current_price) !== r.current_price
       || Number(e.market_value) !== r.market_value
