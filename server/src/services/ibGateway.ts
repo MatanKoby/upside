@@ -84,7 +84,10 @@ async function instrumented<T>(
     // Surface API error responses to Discord via the shared policy (suppresses
     // expected churn, rate-limited per endpoint). Without this, non-2xx
     // responses only ever reached the metrics table — Discord stayed blind.
-    notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, opts.conid != null ? `conid=${opts.conid}` : '');
+    // Debug-passthrough probes are intentional experiments, not errors — skip.
+    if (!opts.endpoint.startsWith('debug-passthrough:')) {
+      notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, opts.conid != null ? `conid=${opts.conid}` : '');
+    }
   }
 }
 
@@ -129,12 +132,14 @@ async function instrumentedWithRetry<T>(
       .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
     // Same Discord surfacing as instrumented() — fires once after all internal
     // retries (succeeded reflects the final attempt), so a flaky-then-recovered
-    // call stays quiet.
-    notifyApiFailure(
-      `ib_api.${opts.endpoint}`,
-      lastStatus,
-      `${retries > 0 ? `after ${retries} retries ` : ''}${opts.conid != null ? `conid=${opts.conid}` : ''}`.trim(),
-    );
+    // call stays quiet. Debug-passthrough probes are excluded as above.
+    if (!opts.endpoint.startsWith('debug-passthrough:')) {
+      notifyApiFailure(
+        `ib_api.${opts.endpoint}`,
+        lastStatus,
+        `${retries > 0 ? `after ${retries} retries ` : ''}${opts.conid != null ? `conid=${opts.conid}` : ''}`.trim(),
+      );
+    }
   }
 }
 
@@ -423,19 +428,30 @@ export interface IbRawResponse {
   data: unknown;
 }
 
-export async function ibRawGet(
-  path: string,
-  query?: Record<string, string | number | undefined>,
-): Promise<IbRawResponse> {
+// Shared core for the debug passthrough (GET + POST). Issues the request via
+// `exec`, preserves IB's content-type, and tags the metric as a passthrough so
+// debug probes are excluded from Discord error notifications (see instrumented).
+async function ibRaw(path: string, exec: () => Promise<AxiosResponse>): Promise<IbRawResponse> {
   await rateLimit();
   let contentType = 'application/json';
   const { status, data } = await instrumented<unknown>(
     { endpoint: `debug-passthrough:${path}` },
     async () => {
-      const res = await client().get(path, { params: query });
+      const res = await exec();
       contentType = (res.headers['content-type'] as string | undefined) ?? contentType;
       return { status: res.status, data: res.data };
     },
   );
   return { status, data, contentType };
+}
+
+export function ibRawGet(
+  path: string,
+  query?: Record<string, string | number | undefined>,
+): Promise<IbRawResponse> {
+  return ibRaw(path, () => client().get(path, { params: query }));
+}
+
+export function ibRawPost(path: string, body: unknown): Promise<IbRawResponse> {
+  return ibRaw(path, () => client().post(path, body));
 }

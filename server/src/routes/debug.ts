@@ -4,36 +4,34 @@
 // returning the raw response. Used to capture real IB data shapes from the
 // laptop without spinning up the local gateway. See Batch 13.2 in BUILD_QUEUE.md
 // and docs/debug.md.
+//
+//   GET  — read-only GET paths (isAllowedIbPath).      Extra ?query forwarded.
+//   POST — read-only PA query paths (isAllowedIbPostPath). JSON body forwarded.
+// Both share the same auth gate, IB-connected check, and response/error
+// handling via passthroughHandler — the only differences are the allowlist and
+// how the IB call is issued.
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getIbContainerState } from '../services/ibContainer.js';
-import { ibStatus, ibRawGet } from '../services/ibGateway.js';
-import { allowedPathsForError, isAllowedIbPath } from '../services/ibPassthroughAllowlist.js';
+import { ibStatus, ibRawGet, ibRawPost, type IbRawResponse } from '../services/ibGateway.js';
+import {
+  allowedPathsForError,
+  isAllowedIbPath,
+  allowedPostPathsForError,
+  isAllowedIbPostPath,
+} from '../services/ibPassthroughAllowlist.js';
 
 const router = Router();
 
-router.get('/ib-passthrough', requireAuth, async (req: Request, res: Response) => {
-  const path = typeof req.query.path === 'string' ? req.query.path : '';
-  if (!path) {
-    res.status(400).json({ error: 'missing_path', hint: 'pass ?path=/v1/api/...' });
-    return;
-  }
-  if (!isAllowedIbPath(path)) {
-    res.status(400).json({
-      error: 'path_not_allowed',
-      reason: 'path_not_allowed',
-      allowed: allowedPathsForError(),
-    });
-    return;
-  }
-
-  // Confirm IBeam container is running before issuing the call. ibStatus
-  // would fail with a noisy network error otherwise.
+// Confirm the IBeam container is running AND the session is authenticated
+// before issuing a call (ibStatus would otherwise fail with a noisy network
+// error). Writes the 503 itself and returns false when not ready.
+async function ensureIbConnected(res: Response): Promise<boolean> {
   const containerState = await getIbContainerState().catch(() => 'missing' as const);
   if (containerState !== 'running') {
     res.status(503).json({ error: 'ib_not_connected', reason: 'ib_not_connected', containerState });
-    return;
+    return false;
   }
   const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
@@ -43,25 +41,67 @@ router.get('/ib-passthrough', requireAuth, async (req: Request, res: Response) =
       authenticated: status.authenticated,
       connected: status.connected,
     });
-    return;
+    return false;
   }
+  return true;
+}
 
-  // Collect any remaining query params and forward them to IB. Strip our
-  // `path` param so it doesn't get echoed into the IB call.
-  const forwardedQuery: Record<string, string> = {};
-  for (const [k, v] of Object.entries(req.query)) {
-    if (k === 'path') continue;
-    if (typeof v === 'string') forwardedQuery[k] = v;
-    else if (Array.isArray(v) && typeof v[0] === 'string') forwardedQuery[k] = v[0];
-  }
+// Builds a passthrough handler given a method-specific allowlist + IB call.
+// Shared: path validation, allowlist rejection, IB-connected gate, raw response
+// relay (status + content-type preserved), and 502-on-throw.
+function passthroughHandler(opts: {
+  isAllowed: (path: string) => boolean;
+  allowedForError: () => readonly string[];
+  call: (path: string, req: Request) => Promise<IbRawResponse>;
+}) {
+  return async (req: Request, res: Response): Promise<void> => {
+    const path = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!path) {
+      res.status(400).json({ error: 'missing_path', hint: 'pass ?path=/v1/api/...' });
+      return;
+    }
+    if (!opts.isAllowed(path)) {
+      res.status(400).json({ error: 'path_not_allowed', reason: 'path_not_allowed', allowed: opts.allowedForError() });
+      return;
+    }
+    if (!(await ensureIbConnected(res))) return;
+    try {
+      const out = await opts.call(path, req);
+      res.status(out.status).type(out.contentType).send(out.data);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      res.status(502).json({ error: 'passthrough_failed', message: msg });
+    }
+  };
+}
 
-  try {
-    const out = await ibRawGet(path, forwardedQuery);
-    res.status(out.status).type(out.contentType).send(out.data);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(502).json({ error: 'passthrough_failed', message: msg });
-  }
-});
+router.get(
+  '/ib-passthrough',
+  requireAuth,
+  passthroughHandler({
+    isAllowed: isAllowedIbPath,
+    allowedForError: allowedPathsForError,
+    call: (path, req) => {
+      // Forward any query params other than our own `path` to IB.
+      const forwardedQuery: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (k === 'path') continue;
+        if (typeof v === 'string') forwardedQuery[k] = v;
+        else if (Array.isArray(v) && typeof v[0] === 'string') forwardedQuery[k] = v[0];
+      }
+      return ibRawGet(path, forwardedQuery);
+    },
+  }),
+);
+
+router.post(
+  '/ib-passthrough',
+  requireAuth,
+  passthroughHandler({
+    isAllowed: isAllowedIbPostPath,
+    allowedForError: allowedPostPathsForError,
+    call: (path, req) => ibRawPost(path, req.body ?? {}),
+  }),
+);
 
 export default router;

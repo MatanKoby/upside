@@ -87,9 +87,27 @@ if [[ -z "$API_URL" ]]; then
 fi
 
 # ---- Args ----
+# GET (default):  ./bin/upside-ib <ib-path> [key=value ...]
+# POST:           ./bin/upside-ib --post '<json-body>' <ib-path>
+#   POST forwards the JSON body to IB; only the read-only PortfolioAnalyst paths
+#   in the POST allowlist are accepted (see ibPassthroughAllowlist.ts).
+METHOD="GET"
+POST_BODY=""
+if [[ "${1:-}" == "--post" ]]; then
+  METHOD="POST"
+  POST_BODY="${2:-}"
+  if [[ -z "$POST_BODY" ]]; then
+    echo "Usage: $0 --post '<json-body>' <ib-path>" >&2
+    exit 2
+  fi
+  shift 2
+fi
+
 IB_PATH="${1:-}"
 if [[ -z "$IB_PATH" ]]; then
-  echo "Usage: $0 <ib-path> [key=value ...]" >&2
+  echo "Usage:" >&2
+  echo "  $0 <ib-path> [key=value ...]         # GET" >&2
+  echo "  $0 --post '<json-body>' <ib-path>    # POST (read-only PA paths)" >&2
   echo "Allowlist: see server/src/services/ibPassthroughAllowlist.ts" >&2
   exit 2
 fi
@@ -123,6 +141,8 @@ if [[ $# -gt 0 ]]; then
 fi
 # Filesystem-safe: strip anything that isn't a-z, 0-9, dash, dot, slash, =, &
 SUBDIR=$(echo "$SUBDIR" | sed 's|[^a-zA-Z0-9./=&_-]|_|g')
+# Keep POST captures separate from any GET capture of the same path.
+[[ "$METHOD" == "POST" ]] && SUBDIR="${SUBDIR}/POST"
 
 mkdir -p "$SUBDIR"
 TS=$(date -u +%Y-%m-%dT%H-%MZ)
@@ -130,13 +150,11 @@ TS_FILE="${SUBDIR}/${TS}.json"
 LATEST_FILE="${SUBDIR}/latest.json"
 
 # ---- Call + save ----
-HTTP_STATUS=$(
-  curl -sS \
-    -H "Authorization: Bearer $TOKEN" \
-    -o "$TS_FILE" \
-    -w '%{http_code}' \
-    "$API_URL/api/debug/ib-passthrough?$QUERY"
-)
+CURL_ARGS=(-sS -H "Authorization: Bearer $TOKEN" -o "$TS_FILE" -w '%{http_code}')
+if [[ "$METHOD" == "POST" ]]; then
+  CURL_ARGS+=(-X POST -H "Content-Type: application/json" --data "$POST_BODY")
+fi
+HTTP_STATUS=$(curl "${CURL_ARGS[@]}" "$API_URL/api/debug/ib-passthrough?$QUERY")
 cp "$TS_FILE" "$LATEST_FILE"
 
 # Print summary to stderr, body to stdout.
