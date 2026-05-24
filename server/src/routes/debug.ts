@@ -20,6 +20,7 @@ import {
   isAllowedIbPath,
   allowedPostPathsForError,
   isAllowedIbPostPath,
+  isForbiddenIbPath,
 } from '../services/ibPassthroughAllowlist.js';
 
 const router = Router();
@@ -58,6 +59,12 @@ function passthroughHandler(opts: {
     const path = typeof req.query.path === 'string' ? req.query.path : '';
     if (!path) {
       res.status(400).json({ error: 'missing_path', hint: 'pass ?path=/v1/api/...' });
+      return;
+    }
+    // Hard deny-gate first: trade-execution paths are rejected outright,
+    // independent of (and ahead of) the positive allowlists — for GET and POST.
+    if (isForbiddenIbPath(path)) {
+      res.status(403).json({ error: 'forbidden_trade_path', reason: 'forbidden_trade_path' });
       return;
     }
     if (!opts.isAllowed(path)) {

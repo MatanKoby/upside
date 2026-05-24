@@ -11,6 +11,7 @@
 const ALLOWED: readonly RegExp[] = [
   /^\/v1\/api\/iserver\/accounts$/,
   /^\/v1\/api\/iserver\/account\/[^/]+\/summary$/,
+  /^\/v1\/api\/iserver\/account\/trades$/,
   /^\/v1\/api\/iserver\/auth\/status$/,
   /^\/v1\/api\/iserver\/contract\/\d+\/info$/,
   /^\/v1\/api\/iserver\/marketdata\/history$/,
@@ -26,18 +27,23 @@ const ALLOWED: readonly RegExp[] = [
   /^\/v1\/api\/tickle$/,
 ];
 
-// Documented for the next contributor — do NOT add any path containing these
-// substrings to the allowlist. Trade-execution surface area. The endpoint's
-// GET-only constraint and this allowlist together are the defense.
-//
-//   /orders
-//   /reply/
-//   /scanner/
-//   anything containing: order, place, cancel, modify
-//
-// We don't enforce these as a deny-list in code because the positive
-// allowlist already excludes them; this comment exists so future allowlist
-// changes are reviewed against the rule.
+// HARD DENY-GATE — trade-execution surface area. Checked BEFORE either positive
+// allowlist, for BOTH GET and POST, so the passthrough can NEVER place, modify,
+// or cancel an order — even if a future allowlist edit mistakenly includes a
+// dangerous path. This is the structural guarantee (not just a convention) that
+// this surface is read-only. Do not weaken without a very good reason.
+const FORBIDDEN: readonly RegExp[] = [
+  /\/orders?(\/|$)/i,          // /orders, /order/{id}
+  /\/reply(\/|$)/i,            // order confirmation replies
+  /\/(place|cancel|modify)/i,  // any order place/cancel/modify verb
+  /\/scanner(\/|$)/i,          // market scanner (not read-only schema discovery)
+];
+
+// True if the path touches the trade-execution surface and must be rejected
+// outright (403), regardless of allowlists.
+export function isForbiddenIbPath(path: string): boolean {
+  return FORBIDDEN.some((r) => r.test(path));
+}
 
 // Positive-list for the POST passthrough. POST is the verb IB uses to PLACE
 // ORDERS, so this list is deliberately tiny and audited: read-only Portfolio

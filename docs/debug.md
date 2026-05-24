@@ -14,7 +14,7 @@ Proxies a single IB Client Portal Web API path and returns the raw response.
 - **IB session required** — if IBeam container isn't running or the gateway isn't authenticated, 503 `ib_not_connected`.
 - **Path allowlist** (positive list of regexes in `server/src/services/ibPassthroughAllowlist.ts`). Anything not in the allowlist → 400 `path_not_allowed` with the allowed paths listed in the response. GET and POST have **separate** allowlists (`isAllowedIbPath` vs `isAllowedIbPostPath`).
 - **GET + a tightly-scoped POST surface** (see the POST section below). No PUT / DELETE.
-- **Forbidden families** (rule for future allowlist additions): never add paths containing `orders`, `reply/`, `scanner/`, `place`, `cancel`, `modify`, or session-mutating paths like `auth/ssodh/init`. Order operations would let a compromised whitelisted bearer execute trades; read-only is the structural mitigation.
+- **Hard deny-gate (enforced)** — `isForbiddenIbPath` rejects any trade-execution path (`/orders`, `/order/{id}`, `/reply/`, `place`/`cancel`/`modify`, `/scanner/`) with **403 `forbidden_trade_path`**, checked **before** either allowlist, for **both GET and POST**. This is the structural guarantee that the passthrough can never place/modify/cancel an order — even if a future allowlist edit mistakenly includes a dangerous path. The positive allowlists are a second layer on top.
 - **Audited** — every call writes a row to `ib_api_metrics` (post-Batch-13.7: `external_api_metrics`) with endpoint tag `debug-passthrough:<path>`.
 
 ### Usage
@@ -50,6 +50,7 @@ curl -sS \
 
 - `/v1/api/iserver/accounts`
 - `/v1/api/iserver/account/<id>/summary`
+- `/v1/api/iserver/account/trades` _(read-only — lists recent executions with timestamps; cannot place trades)_
 - `/v1/api/iserver/auth/status`
 - `/v1/api/iserver/contract/<conid>/info`
 - `/v1/api/iserver/marketdata/history`
