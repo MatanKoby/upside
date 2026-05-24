@@ -228,40 +228,27 @@ export async function ibTransactions(
   conid: number,
   days = 90,
 ): Promise<RawIbTransaction[]> {
+  await rateLimit();
   const endpoint = '/v1/api/pa/transactions';
-  // Two IB quirks, both observed live in Batch 13.5:
-  //  1. The body requires `currency`, and `days` must be a string — omitting
-  //     currency or sending a numeric `days` is rejected with HTTP 400.
-  //  2. The PortfolioAnalyst backend cold-starts: the first POST after the
-  //     module is idle returns HTTP 500 with an *empty* body, then succeeds
-  //     once warmed. So retry a few times before giving up.
-  const body = { acctIds: [acctId], conids: [conid], currency: 'USD', days: String(days) };
-  const MAX_ATTEMPTS = 4;
-  const RETRY_MS = 1000;
-  const { data, status } = await instrumentedWithRetry<{ transactions?: RawIbTransaction[] } | RawIbTransaction[]>(
+  // Body requirements, diagnosed live via the POST passthrough (Batch 13.5):
+  // `acctIds`, `conids`, and `currency` are required (missing currency → 400),
+  // and `days` is an optional numeric lookback window — sending it as a STRING
+  // is rejected with a 500. So: currency present, days numeric.
+  const body = { acctIds: [acctId], conids: [conid], currency: 'USD', days };
+  const { data, status } = await instrumented<{ transactions?: RawIbTransaction[] } | RawIbTransaction[]>(
     { endpoint, conid },
-    async (h) => {
-      let last: AxiosResponse | undefined;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        await rateLimit();
-        const res = await client().post(endpoint, body);
-        last = res;
-        if (res.status >= 200 && res.status < 300) {
-          return { status: res.status, data: res.data };
-        }
-        // Log each non-2xx so a persistent failure (vs. cold-start) is visible.
-        console.warn(
-          `[ibTransactions] conid=${conid} attempt ${attempt + 1}/${MAX_ATTEMPTS} HTTP ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`,
-        );
-        h.bump();
-        await new Promise((r) => setTimeout(r, RETRY_MS));
-      }
-      return { status: last?.status ?? 0, data: last?.data ?? [] };
+    async () => {
+      const res = await client().post(endpoint, body);
+      return { status: res.status, data: res.data };
     },
   );
-  if (status < 200 || status >= 300) return [];
-  // IB has historically returned either { transactions: [...] } or a bare
-  // array depending on version — accept both shapes.
+  if (status < 200 || status >= 300) {
+    // Surface the body so a future non-2xx is diagnosable rather than swallowed.
+    console.warn(`[ibTransactions] conid=${conid} HTTP ${status}: ${JSON.stringify(data).slice(0, 300)}`);
+    return [];
+  }
+  // IB returns either { transactions: [...] } or a bare array depending on
+  // version — accept both shapes.
   if (Array.isArray(data)) return data;
   const arr = (data as { transactions?: RawIbTransaction[] } | null)?.transactions;
   return Array.isArray(arr) ? arr : [];
