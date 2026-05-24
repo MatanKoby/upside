@@ -73,6 +73,12 @@ logs/
 # and re-creating with a new password.
 /.upside-readonly-db
 
+# === Supabase session JWT for IB passthrough debugging (bin/upside-ib) ===
+# Single line: the access_token copied from the PWA (Settings → Copy access
+# token, or DevTools localStorage). A bearer credential — never commit.
+# Expires ~1h; re-paste when calls start returning 401.
+/.upside-token
+
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.
 captures/
