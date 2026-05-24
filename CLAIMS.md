@@ -11,7 +11,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Batch 13.5 — Verify & implement `tradingDaysHeld` + MTD return
 - Owner: claude
 - Started: 2026-05-23
-- Status note (2026-05-23): code complete + deployed + Supabase migration applied. Awaiting verification of real IB data flows. **Verification blocked on read-only DB access setup, not on code.**
+- Status note (2026-05-24): code complete + deployed + Supabase migration applied. Pivoted to manual SQL Editor verification — long-lived dev read-access deferred as a separate problem (see "Read-access setup blockers" below). **Next session: claude writes 3-4 SQL inspection queries, user pastes into Supabase SQL Editor, user pastes results back, we finish 13.5.**
 
   **Code state (commit 4cc5536, pushed to dev):**
   - Migration 007 (`first_seen_at` + `first_seen_source` on positions) — applied to Supabase ✓
@@ -23,23 +23,21 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
   - FE: `PositionStatsDetail.daysHeldSource` + `dailyReturnPercent`; `PositionStats` renders "≥N days" + "≤X%/d" floor when source=observed, exact when source=ib_transactions. `usePortfolioSummary` hook polls /api/portfolio/summary + Realtime nudges; `SummaryStrip` handles null MTD with "—".
   - VPS deployed (user confirmed). IB connected (user confirmed). Polls should be running with the new fields.
 
-  **Verification access setup state:**
-  - Approach landed on: dedicated read-only Postgres role `upside_readonly` with login+password+BYPASSRLS, SELECT-only on `public.*`. Modern (no legacy JWT secret).
-  - Role created in Supabase via SQL Editor ✓. Password rotated to hex-only (no URL-special chars) ✓.
-  - Connection string saved to `.upside-readonly-db` (gitignored). Project ref: `qkvegpfzstylyekmusnk`, region us-east-1.
-  - `psql` installed on dev WSL ✓.
-  - **Blocker**: Session pooler connection (`aws-0-us-east-1.pooler.supabase.com:5432`) returns "FATAL: Tenant or user not found". Likely either (a) Supavisor cache lag after role creation (try again later), (b) username-format drift from current Supabase Dashboard, or (c) custom role not propagated to pooler tenant list.
-  - **Next session pickup**:
-    1. Have user paste verbatim Dashboard Session-pooler connection string (with `postgres.<ref>` user, password masked) so we can compare format to what we templated.
-    2. OR try Direct connection (`db.<ref>.supabase.co:5432`) — bypasses pooler entirely, needs IPv6 on WSL.
-    3. OR fall back to user pasting query results from Supabase SQL Editor for one-shot verification — abandons the long-lived read access goal but unblocks 13.5 finish.
+  **Read-access setup blockers (deferred to separate task; not blocking 13.5 finish):**
+  - Approach attempted: dedicated read-only Postgres role `upside_readonly` (login+password+BYPASSRLS, SELECT-only on `public.*`), connect via `psql` from dev WSL.
+  - Role created in Supabase via SQL Editor ✓. Password rotated to hex-only (no URL-special chars) ✓. Connection string in `.upside-readonly-db` (gitignored).
+  - **Blocker 1 — Session pooler rejects custom roles:** `aws-0-us-east-1.pooler.supabase.com:5432` returns "FATAL: Tenant or user not found" for `upside_readonly.<project_ref>`. Persisted across 24+ hours so not cache lag. Likely Supavisor only registers built-in roles (postgres / dashboard_user / authenticator / authenticated / anon / service_role). Custom roles may need explicit GRANT-membership in a built-in role to be visible — untested.
+  - **Blocker 2 — Direct connection requires IPv6:** `db.<ref>.supabase.co:5432` is IPv6-only on free tier (Dashboard says so explicitly). WSL2 default networking has no working IPv6 route → TCP fails with "is the server running...". Either need IPv4 add-on (~$4/mo) or fix WSL IPv6.
+  - **Pivot for 13.5:** abandon long-lived `psql` access for now. Use manual SQL Editor verification — claude writes inspection queries, user pastes them into Supabase Dashboard SQL Editor, pastes results back.
+  - **Future task (separate, post-13.5):** revisit read-access setup. Most promising untested path: `grant upside_readonly to authenticator;` to make Supavisor recognize the custom role. If that fails, IPv4 add-on is the unblocking purchase.
 
-  **Verification query to run once access works:**
+  **Verification queries — to write next session and have user run in SQL Editor:**
   ```
   select symbol, first_seen_at, first_seen_source, trading_days_held, daily_return, price_source, last_price_update_at from positions order by symbol;
-  curl /api/portfolio/summary  -- check mtdAnchor populated
   ```
-  Then visually confirm PWA shows days-held + return/day in PositionStats, MTD in SummaryStrip. Then move to Finish protocol (task #8).
+  Plus a curl to `/api/portfolio/summary` (token-gated; user runs from terminal) to confirm `mtdAnchor` populated.
+  Plus visual confirm in PWA that PositionStats shows days-held + return/day and SummaryStrip shows MTD.
+  Then Finish protocol (task #8).
 
 ## Known issues (deferred fixes)
 
