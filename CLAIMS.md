@@ -47,6 +47,13 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Settings screen (minimal) + copy-JWT dev tool (2026-05-24)
+- Owner: claude
+- Replaced the `/settings` ComingSoon placeholder with a real (minimal) Settings page: shows signed-in email + a "Copy access token" button that copies the live Supabase `access_token` to the clipboard (with a reveal-to-select fallback when the Clipboard API is blocked). Purpose: stop hand-copying the JWT from DevTools for `bin/upside-ib` / passthrough debugging.
+- Security: page renders only inside `<AuthGuard>` (whole app is wrapped at App.tsx root), so an unauthenticated/deep-link visitor gets Login, non-whitelisted gets signed-out + bounced to google.com. The JWT is read from the live session at click time — not baked into the bundle, and `getSession()` returns null without a real authenticated session, so there's nothing to copy for a non-authenticated user. BE still enforces `requireAuth` on every route.
+- Partial pre-build of Batch 15 (Settings wired) — that batch should expand this page (IB connection, thresholds, theme, sign-out) rather than start from scratch.
+- Deploy: FE is on Vercel (separate from the VPS api rebuild).
+
 ### Discord error observability — funnel external-API failures (2026-05-24)
 - Owner: claude
 - Problem: Discord (our error-observability tool) showed almost nothing — only ~1 critical/day. Every IB/Finnhub non-2xx was recorded to `external_api_metrics` but never notified, so the `/pa/transactions` 500 (and all API errors) were invisible.
