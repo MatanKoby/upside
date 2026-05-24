@@ -47,6 +47,12 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Discord error observability — funnel external-API failures (2026-05-24)
+- Owner: claude
+- Problem: Discord (our error-observability tool) showed almost nothing — only ~1 critical/day. Every IB/Finnhub non-2xx was recorded to `external_api_metrics` but never notified, so the `/pa/transactions` 500 (and all API errors) were invisible.
+- Fix: single policy `notify.notifyApiFailure(key, status, detail)` owns the routing — routine channel, rate-limited per endpoint, **suppresses expected churn** (status<400, 401/403 session transitions, 429 rate-limits, status-0 throws which the caller's catch owns). Wired into IB's `instrumented` + `instrumentedWithRetry` wrappers (`ib_api.<endpoint>`) and Finnhub's `call` wrapper (`finnhub_api.<category>`). Critical stays for structural breakage (process/loop crash, Supabase ping) — not funneled through the policy. Env vars: `DISCORD_ERRORS_WEBHOOK_URL` / `DISCORD_ERRORS_CRITICAL_WEBHOOK_URL`.
+- Known follow-up: per-call API errors all go to *general*; no auto-escalation to critical on sustained failure of a core path yet.
+
 ### Batch 13.8 — Multi-source price polling (IB primary, Finnhub fallback)
 - Owner: claude
 - Started: 2026-05-17

@@ -9,6 +9,7 @@ import axios, { type AxiosInstance } from 'axios';
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
 import { finnhubQueue } from './finnhubQueue.js';
+import { notifyApiFailure } from './notify.js';
 
 const BASE = 'https://finnhub.io/api/v1';
 
@@ -64,6 +65,9 @@ async function call<T>(
     const durationMs = Math.round(performance.now() - start);
     const succeeded = res.status >= 200 && res.status < 300;
     recordMetric(category, durationMs, res.status, succeeded);
+    // Same Discord policy as IB calls — real API errors surface, expected
+    // churn (429 etc.) is suppressed. Keyed per category, rate-limited.
+    notifyApiFailure(`finnhub_api.${category}`, res.status);
     return { status: res.status, data: succeeded ? res.data : null };
   });
 }

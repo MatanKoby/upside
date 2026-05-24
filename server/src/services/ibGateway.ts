@@ -2,6 +2,7 @@ import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
 import https from 'node:https';
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
+import { notifyApiFailure } from './notify.js';
 import type {
   RawIbPosition,
   RawIbSnapshot,
@@ -80,6 +81,10 @@ async function instrumented<T>(
         succeeded,
       })
       .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
+    // Surface API error responses to Discord via the shared policy (suppresses
+    // expected churn, rate-limited per endpoint). Without this, non-2xx
+    // responses only ever reached the metrics table — Discord stayed blind.
+    notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, opts.conid != null ? `conid=${opts.conid}` : '');
   }
 }
 
@@ -122,6 +127,14 @@ async function instrumentedWithRetry<T>(
         succeeded,
       })
       .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
+    // Same Discord surfacing as instrumented() — fires once after all internal
+    // retries (succeeded reflects the final attempt), so a flaky-then-recovered
+    // call stays quiet.
+    notifyApiFailure(
+      `ib_api.${opts.endpoint}`,
+      lastStatus,
+      `${retries > 0 ? `after ${retries} retries ` : ''}${opts.conid != null ? `conid=${opts.conid}` : ''}`.trim(),
+    );
   }
 }
 

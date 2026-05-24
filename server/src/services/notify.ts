@@ -121,3 +121,24 @@ export function notifyCritical(key: string, message: string, err?: unknown): Pro
 export function notifyInfo(key: string, message: string): Promise<void> {
   return notify('info', key, message);
 }
+
+/**
+ * Single policy for surfacing external-API failures (IB, Finnhub, ...) to
+ * Discord, so the channel stays useful instead of becoming noise. Routes to the
+ * routine channel, rate-limited per `key` (use the endpoint/category as the
+ * key). Deliberately suppresses expected churn:
+ *   - status < 400      → not a failure.
+ *   - status 0          → thrown/network error; the caller's own catch owns it
+ *                         (avoids double-notifying).
+ *   - 401 / 403         → IB session transitions under the on-demand model;
+ *                         a genuine login failure is reported critically by the
+ *                         connect flow, not here.
+ *   - 429               → rate-limited; the queue's backoff handles it.
+ * Everything else (400, 404, 5xx, ...) is a real, actionable API error → ping.
+ * Structural failures (process/loop crash, can't reach Supabase, IB connect
+ * failure) use notifyCritical directly and are not funneled through here.
+ */
+export function notifyApiFailure(key: string, status: number, detail = ''): void {
+  if (status < 400 || status === 401 || status === 403 || status === 429) return;
+  void notify('error', key, `HTTP ${status}${detail ? ` ${detail}` : ''}`);
+}
