@@ -168,18 +168,35 @@ interface EntryInfo {
 // Batch-13.5 migration), try to deduce the true entry date from IB's last 90
 // days of transactions. Fall back to now() with source='observed' if IB
 // returns nothing useful — that's the floor case the FE renders as "≥N days".
+// Conids whose observed→ib_transactions upgrade we've recently attempted.
+// In-memory (resets on api restart, which simply re-attempts once on boot) so
+// a genuinely pre-window position doesn't re-POST /pa/transactions every cycle.
+const lastEntryReconcileAttempt = new Map<number, number>();
+const ENTRY_RECONCILE_RETRY_MS = 60 * 60 * 1000; // retry observed floors hourly
+
 async function resolveEntryInfo(
   raw: RawIbPosition,
   accountId: string,
   existingFirstSeenAt: string | null,
   existingFirstSeenSource: string | null,
 ): Promise<EntryInfo> {
-  if (existingFirstSeenAt) {
-    return {
-      firstSeenAt: existingFirstSeenAt,
-      firstSeenSource: existingFirstSeenSource === 'ib_transactions' ? 'ib_transactions' : 'observed',
-    };
+  // An exact IB-transactions date is authoritative — never re-fetch it.
+  if (existingFirstSeenSource === 'ib_transactions' && existingFirstSeenAt) {
+    return { firstSeenAt: existingFirstSeenAt, firstSeenSource: 'ib_transactions' };
   }
+
+  // First sight (null first_seen_at) reconciles immediately. A prior 'observed'
+  // floor re-attempts the upgrade — but at most hourly per conid — so a single
+  // failed first attempt no longer pins the position to 'observed' forever
+  // (Batch 13.5 self-heal).
+  if (existingFirstSeenAt) {
+    const last = lastEntryReconcileAttempt.get(raw.conid) ?? 0;
+    if (Date.now() - last < ENTRY_RECONCILE_RETRY_MS) {
+      return { firstSeenAt: existingFirstSeenAt, firstSeenSource: 'observed' };
+    }
+  }
+  lastEntryReconcileAttempt.set(raw.conid, Date.now());
+
   try {
     const txs = await ibTransactions(accountId, raw.conid);
     const partial = ibPositionToPartial(raw);
@@ -194,7 +211,12 @@ async function resolveEntryInfo(
       e,
     );
   }
-  return { firstSeenAt: new Date().toISOString(), firstSeenSource: 'observed' };
+  // Reconciliation unavailable. Preserve an existing observed floor (don't bump
+  // it forward each retry); otherwise stamp the first observation now.
+  return {
+    firstSeenAt: existingFirstSeenAt ?? new Date().toISOString(),
+    firstSeenSource: 'observed',
+  };
 }
 
 function snapNum(snap: RawIbSnapshot | undefined, code: string): number | null {

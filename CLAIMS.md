@@ -11,7 +11,12 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Batch 13.5 — Verify & implement `tradingDaysHeld` + MTD return
 - Owner: claude
 - Started: 2026-05-23
-- Status note (2026-05-24): code complete + deployed + Supabase migration applied. Pivoted to manual SQL Editor verification — long-lived dev read-access deferred as a separate problem (see "Read-access setup blockers" below). **Next session: claude writes 3-4 SQL inspection queries, user pastes into Supabase SQL Editor, user pastes results back, we finish 13.5.**
+- Status note (2026-05-24, afternoon): SQL Editor verification surfaced TWO bugs in the entry-date path. Fixes written + typecheck-clean; awaiting deploy + re-verify.
+  - **Verification finding:** only position is BBAI (conid 530965695). `first_seen_at`=2026-05-23 15:00 but `first_seen_source`='observed', `trading_days_held`/`daily_return`=null, despite IB being connected (`price_source`='ib', fresh). User confirms BBAI opened <90 days ago → `observed` is wrong; the IB-transactions exact date should have resolved.
+  - **Bug 1 (self-lock):** `resolveEntryInfo` only attempted the transactions walk when `first_seen_at IS NULL`; one failed first attempt pinned the row to 'observed' forever. FIXED: re-attempts the upgrade hourly while source='observed', preserves the floor on failure, trusts 'ib_transactions' permanently.
+  - **Bug 2 (HTTP 400):** `external_api_metrics` showed the lone `/v1/api/pa/transactions` call returned status=400/succeeded=false in 84ms (request-validation, not auth/session — snapshot+positions worked same moment). Root cause: malformed body. FIXED: added `currency:'USD'` + `days` as string; non-2xx now `console.warn`s IB's rejection body so a residual 4xx is diagnosable from logs. (currency-required is a best-guess; the body log confirms on next cycle.)
+  - **Read-access RESOLVED (psql from WSL works):** root cause was the assumed pooler host. Project is on `aws-1-us-east-1.pooler.supabase.com` (not `aws-0-...`); username `upside_readonly.qkvegpfzstylyekmusnk`, session pooler :5432, sslmode=require. Confirmed read-only (writes → permission denied). `.upside-readonly-db` updated; how-to captured in the `query-supabase` skill. IPv6 path abandoned for real — host network provides no IPv6 (link-local only, no `::/0` route), so WSL mirrored mode has nothing to mirror; not WSL's fault. **claude now runs verification SQL directly via psql — no more SQL Editor pastes.**
+  - **Next:** push fix to dev → user pulls on VPS + `./bin/upside rebuild api` + connects IB → after one IB poll cycle claude re-runs Query A via psql (expect source='ib_transactions', real <90d date, non-null days-held+daily_return) + metrics (expect new row 2xx). If still 4xx, `docker logs api | grep ibTransactions` shows IB's body.
 
   **Code state (commit 4cc5536, pushed to dev):**
   - Migration 007 (`first_seen_at` + `first_seen_source` on positions) — applied to Supabase ✓
@@ -23,13 +28,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
   - FE: `PositionStatsDetail.daysHeldSource` + `dailyReturnPercent`; `PositionStats` renders "≥N days" + "≤X%/d" floor when source=observed, exact when source=ib_transactions. `usePortfolioSummary` hook polls /api/portfolio/summary + Realtime nudges; `SummaryStrip` handles null MTD with "—".
   - VPS deployed (user confirmed). IB connected (user confirmed). Polls should be running with the new fields.
 
-  **Read-access setup blockers (deferred to separate task; not blocking 13.5 finish):**
-  - Approach attempted: dedicated read-only Postgres role `upside_readonly` (login+password+BYPASSRLS, SELECT-only on `public.*`), connect via `psql` from dev WSL.
-  - Role created in Supabase via SQL Editor ✓. Password rotated to hex-only (no URL-special chars) ✓. Connection string in `.upside-readonly-db` (gitignored).
-  - **Blocker 1 — Session pooler rejects custom roles:** `aws-0-us-east-1.pooler.supabase.com:5432` returns "FATAL: Tenant or user not found" for `upside_readonly.<project_ref>`. Persisted across 24+ hours so not cache lag. Likely Supavisor only registers built-in roles (postgres / dashboard_user / authenticator / authenticated / anon / service_role). Custom roles may need explicit GRANT-membership in a built-in role to be visible — untested.
-  - **Blocker 2 — Direct connection requires IPv6:** `db.<ref>.supabase.co:5432` is IPv6-only on free tier (Dashboard says so explicitly). WSL2 default networking has no working IPv6 route → TCP fails with "is the server running...". Either need IPv4 add-on (~$4/mo) or fix WSL IPv6.
-  - **Pivot for 13.5:** abandon long-lived `psql` access for now. Use manual SQL Editor verification — claude writes inspection queries, user pastes them into Supabase Dashboard SQL Editor, pastes results back.
-  - **Future task (separate, post-13.5):** revisit read-access setup. Most promising untested path: `grant upside_readonly to authenticator;` to make Supavisor recognize the custom role. If that fails, IPv4 add-on is the unblocking purchase.
+  **Read-access setup — RESOLVED 2026-05-24:**
+  - Dedicated read-only Postgres role `upside_readonly` (login+password+BYPASSRLS, SELECT-only on `public.*`), connect via `psql` from dev WSL. Connection string in `.upside-readonly-db` (gitignored). Operational how-to in the `query-supabase` skill.
+  - **Root cause of "Tenant or user not found":** the pooler *host* was wrong, not the role. We assumed `aws-0-us-east-1.pooler.supabase.com`; the project is actually on `aws-1-us-east-1.pooler.supabase.com`. Same username (`upside_readonly.qkvegpfzstylyekmusnk`) + same password + correct host = connects fine on both :5432 (session) and :6543 (transaction). Lesson (per Supabase discussion #30107): never assume the pooler hostname pattern — copy it from the dashboard. Custom roles DO work through the pooler.
+  - **IPv6 direct connection — dead, not pursued:** `db.<ref>.supabase.co` is IPv6-only; the host network provides no IPv6 at all (link-local only, no `::/0` route, IPv6 enabled in Windows but ISP/router doesn't hand it out), so WSL mirrored mode can't help. Moot now that the pooler (IPv4) works.
 
   **Verification queries — to write next session and have user run in SQL Editor:**
   ```

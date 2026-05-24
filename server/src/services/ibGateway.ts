@@ -212,14 +212,25 @@ export async function ibTransactions(
 ): Promise<RawIbTransaction[]> {
   await rateLimit();
   const endpoint = '/v1/api/pa/transactions';
+  // IB's /pa/transactions requires `currency`, and `days` must be a string.
+  // Omitting currency or sending a numeric `days` is rejected with HTTP 400
+  // (observed live in Batch 13.5 — the call silently fell back to 'observed').
+  const body = { acctIds: [acctId], conids: [conid], currency: 'USD', days: String(days) };
   const { data, status } = await instrumented<{ transactions?: RawIbTransaction[] } | RawIbTransaction[]>(
     { endpoint, conid },
     async () => {
-      const res = await client().post(endpoint, { acctIds: [acctId], conids: [conid], days });
+      const res = await client().post(endpoint, body);
       return { status: res.status, data: res.data };
     },
   );
-  if (status < 200 || status >= 300) return [];
+  if (status < 200 || status >= 300) {
+    // Surface IB's rejection body so a recurring 4xx is diagnosable from logs
+    // rather than swallowed into an 'observed' fallback.
+    console.warn(
+      `[ibTransactions] conid=${conid} HTTP ${status}: ${JSON.stringify(data).slice(0, 500)}`,
+    );
+    return [];
+  }
   // IB has historically returned either { transactions: [...] } or a bare
   // array depending on version — accept both shapes.
   if (Array.isArray(data)) return data;
