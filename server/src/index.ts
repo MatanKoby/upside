@@ -18,8 +18,19 @@ import { notifyError, notifyCritical } from './services/notify.js';
 // Top-level safety net — anything thrown async without a catch lands here.
 // Notify Discord (if configured) and keep running; let the platform decide
 // whether to restart based on the type of error.
+// IB gateway is intentionally down between on-demand sessions, so a poller
+// call that rejects with a connection error to it is expected — route those to
+// the routine channel so #errors-critical stays signal, not noise.
+function isIbGatewayUnreachable(reason: unknown): boolean {
+  const s = reason instanceof Error ? reason.message : String(reason);
+  return /EAI_AGAIN|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/.test(s) && /ib-gateway|:5000/.test(s);
+}
 process.on('unhandledRejection', (reason) => {
-  void notifyCritical('process.unhandledRejection', 'unhandled promise rejection', reason);
+  if (isIbGatewayUnreachable(reason)) {
+    void notifyError('ib.gateway_unreachable', 'IB gateway unreachable (expected while disconnected)', reason);
+  } else {
+    void notifyCritical('process.unhandledRejection', 'unhandled promise rejection', reason);
+  }
 });
 process.on('uncaughtException', (err) => {
   void notifyCritical('process.uncaughtException', 'uncaught exception', err);

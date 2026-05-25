@@ -164,7 +164,7 @@ class GeminiProvider implements LlmProvider {
       },
       { params: { key: env.geminiApiKey }, timeout: 30_000, validateStatus: () => true },
     );
-    notifyApiFailure('llm.gemini', res.status);
+    notifyApiFailure('llm.gemini', res.status, { params: { model: this.model }, body: res.data });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`Gemini ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`);
     }

@@ -63,7 +63,15 @@ function webhookFor(sev: Severity): string {
   return env.discordWebhookUrl;
 }
 
-async function notify(sev: Severity, key: string, message: string, err?: unknown): Promise<void> {
+type EmbedField = { name: string; value: string; inline?: boolean };
+
+async function notify(
+  sev: Severity,
+  key: string,
+  message: string,
+  opts: { err?: unknown; fields?: EmbedField[] } = {},
+): Promise<void> {
+  const { err, fields } = opts;
   // Mirror to local logs first so we have a record even if Discord is down.
   if (sev === 'info') {
     console.log(`[${key}] ${message}`);
@@ -88,22 +96,28 @@ async function notify(sev: Severity, key: string, message: string, err?: unknown
   state.set(key, { lastSentAt: now, suppressedSince: 0 });
 
   const v = VISUAL[sev];
-  await postWebhook(url, {
-    username: 'upside',
-    embeds: [{
-      title: `${v.emoji} ${key}`,
-      description: describe(message, err) + suppressedNote,
-      color: v.color,
-      timestamp: new Date(now).toISOString(),
-    }],
-  });
+  const embed: Record<string, unknown> = {
+    title: `${v.emoji} ${key}`,
+    description: describe(message, err) + suppressedNote,
+    color: v.color,
+    timestamp: new Date(now).toISOString(),
+  };
+  // Discord caps field values at 1024 chars and 25 fields per embed.
+  if (fields && fields.length) {
+    embed.fields = fields.slice(0, 25).map((f) => ({
+      name: f.name.slice(0, 256),
+      value: f.value.slice(0, 1024),
+      inline: f.inline ?? false,
+    }));
+  }
+  await postWebhook(url, { username: 'upside', embeds: [embed] });
 }
 
 /**
  * Routine error — recoverable, may flap. Goes to DISCORD_WEBHOOK_URL.
  */
 export function notifyError(key: string, message: string, err?: unknown): Promise<void> {
-  return notify('error', key, message, err);
+  return notify('error', key, message, { err });
 }
 
 /**
@@ -111,7 +125,7 @@ export function notifyError(key: string, message: string, err?: unknown): Promis
  * DISCORD_CRITICAL_WEBHOOK_URL (falls back to the routine channel if unset).
  */
 export function notifyCritical(key: string, message: string, err?: unknown): Promise<void> {
-  return notify('critical', key, message, err);
+  return notify('critical', key, message, { err });
 }
 
 /**
@@ -138,7 +152,39 @@ export function notifyInfo(key: string, message: string): Promise<void> {
  * Structural failures (process/loop crash, can't reach Supabase, IB connect
  * failure) use notifyCritical directly and are not funneled through here.
  */
-export function notifyApiFailure(key: string, status: number, detail = ''): void {
+function fmtParams(params: Record<string, unknown> | string | undefined): string | null {
+  if (params == null) return null;
+  if (typeof params === 'string') return params || null;
+  const entries = Object.entries(params).filter(([, v]) => v != null && v !== '');
+  if (!entries.length) return null;
+  return entries.map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+}
+
+function fmtBody(body: unknown): string | null {
+  if (body == null) return null;
+  let s: string;
+  if (typeof body === 'string') s = body;
+  else {
+    try { s = JSON.stringify(body); } catch { s = String(body); }
+  }
+  s = s.trim();
+  if (!s || s === '{}' || s === 'null') return null;
+  return s.length > 900 ? s.slice(0, 900) + '…' : s;
+}
+
+export interface ApiFailureContext {
+  detail?: string;                              // short note, e.g. "after 4 retries"
+  params?: Record<string, unknown> | string;    // call params (conid, symbol, period, ...)
+  body?: unknown;                               // the response body that came back
+}
+
+export function notifyApiFailure(key: string, status: number, ctx: ApiFailureContext = {}): void {
   if (status < 400 || status === 401 || status === 403 || status === 429) return;
-  void notify('error', key, `HTTP ${status}${detail ? ` ${detail}` : ''}`);
+  const fields: EmbedField[] = [{ name: 'Status', value: String(status), inline: true }];
+  if (ctx.detail) fields.push({ name: 'Note', value: ctx.detail, inline: true });
+  const params = fmtParams(ctx.params);
+  if (params) fields.push({ name: 'Params', value: params, inline: false });
+  const body = fmtBody(ctx.body);
+  if (body) fields.push({ name: 'Response', value: '```\n' + body + '\n```', inline: false });
+  void notify('error', key, `HTTP ${status}`, { fields });
 }

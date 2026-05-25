@@ -56,10 +56,12 @@ async function instrumented<T>(
   const start = performance.now();
   let retries = 0;
   let lastStatus = 0;
+  let lastBody: unknown;
   let succeeded = false;
   try {
     const res = await fn();
     lastStatus = res.status;
+    lastBody = res.data;
     succeeded = res.status >= 200 && res.status < 300;
     return {
       status: res.status,
@@ -86,7 +88,10 @@ async function instrumented<T>(
     // responses only ever reached the metrics table — Discord stayed blind.
     // Debug-passthrough probes are intentional experiments, not errors — skip.
     if (!opts.endpoint.startsWith('debug-passthrough:')) {
-      notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, opts.conid != null ? `conid=${opts.conid}` : '');
+      notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, {
+        params: opts.conid != null ? { conid: opts.conid } : undefined,
+        body: succeeded ? undefined : lastBody,
+      });
     }
   }
 }
@@ -104,11 +109,13 @@ async function instrumentedWithRetry<T>(
   const start = performance.now();
   let retries = 0;
   let lastStatus = 0;
+  let lastBody: unknown;
   let succeeded = false;
   const h: RetryHandle = { bump: () => { retries++; } };
   try {
     const res = await fn(h);
     lastStatus = res.status;
+    lastBody = res.data;
     succeeded = res.status >= 200 && res.status < 300;
     return {
       status: res.status,
@@ -134,11 +141,11 @@ async function instrumentedWithRetry<T>(
     // retries (succeeded reflects the final attempt), so a flaky-then-recovered
     // call stays quiet. Debug-passthrough probes are excluded as above.
     if (!opts.endpoint.startsWith('debug-passthrough:')) {
-      notifyApiFailure(
-        `ib_api.${opts.endpoint}`,
-        lastStatus,
-        `${retries > 0 ? `after ${retries} retries ` : ''}${opts.conid != null ? `conid=${opts.conid}` : ''}`.trim(),
-      );
+      notifyApiFailure(`ib_api.${opts.endpoint}`, lastStatus, {
+        detail: retries > 0 ? `after ${retries} retries` : undefined,
+        params: opts.conid != null ? { conid: opts.conid } : undefined,
+        body: succeeded ? undefined : lastBody,
+      });
     }
   }
 }

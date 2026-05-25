@@ -67,7 +67,10 @@ async function call<T>(
     recordMetric(category, durationMs, res.status, succeeded);
     // Same Discord policy as IB calls — real API errors surface, expected
     // churn (429 etc.) is suppressed. Keyed per category, rate-limited.
-    notifyApiFailure(`finnhub_api.${category}`, res.status);
+    notifyApiFailure(`finnhub_api.${category}`, res.status, {
+      params,
+      body: succeeded ? undefined : res.data,
+    });
     return { status: res.status, data: succeeded ? res.data : null };
   });
 }
