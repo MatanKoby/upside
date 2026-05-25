@@ -75,6 +75,7 @@ alter table public.user_preferences add column if not exists profit_zone_thresho
 -- analysis on demand. Server writes via the service role (bypasses RLS).
 -- ============================================================================
 alter table public.analyses enable row level security;
+drop policy if exists "analyses: owner read" on public.analyses;
 create policy "analyses: owner read" on public.analyses for select using (auth.uid() = user_id);
 grant select on public.analyses to authenticated;
 grant all    on public.analyses to service_role;
