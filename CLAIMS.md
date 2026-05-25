@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 14e — Marketdata snapshot endpoint + TickerDetail wire-up
+- Owner: claude
+- Started: 2026-05-25 16:01
 
 ## Known issues (deferred fixes)
 
