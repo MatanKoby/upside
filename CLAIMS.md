@@ -8,15 +8,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 14f — TickerDetail real-data chart + signal polish
-- Owner: claude
-- Started: 2026-05-25 18:19
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 14f — TickerDetail real-data chart + signal polish (2026-05-25)
+- Owner: claude
+- Started: 2026-05-25 18:19 · Finished: 2026-05-25 15:59
+- Commit: 0b718c4
+- **What shipped (FE-only, Vercel):** four chart/signal fixes from Batch 14a's follow-up list. (1) RSI subchart — `utils/rsi.ts` computes RSI client-side from fetched candles; line renders inside the banded pane, bands only when RSI data present (was hardcoded `rsi:[]`). (2) Y-axis scaling — explicit `rightPriceScale.scaleMargins` (tighter top) so the high sits near the top edge instead of ~5% over. (3) Entry/position-price line — avg-cost line made prominent + labeled ("Avg $XX.XX"); "Entry" date marker renders only when `first_seen_at` falls inside the visible candle window (was pinned to the left edge via a fallback). `first_seen_at` threaded through `useTickerDetail` → `positionStats.entryDate`. (4) Collapsed Signal section pills — `CollapsibleSection` gains optional `headerAccessory`; `TickerDetail` lifts `useSignals` (one subscription shared with `SignalSection`) and renders the `SignalPill` row in the header so actionable signals stay visible when collapsed.
+- **Status:** code committed + pushed, client typecheck clean. Visual confirmation on the live Vercel app pending user walkthrough (FE-flow verification is user-driven); flag any visual issue as a follow-up.
 
 ### Batch 14a — Signal engine + manual unified analysis end-to-end (2026-05-25)
 - Owner: claude
