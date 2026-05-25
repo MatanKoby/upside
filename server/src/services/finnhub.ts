@@ -119,3 +119,23 @@ export async function getQuote(symbol: string): Promise<FinnhubQuote | null> {
   // caller decide whether 0 is meaningful.
   return data;
 }
+
+// Basic financials / fundamentals via `/stock/metric?metric=all`. These don't
+// change intraday, so the queue's `profile` category (long min-interval) is the
+// right bucket. Finnhub is the source of record for the Market Stats panel +
+// 52-week range: IB Client Portal's snapshot fundamental fields are
+// subscription-gated and unreliable, and — under the on-demand IBeam model —
+// IB is usually OFF, so IB-sourced fundamentals would be blank most of the time.
+// Finnhub is IB-independent and free-tier. (Intraday fields stay IB-primary; see
+// the snapshot route.) Keys vary by symbol; callers fall back across synonyms.
+export type FinnhubMetrics = Record<string, number | string | null | undefined>;
+
+export async function basicFinancials(symbol: string): Promise<FinnhubMetrics | null> {
+  const { data } = await call<{ metric?: FinnhubMetrics }>(
+    'profile',
+    symbol,
+    '/stock/metric',
+    { symbol, metric: 'all' },
+  );
+  return data?.metric ?? null;
+}

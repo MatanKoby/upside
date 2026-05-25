@@ -384,6 +384,13 @@
   border-radius: var(--radius-md);
   padding: var(--sp-10) var(--sp-12);
 }
+/* 52-week range bar nested under the Market Stats grid — lighter chrome than
+   the standalone Today's Range bar, just separated by spacing. */
+.td-range--52w {
+  background: none;
+  border: none;
+  padding: var(--sp-12) 0 0;
+}
 .td-range-head {
   display: grid;
   grid-template-columns: auto 1fr auto;

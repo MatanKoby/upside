@@ -30,6 +30,13 @@ export function ibSessionKey(userId: string): string {
   return `ib:session:${userId}`;
 }
 
+// Market-data snapshot cache (Batch 14e). Short TTL so opening TickerDetail
+// repeatedly doesn't hammer IB/Finnhub, but stays fresh enough for day range +
+// fundamentals. Keyed by symbol (not user) — the snapshot is the same for all.
+export function marketSnapshotKey(symbol: string): string {
+  return `marketdata:snapshot:${symbol.toUpperCase()}`;
+}
+
 // ---------------------------------------------------------------------------
 // LLM daily cost counter (Batch 14a).
 // One key per UTC day (`llm_calls:YYYY-MM-DD`) with a TTL that expires it at

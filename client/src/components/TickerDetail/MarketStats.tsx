@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { IconAdjustments, IconGripVertical, IconArrowNarrowUp, IconArrowNarrowDown } from '@tabler/icons-react';
-import type { MarketStat } from '../../types';
+import { formatCurrency } from '../../utils/formatters';
+import type { MarketStat, TickerDetailData } from '../../types';
 
 function moveStat(stats: MarketStat[], from: number, to: number): MarketStat[] {
   if (to < 0 || to >= stats.length) {
@@ -12,11 +13,29 @@ function moveStat(stats: MarketStat[], from: number, to: number): MarketStat[] {
   return copy;
 }
 
-export function MarketStats({ initialStats }: { initialStats: MarketStat[] }) {
+type Week52 = NonNullable<TickerDetailData['week52']>;
+
+export function MarketStats({
+  initialStats,
+  week52,
+}: {
+  initialStats: MarketStat[];
+  week52?: Week52 | null;
+}) {
   const [stats, setStats] = useState(initialStats);
   const [editOpen, setEditOpen] = useState(false);
 
+  // The snapshot resolves after mount, so `initialStats` arrives populated a
+  // beat later — re-seed local state when it changes. (Reorder/visibility
+  // persistence to user_preferences.stat_config lands in Batch 15.)
+  useEffect(() => {
+    setStats(initialStats);
+  }, [initialStats]);
+
   const visibleStats = useMemo(() => stats.filter((item) => item.enabled).slice(0, 6), [stats]);
+  const dotOffset = week52
+    ? `${Math.max(0, Math.min(100, week52.currentRatio * 100))}%`
+    : '0%';
 
   return (
     <section className="td-market-stats">
@@ -36,6 +55,20 @@ export function MarketStats({ initialStats }: { initialStats: MarketStat[] }) {
           </div>
         ))}
       </div>
+
+      {week52 && (
+        <div className="td-range td-range--52w">
+          <div className="td-range-head">
+            <span className="td-range-low">{formatCurrency(week52.low)}</span>
+            <span className="td-range-label">52-week range</span>
+            <span className="td-range-high">{formatCurrency(week52.high)}</span>
+          </div>
+          <div className="td-range-bar-wrap">
+            <div className="td-range-bar" />
+            <span className="td-range-current-dot" style={{ left: dotOffset }} />
+          </div>
+        </div>
+      )}
 
       {editOpen && (
         <div className="td-market-edit">
