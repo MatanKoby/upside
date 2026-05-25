@@ -8,49 +8,29 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 13.5 — Verify & implement `tradingDaysHeld` + MTD return
-- Owner: claude
-- Started: 2026-05-23
-- Status note (2026-05-25): two-tier code (745424f) deployed ~03:00 (metrics: first `/iserver/account/trades` 200 at 03:01) but BBAI still 'observed' → surfaced **Bug 5 (persistence skip)**. Fix written + typecheck-clean; awaiting deploy + re-verify.
-  - **Bug 5 (change-detection drops the resolved entry date):** the resolver IS correct — confirmed against LIVE May-25 data via passthrough: BBAI 3 in-window fills (S800 05-19, S1020 05-20, B2350 05-20) + currentShares=2350 → `entryFromTrades` walks 1820→1020→0→2350, entry=**2026-05-20T15:41:40Z** ✓. The blocker is downstream: `pollCycle` change-detection excluded `first_seen_source`/`first_seen_at`, so when the market is closed (IB snapshot price == finnhub's last write → no price field moves) the upsert is SKIPPED and the freshly-resolved 'ib_transactions' date is never written; the hourly resolve-throttle then re-locks the row to 'observed'. Evidence: DB `price_source=finnhub`@03:43 despite IB snapshot 200@03:46 with no later 'ib' write = change-detection skipping on static prices. FIX: force an upsert when `first_seen_source` or `first_seen_at` differs from the existing row. Steady state doesn't thrash (resolver returns existing first_seen_at verbatim once resolved/throttled, so the new diffs are false). Needs deploy + restart: on restart the in-memory throttle map is empty, so cycle 1 resolves + the forced upsert persists immediately.
-  - Status note (2026-05-24, afternoon): SQL Editor verification surfaced TWO bugs in the entry-date path. Fixes written + typecheck-clean; awaiting deploy + re-verify.
-  - **Verification finding:** only position is BBAI (conid 530965695). `first_seen_at`=2026-05-23 15:00 but `first_seen_source`='observed', `trading_days_held`/`daily_return`=null, despite IB being connected (`price_source`='ib', fresh). User confirms BBAI opened <90 days ago → `observed` is wrong; the IB-transactions exact date should have resolved.
-  - **Bug 1 (self-lock):** `resolveEntryInfo` only attempted the transactions walk when `first_seen_at IS NULL`; one failed first attempt pinned the row to 'observed' forever. FIXED: re-attempts the upgrade hourly while source='observed', preserves the floor on failure, trusts 'ib_transactions' permanently.
-  - **Bug 2 (HTTP 400 → 500, root cause found):** the original 400 was a *missing* `currency`. Adding `currency:'USD'` cleared it, but I also (wrongly) changed `days` to a string, which IB rejects with a 500. Initially mis-diagnosed as a PortfolioAnalyst cold-start and "fixed" with a 4× warmup retry — that was wrong. **Diagnosed properly by building a read-only POST passthrough (commit fee8cfc) and probing `/pa/transactions` live:** `days` as string → 500, `days` as number → 200, no `currency` → 400. `/pa/allperiods` returned 200 cold, proving PA was available all along. FINAL FIX: body is `{acctIds, conids, currency:'USD', days}` with **days numeric**; reverted the warmup retry back to a plain `instrumented` call + a diagnostic log on non-2xx. The live 200 response confirmed `transactions[].date` is the `"Mon May 11 … 2026"` format `deduceEntryDate` already parses (`type:"Buy"`, numeric `qty`), so no parser change needed.
-  - **Bug 3 (deduceEntryDate double-negated sells):** after Bug 2's fix the call returned 200 but BBAI stayed 'observed'. IB's pa `qty` is ALREADY SIGNED (buys +, sells −); the walker did `signed = -qty` for sells, double-negating → balance 5990 ≠ 2350 → sanity fail → 'observed'. Fixed by using `qty` verbatim.
-  - **Bug 4 (same-day ordering — the deep one):** even with correct signs, `/pa/transactions` is DAY-LEVEL (dates 00:00:00) and its array order is unreliable — it listed BBAI's May 20 buy *before* the sell, the reverse of reality. User's case: held since ~May 11, then on May 20 **sold to 0 and re-bought** → true entry is the May 20 re-buy, not May 11. Day-level/ pa-order both get this wrong. **Solution (two-tier, validated live):** `/iserver/account/trades` carries per-execution intraday timestamps (but only ~7 days — confirmed days=7/30/90 all return the same 19 trades). `entryFromTrades` back-computes the pre-window balance (`shares − Σ window fills`) and walks fills in `trade_time_r` order → most recent 0→+ crossing. Validated against the live capture: 1820 −800→1020 −1020→**0** +2350→2350, **entry = 2026-05-20T15:41:40Z** ✓. `entryFromTransactions` (day-level, order-independent) is the fallback for entries older than the 7-day window. Inherent limit (documented): an intraday flatten >7 days ago is unrecoverable from IB.
-  - (Bugs 1→4 were a chain — each fix revealed the next; the POST passthrough + psql read-access made the live diagnosis possible without redeploy-guessing.)
-  - **Read-access RESOLVED (psql from WSL works):** root cause was the assumed pooler host. Project is on `aws-1-us-east-1.pooler.supabase.com` (not `aws-0-...`); username `upside_readonly.qkvegpfzstylyekmusnk`, session pooler :5432, sslmode=require. Confirmed read-only (writes → permission denied). `.upside-readonly-db` updated; how-to captured in the `query-supabase` skill. IPv6 path abandoned for real — host network provides no IPv6 (link-local only, no `::/0` route), so WSL mirrored mode has nothing to mirror; not WSL's fault. **claude now runs verification SQL directly via psql — no more SQL Editor pastes.**
-  - **Next:** push fix to dev → user pulls on VPS + `./bin/upside rebuild api` + connects IB → after one IB poll cycle claude re-runs Query A via psql (expect source='ib_transactions', real <90d date, non-null days-held+daily_return) + metrics (expect new row 2xx). If still 4xx, `docker logs api | grep ibTransactions` shows IB's body.
-
-  **Code state (commit 4cc5536, pushed to dev):**
-  - Migration 007 (`first_seen_at` + `first_seen_source` on positions) — applied to Supabase ✓
-  - ibGateway: `ibTransactions` (POST /v1/api/pa/transactions) + `deduceEntryDate` walker
-  - ibPricePoller: `resolveEntryInfo` runs on first sight of a conid (or NULL `first_seen_at`), reconciles via IB transactions, falls back to `now()` + `source='observed'`. Computes `trading_days_held` + `daily_return` every cycle.
-  - `marketHours.tradingDaysHeld`: weekday + US-holiday-aware day counter.
-  - `services/mtdCache`: per-user Redis SET-NX anchor at first poll of each month (TTL 60d).
-  - `/api/portfolio/summary` returns `mtdReturn` + `mtdReturnPercent` from the anchor, null when no anchor recorded yet.
-  - FE: `PositionStatsDetail.daysHeldSource` + `dailyReturnPercent`; `PositionStats` renders "≥N days" + "≤X%/d" floor when source=observed, exact when source=ib_transactions. `usePortfolioSummary` hook polls /api/portfolio/summary + Realtime nudges; `SummaryStrip` handles null MTD with "—".
-  - VPS deployed (user confirmed). IB connected (user confirmed). Polls should be running with the new fields.
-
-  **Read-access setup — RESOLVED 2026-05-24:**
-  - Dedicated read-only Postgres role `upside_readonly` (login+password+BYPASSRLS, SELECT-only on `public.*`), connect via `psql` from dev WSL. Connection string in `.upside-readonly-db` (gitignored). Operational how-to in the `query-supabase` skill.
-  - **Root cause of "Tenant or user not found":** the pooler *host* was wrong, not the role. We assumed `aws-0-us-east-1.pooler.supabase.com`; the project is actually on `aws-1-us-east-1.pooler.supabase.com`. Same username (`upside_readonly.qkvegpfzstylyekmusnk`) + same password + correct host = connects fine on both :5432 (session) and :6543 (transaction). Lesson (per Supabase discussion #30107): never assume the pooler hostname pattern — copy it from the dashboard. Custom roles DO work through the pooler.
-  - **IPv6 direct connection — dead, not pursued:** `db.<ref>.supabase.co` is IPv6-only; the host network provides no IPv6 at all (link-local only, no `::/0` route, IPv6 enabled in Windows but ISP/router doesn't hand it out), so WSL mirrored mode can't help. Moot now that the pooler (IPv4) works.
-
-  **Verification queries — to write next session and have user run in SQL Editor:**
-  ```
-  select symbol, first_seen_at, first_seen_source, trading_days_held, daily_return, price_source, last_price_update_at from positions order by symbol;
-  ```
-  Plus a curl to `/api/portfolio/summary` (token-gated; user runs from terminal) to confirm `mtdAnchor` populated.
-  Plus visual confirm in PWA that PositionStats shows days-held + return/day and SummaryStrip shows MTD.
-  Then Finish protocol (task #8).
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 13.5 — `tradingDaysHeld` + MTD return (2026-05-25)
+- Owner: claude
+- Started: 2026-05-23 · Finished: 2026-05-25
+- Commits: 4cc5536 (initial) → 745424f (two-tier entry-date) → 94f1bba (persistence fix). All on dev, deployed to VPS.
+- **What shipped:** exact entry-date provenance per position + derived `trading_days_held` / `daily_return`, plus month-to-date portfolio return.
+  - Migration 007: `first_seen_at` + `first_seen_source` on `positions`.
+  - `resolveEntryInfo` (ibPricePoller) reconciles entry date on first sight + re-attempts hourly while `source='observed'`; trusts `ib_transactions` permanently.
+  - **Two-tier entry resolver** (ibGateway): Tier 1 `entryFromTrades` — `/iserver/account/trades` intraday fills (~7-day window), back-computes pre-window balance and walks `trade_time_r` order to the most recent 0→+ crossing (catches a flatten + re-open). Tier 2 `entryFromTransactions` — `/pa/transactions` day-level, order-independent, for entries older than the trades window. Falls back to `now()` + `source='observed'` when neither reconciles.
+  - `marketHours.tradingDaysHeld`: weekday + US-holiday-aware counter. `daily_return = unrealized_pnl_pct / daysHeld`.
+  - `services/mtdCache`: per-user Redis SET-NX anchor at first poll of each month (TTL 60d); `/api/portfolio/summary` returns `mtdReturn` + `mtdReturnPercent` (null until an anchor exists).
+  - FE: `PositionStats` renders "≥N days"/"≤X%/d" floor when `source=observed`, exact when `ib_transactions`; `SummaryStrip` shows MTD (handles null with "—").
+- **The bug chain (1→5, each fix revealed the next):** (1) self-lock — resolver only ran when `first_seen_at IS NULL`, pinning a failed first attempt to 'observed' forever; (2) `/pa/transactions` body — needs `currency:'USD'` (else 400) and **numeric** `days` (string → 500); the earlier "PA cold-start" warmup was a misdiagnosis, reverted; (3) double-negated sells — pa `qty` is already signed, walker mustn't re-negate; (4) same-day ordering — pa is day-level with unreliable intra-day order, blind to a sell-to-0-then-rebuy, which drove the two-tier design; (5) **persistence skip** — `pollCycle` change-detection excluded `first_seen_*`, so with the market closed (IB snapshot price == finnhub's last write → no price field moves) a freshly-resolved date was recomputed every cycle but never upserted, and the hourly throttle re-locked it to 'observed'. Fix: force an upsert when `first_seen_source`/`first_seen_at` differs.
+- **Verified live (2026-05-25, post-deploy):** BBAI → `first_seen_source=ib_transactions`, `first_seen_at=2026-05-20 15:41:40+00` (the re-buy execution, to the second), `trading_days_held=3`, `daily_return` non-null (psql); `/api/portfolio/summary` → `mtdAnchor=9799.5`, `mtdReturn=23.5`, `mtdReturnPercent=0.24%`. FE render confirmed by user.
+- **Known limits / minor follow-ups:** an intraday flatten >7 days ago is unrecoverable from IB (trades window only ~7d) → falls back to day-level. `daily_return` can briefly lag `unrealized_pnl_pct` because the finnhub poller refreshes PnL% but not `daily_return` (re-synced on the next IB write with PnL movement). On Connect, ibPricePoller waits up to one cadence before its first cycle (inherited from 13.8).
+- **Tooling unlocked along the way:** read-only POST passthrough (`bin/upside-ib --post`) for live IB probing; `upside_readonly` psql access from WSL via the `aws-1-...` pooler (see `query-supabase` skill) — verification now runs directly via psql.
 
 ### Settings screen (minimal) + copy-JWT dev tool (2026-05-24)
 - Owner: claude
