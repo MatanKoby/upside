@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 14f — TickerDetail real-data chart + signal polish
+- Owner: claude
+- Started: 2026-05-25 18:19
 
 ## Known issues (deferred fixes)
 
