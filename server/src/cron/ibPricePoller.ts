@@ -20,7 +20,9 @@ import {
   ibContractInfo,
   ibStatus,
   ibTransactions,
-  deduceEntryDate,
+  ibTrades,
+  entryFromTrades,
+  entryFromTransactions,
 } from '../services/ibGateway.js';
 import {
   ibPositionToPartial,
@@ -197,16 +199,25 @@ async function resolveEntryInfo(
   }
   lastEntryReconcileAttempt.set(raw.conid, Date.now());
 
+  const shares = ibPositionToPartial(raw).shares;
   try {
+    // Tier 1 — intraday-accurate from the ~7-day trades window. Catches a
+    // recent flatten + re-open (sell-to-0 then re-buy) that day-level data
+    // cannot see, e.g. the true entry is the re-buy, not the original open.
+    const trades = await ibTrades();
+    const intraday = entryFromTrades(trades, raw.conid, shares);
+    if (intraday) {
+      return { firstSeenAt: intraday.toISOString(), firstSeenSource: 'ib_transactions' };
+    }
+    // Tier 2 — entry predates the trades window: day-level from /pa/transactions.
     const txs = await ibTransactions(accountId, raw.conid);
-    const partial = ibPositionToPartial(raw);
-    const entry = deduceEntryDate(txs, partial.shares);
-    if (entry) {
-      return { firstSeenAt: entry.toISOString(), firstSeenSource: 'ib_transactions' };
+    const dayLevel = entryFromTransactions(txs, shares);
+    if (dayLevel) {
+      return { firstSeenAt: dayLevel.toISOString(), firstSeenSource: 'ib_transactions' };
     }
   } catch (e) {
     void notifyError(
-      `ibPricePoller.transactions.${raw.conid}`,
+      `ibPricePoller.entry.${raw.conid}`,
       (e as Error).message ?? 'unknown',
       e,
     );

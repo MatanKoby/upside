@@ -197,21 +197,25 @@ export async function ibPositions(accountId: string): Promise<RawIbPosition[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Transactions (Batch 13.5).
+// Entry-date deduction (Batch 13.5) — two data sources, because neither alone
+// is sufficient:
 //
-// POST /v1/api/pa/transactions with body { acctIds, conids, days }. Used by
-// ibPricePoller to deduce a position's true entry date on first sight, by
-// walking the user's last ~90 days of fills for the most recent 0→non-zero
-// share-balance transition (the true open of the currently-held position).
+//  • /iserver/account/trades — per-execution INTRADAY timestamps (trade_time_r),
+//    but only ~7 days of history. `size` is unsigned + a `side` ('B'/'S') field.
+//    Catches a recent flatten + re-open (sell-to-0 then re-buy same day), which
+//    is the *true* entry and which day-level data cannot see.
+//  • POST /pa/transactions — ~90 days, but DAY-LEVEL only (dates are 00:00:00
+//    and the array order is unreliable). `qty` is ALREADY SIGNED. Fallback for
+//    positions whose entry predates the 7-day trades window.
 //
-// IB returns dates in a "Sat Mar 22 00:00:00 EDT 2026" string format which
-// `new Date()` parses natively. Quantities arrive as unsigned `qty` plus a
-// `type` field ("Buy" / "Sell" / "Dividend" / ...); deduceEntryDate signs
-// them itself and walks the running balance.
+// entryFromTrades() is tried first (intraday-accurate); entryFromTransactions()
+// (day-level, order-independent) is the fallback. Inherent limit: an intraday
+// flatten that happened >7 days ago is unrecoverable from IB.
 // ---------------------------------------------------------------------------
 
 export interface RawIbTransaction {
   date?: string;
+  rawDate?: string;
   cur?: string;
   pr?: number;
   qty?: number;
@@ -254,54 +258,108 @@ export async function ibTransactions(
   return Array.isArray(arr) ? arr : [];
 }
 
+// IB /iserver/account/trades — recent executions with intraday timestamps.
+// `size` is unsigned; `side` is 'B'/'S'. Returns ALL of the account's trades
+// for the window (every symbol); callers filter by conid. ~7-day cap (the
+// `days` param does not extend it — verified live).
+export interface RawIbTrade {
+  conid?: number | string;
+  side?: string;
+  size?: number;
+  trade_time_r?: number; // epoch ms
+}
+
+export async function ibTrades(days = 7): Promise<RawIbTrade[]> {
+  await rateLimit();
+  const endpoint = '/v1/api/iserver/account/trades';
+  const { data, status } = await instrumented<RawIbTrade[]>(
+    { endpoint },
+    async () => {
+      const res = await client().get(endpoint, { params: { days } });
+      return { status: res.status, data: res.data };
+    },
+  );
+  if (status < 200 || status >= 300) {
+    console.warn(`[ibTrades] HTTP ${status}`);
+    return [];
+  }
+  return Array.isArray(data) ? data : [];
+}
+
 /**
- * Walk a conid's transaction history chronologically and return the date of
- * the most recent 0→non-zero share-balance transition — the "true entry" of
- * the position currently held. Returns null if the window doesn't include
- * the entry (running sum after the walk doesn't match `currentShares`,
- * meaning earlier fills happened before the window) — caller should fall
- * back to the observation timestamp.
+ * Intraday-accurate entry from the ~7-day trades window. Back-computes the
+ * share balance just before the window (currentShares − Σ window fills for the
+ * conid), then walks the conid's fills in execution-time order, returning the
+ * timestamp of the most recent 0→positive crossing (a re-open). Returns null
+ * when the position was already open before the window and never flattened in
+ * it — i.e. the entry predates the trades window, so the caller falls back to
+ * day-level transactions.
  */
-export function deduceEntryDate(
+export function entryFromTrades(
+  trades: RawIbTrade[],
+  conid: number,
+  currentShares: number,
+): Date | null {
+  const fills = trades
+    .filter((t) => Number(t.conid) === conid && typeof t.trade_time_r === 'number')
+    .map((t) => {
+      const size = typeof t.size === 'number' ? t.size : 0;
+      const side = (t.side ?? '').toUpperCase();
+      return { timeMs: t.trade_time_r as number, signed: side === 'S' ? -size : size };
+    })
+    .sort((a, b) => a.timeMs - b.timeMs);
+  if (fills.length === 0) return null;
+
+  const windowNet = fills.reduce((sum, f) => sum + f.signed, 0);
+  let running = currentShares - windowNet; // balance just before the window
+  let entry: Date | null = null;
+  for (const f of fills) {
+    const prev = running;
+    running += f.signed;
+    if (prev <= 0 && running > 0) entry = new Date(f.timeMs);
+    if (running <= 0) entry = null;
+  }
+  return entry; // null ⇒ no flatten/re-open inside the window ⇒ entry is older
+}
+
+/**
+ * Day-level fallback entry from /pa/transactions: aggregate net signed `qty`
+ * per calendar day, walk end-of-day balances, return the most recent day the
+ * balance crossed 0→positive. Order-independent (robust to IB's unreliable
+ * same-day ordering) but blind to intraday flattens — used only for entries
+ * older than the ~7-day trades window, where intraday data no longer exists.
+ * Returns null if the 90-day window doesn't reconcile to currentShares.
+ */
+export function entryFromTransactions(
   transactions: RawIbTransaction[],
   currentShares: number,
 ): Date | null {
-  const events = transactions
-    .map((tx) => {
-      const d = tx.date ? new Date(tx.date) : null;
-      if (!d || Number.isNaN(d.getTime())) return null;
-      const qty = typeof tx.qty === 'number' ? tx.qty : 0;
-      // Sign by `type` (preferred — IB returns positive qty + a side field).
-      // Fall back to `amt` sign as a defensive proxy: buys debit cash (amt<0),
-      // sells credit cash (amt>0).
-      let signed = 0;
-      if (tx.type) {
-        const t = tx.type.toLowerCase();
-        if (t.includes('buy')) signed = qty;
-        else if (t.includes('sell')) signed = -qty;
-        else return null;        // skip dividends, fees, journal entries, etc.
-      } else if (typeof tx.amt === 'number') {
-        signed = tx.amt < 0 ? qty : -qty;
-      } else {
-        return null;
-      }
-      return { date: d, qty: signed };
-    })
-    .filter((e): e is { date: Date; qty: number } => e !== null)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-  let running = 0;
-  let entryDate: Date | null = null;
-  for (const e of events) {
-    const prev = running;
-    running += e.qty;
-    if (prev <= 0 && running > 0) entryDate = e.date;
-    if (running <= 0) entryDate = null;
+  const byDay = new Map<string, { date: Date; net: number }>();
+  for (const tx of transactions) {
+    if (!tx.date) continue;
+    if (tx.type) {
+      const t = tx.type.toLowerCase();
+      if (!t.includes('buy') && !t.includes('sell')) continue; // skip non-trades
+    }
+    const d = new Date(tx.date);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = tx.rawDate ?? tx.date;
+    const qty = typeof tx.qty === 'number' ? tx.qty : 0; // pa `qty` is pre-signed
+    const cur = byDay.get(key) ?? { date: d, net: 0 };
+    cur.net += qty;
+    byDay.set(key, cur);
   }
-  // Sanity: deduced final balance must match IB-reported current shares.
-  // Allow a tiny epsilon for fractional-share float drift.
+  const days = [...byDay.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
+  let running = 0;
+  let entry: Date | null = null;
+  for (const day of days) {
+    const prev = running;
+    running += day.net;
+    if (prev <= 0 && running > 0) entry = day.date;
+    if (running <= 0) entry = null;
+  }
   if (Math.abs(running - currentShares) > 0.0001) return null;
-  return entryDate;
+  return entry;
 }
 
 // ---------------------------------------------------------------------------
