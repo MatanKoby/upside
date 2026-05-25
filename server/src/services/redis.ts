@@ -30,11 +30,18 @@ export function ibSessionKey(userId: string): string {
   return `ib:session:${userId}`;
 }
 
-// Market-data snapshot cache (Batch 14e). Short TTL so opening TickerDetail
-// repeatedly doesn't hammer IB/Finnhub, but stays fresh enough for day range +
-// fundamentals. Keyed by symbol (not user) — the snapshot is the same for all.
-export function marketSnapshotKey(symbol: string): string {
-  return `marketdata:snapshot:${symbol.toUpperCase()}`;
+// Market-data snapshot cache (Batch 14e), split into two tiers so we don't
+// re-fetch daily-grain data on a fast cadence. Keyed by symbol (not user) —
+// both are identical for all holders.
+//   • intraday (day range, open, prev close, last, volume): short TTL.
+//   • fundamentals (52w range, P/E, EPS, beta, mkt cap, avg vol, dividend):
+//     long TTL — these don't move intraday, so one Finnhub /stock/metric call
+//     per symbol covers many TickerDetail opens.
+export function marketIntradayKey(symbol: string): string {
+  return `marketdata:intraday:${symbol.toUpperCase()}`;
+}
+export function marketFundamentalsKey(symbol: string): string {
+  return `marketdata:fundamentals:${symbol.toUpperCase()}`;
 }
 
 // ---------------------------------------------------------------------------

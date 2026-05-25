@@ -2,7 +2,12 @@ import { Router, type Request, type Response } from 'express';
 import { ibSnapshot, ibHistory, ibStatus } from '../services/ibGateway.js';
 import { ibHistoryToBundle } from '../services/ibMappers.js';
 import { getQuote, basicFinancials, type FinnhubMetrics } from '../services/finnhub.js';
-import { get as redisGet, setWithTtl, marketSnapshotKey } from '../services/redis.js';
+import {
+  get as redisGet,
+  setWithTtl,
+  marketIntradayKey,
+  marketFundamentalsKey,
+} from '../services/redis.js';
 import { supabase } from '../services/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
 import type { RawIbSnapshot } from '../types/index.js';
@@ -99,12 +104,17 @@ router.get('/sparkline/:symbol', async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // Market snapshot — Today's Range + Market Stats data for TickerDetail.
 //
-// Intraday fields (day high/low, open, prior close, last, volume): IB snapshot
-// when IB is connected, Finnhub /quote otherwise. Fundamentals (52-week range,
-// P/E, EPS, beta, market cap, avg vol, dividend): Finnhub /stock/metric always
-// (see finnhub.ts:basicFinancials for why not IB). Short Redis cache per symbol.
+// Two-tier cache so opening tickers doesn't hammer Finnhub's free tier:
+//   • Intraday (day high/low, open, prior close, last, volume): IB snapshot
+//     when IB is connected, Finnhub /quote ONLY as the fallback when IB is off.
+//     60s TTL. When IB is up, this path makes zero Finnhub calls.
+//   • Fundamentals (52-week range, P/E, EPS, beta, market cap, avg vol,
+//     dividend): Finnhub /stock/metric, but cached 6h — these don't change
+//     intraday, so one call per symbol covers a whole session of opens.
+// (Why Finnhub for fundamentals, not IB: see finnhub.ts:basicFinancials.)
 // ---------------------------------------------------------------------------
-const SNAPSHOT_CACHE_TTL_S = 45;
+const INTRADAY_TTL_S = 60;
+const FUNDAMENTALS_TTL_S = 6 * 60 * 60; // 6h — fundamentals are daily-grain
 
 export interface MarketSnapshot {
   symbol: string;
@@ -153,32 +163,29 @@ function pickMetric(metric: FinnhubMetrics | null, keys: string[]): number | nul
   return null;
 }
 
-router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
-  if (!req.user) {
-    res.status(401).json({ error: 'unauthorized' });
-    return;
-  }
-  const symbol = req.params.symbol?.toUpperCase();
-  if (!symbol) {
-    res.status(400).json({ error: 'symbol required' });
-    return;
-  }
+interface Intraday {
+  source: 'ib' | 'finnhub' | 'none';
+  last: number | null;
+  open: number | null;
+  prevClose: number | null;
+  dayLow: number | null;
+  dayHigh: number | null;
+  volume: number | null;
+}
 
-  // Cache hit — return the shared per-symbol snapshot.
-  const cacheKey = marketSnapshotKey(symbol);
+// Intraday tier: IB snapshot when the session is live; only fall back to a
+// Finnhub /quote when IB is off or gave nothing. 60s cache so repeat opens
+// (and the always-running screen) don't re-hit either source.
+async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
+  const key = marketIntradayKey(symbol);
   try {
-    const cached = await redisGet(cacheKey);
-    if (cached) {
-      res.json(JSON.parse(cached) as MarketSnapshot);
-      return;
-    }
+    const cached = await redisGet(key);
+    if (cached) return JSON.parse(cached) as Intraday;
   } catch {
-    // Redis unavailable → just compute fresh.
+    // Redis down → compute fresh.
   }
 
-  // Intraday fields prefer IB when its session is live; skip the (up to 2s)
-  // IB snapshot poll entirely when IB is disconnected to keep the route snappy.
-  const conid = await resolveConid(req.user.id, symbol);
+  const conid = await resolveConid(userId, symbol);
   let ibRow: RawIbSnapshot | undefined;
   if (conid) {
     const { authenticated, connected } = await ibStatus().catch(() => ({
@@ -191,45 +198,95 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
     }
   }
 
-  // Finnhub quote + fundamentals in parallel — the reliable, IB-independent base.
-  const [quote, metric] = await Promise.all([
-    getQuote(symbol).catch(() => null),
-    basicFinancials(symbol).catch(() => null),
+  const ibLast = parseAbbrev(ibRow?.['31']);
+  const ibHigh = parseAbbrev(ibRow?.['70']);
+  let result: Intraday;
+  if (ibLast != null || ibHigh != null) {
+    result = {
+      source: 'ib',
+      last: ibLast,
+      dayHigh: ibHigh,
+      dayLow: parseAbbrev(ibRow?.['71']),
+      open: parseAbbrev(ibRow?.['7295']),
+      prevClose: parseAbbrev(ibRow?.['7296']),
+      volume: parseAbbrev(ibRow?.['87']),
+    };
+  } else {
+    // IB off / empty — fall back to one Finnhub /quote. 0 means "unknown".
+    const quote = await getQuote(symbol).catch(() => null);
+    const fq = (v: number | null | undefined): number | null =>
+      v == null || v === 0 ? null : v;
+    result = quote
+      ? {
+          source: 'finnhub',
+          last: fq(quote.c),
+          dayHigh: fq(quote.h),
+          dayLow: fq(quote.l),
+          open: fq(quote.o),
+          prevClose: fq(quote.pc),
+          volume: null, // Finnhub free /quote omits today's volume
+        }
+      : { source: 'none', last: null, dayHigh: null, dayLow: null, open: null, prevClose: null, volume: null };
+  }
+
+  void setWithTtl(key, JSON.stringify(result), INTRADAY_TTL_S).catch(() => undefined);
+  return result;
+}
+
+// Fundamentals tier: Finnhub /stock/metric, cached 6h (daily-grain data).
+async function getFundamentals(symbol: string): Promise<FinnhubMetrics | null> {
+  const key = marketFundamentalsKey(symbol);
+  try {
+    const cached = await redisGet(key);
+    if (cached) return JSON.parse(cached) as FinnhubMetrics;
+  } catch {
+    // Redis down → compute fresh.
+  }
+  const metric = await basicFinancials(symbol).catch(() => null);
+  if (metric) void setWithTtl(key, JSON.stringify(metric), FUNDAMENTALS_TTL_S).catch(() => undefined);
+  return metric;
+}
+
+router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  const symbol = req.params.symbol?.toUpperCase();
+  if (!symbol) {
+    res.status(400).json({ error: 'symbol required' });
+    return;
+  }
+
+  const [intraday, metric] = await Promise.all([
+    getIntraday(req.user.id, symbol),
+    getFundamentals(symbol),
   ]);
 
-  // Intraday: IB value if present, else Finnhub quote (0 from Finnhub means
-  // "unknown" — treat as null).
-  const fq = (v: number | null | undefined): number | null =>
-    v == null || v === 0 ? null : v;
-  const last = parseAbbrev(ibRow?.['31']) ?? fq(quote?.c);
-  const dayHigh = parseAbbrev(ibRow?.['70']) ?? fq(quote?.h);
-  const dayLow = parseAbbrev(ibRow?.['71']) ?? fq(quote?.l);
-  const open = parseAbbrev(ibRow?.['7295']) ?? fq(quote?.o);
-  const prevClose = parseAbbrev(ibRow?.['7296']) ?? fq(quote?.pc);
-  const volume = parseAbbrev(ibRow?.['87']); // not on Finnhub free /quote
-
-  // Fundamentals — Finnhub only. marketCap + avg-vol come in millions.
+  // marketCap + avg-vol arrive from Finnhub in millions.
   const marketCapM = pickMetric(metric, ['marketCapitalization']);
-  const avgVolM = pickMetric(metric, [
-    '10DayAverageTradingVolume',
-    '3MonthAverageTradingVolume',
-  ]);
+  const avgVolM = pickMetric(metric, ['10DayAverageTradingVolume', '3MonthAverageTradingVolume']);
 
-  const ibUsed = parseAbbrev(ibRow?.['31']) != null || parseAbbrev(ibRow?.['70']) != null;
-  const fhUsed = quote != null || metric != null;
-
+  const fhUsed = intraday.source === 'finnhub' || metric != null;
   const snapshot: MarketSnapshot = {
     symbol,
-    source: ibUsed && fhUsed ? 'mixed' : ibUsed ? 'ib' : fhUsed ? 'finnhub' : 'none',
-    last,
-    open,
-    prevClose,
-    dayLow,
-    dayHigh,
+    source:
+      intraday.source === 'ib' && fhUsed
+        ? 'mixed'
+        : intraday.source === 'ib'
+          ? 'ib'
+          : fhUsed
+            ? 'finnhub'
+            : 'none',
+    last: intraday.last,
+    open: intraday.open,
+    prevClose: intraday.prevClose,
+    dayLow: intraday.dayLow,
+    dayHigh: intraday.dayHigh,
     week52High: pickMetric(metric, ['52WeekHigh']),
     week52Low: pickMetric(metric, ['52WeekLow']),
     stats: {
-      volume,
+      volume: intraday.volume,
       peRatio: pickMetric(metric, ['peTTM', 'peBasicExclExtraTTM', 'peExclExtraTTM']),
       eps: pickMetric(metric, ['epsTTM', 'epsBasicExclExtraItemsTTM', 'epsInclExtraItemsTTM']),
       marketCap: marketCapM == null ? null : marketCapM * 1e6,
@@ -238,12 +295,6 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
       dividend: pickMetric(metric, ['dividendPerShareTTM', 'dividendPerShareAnnual']),
     },
   };
-
-  // Cache even 'none' results briefly so a bad symbol / both-sources-down
-  // doesn't get hammered. Fire-and-forget.
-  void setWithTtl(cacheKey, JSON.stringify(snapshot), SNAPSHOT_CACHE_TTL_S).catch(
-    () => undefined,
-  );
 
   res.json(snapshot);
 });
