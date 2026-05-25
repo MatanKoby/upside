@@ -15,7 +15,8 @@ import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGatew
 import { companyNews, earningsCalendar, insiderTransactions } from './finnhub.js';
 import { rsi, macd, bollinger, vwap } from './technicals.js';
 import { incrLlmCallsToday } from './redis.js';
-import { llm, LlmError, type LlmAnalysisInput, type LlmAnalysisOutput } from './llm.js';
+import { LlmError, type LlmAnalysisInput, type LlmAnalysisOutput } from './llm.js';
+import { activeLlm } from './llmConfig.js';
 
 const DEFAULT_EXPIRY_DAYS = 7;
 
@@ -200,7 +201,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
 
     // --- LLM (one unified call counts once; retry once on malformed) -----
     await incrLlmCallsToday();
-    const provider = llm();
+    const provider = await activeLlm();
     let output: LlmAnalysisOutput;
     try {
       output = await provider.analyze(input);

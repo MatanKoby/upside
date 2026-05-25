@@ -12,6 +12,11 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - Owner: claude
 - Started: 2026-05-25
 - Files: migration `008_unified_signals.sql` (new); `server/src/services/{llm,signalEngine(new),technicals,finnhub,redis}.ts`, `server/src/routes/signals.ts`, `server/src/cron/lockCleanup.ts` (renamed from signalRunner.ts); `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/components/primitives/SignalPill.tsx` (new), `client/src/hooks/{useAnalysisLock,useSignals}.ts`
+- **Verify run 2026-05-25:** schema 008 live; full engine pipeline runs end-to-end (lock→IB→technicals→Finnhub→LLM→persist→supersede→FE). Blocker found: Gemini free tier returns 429 on a single analysis, which the engine mislabeled "malformed". No successful LLM round-trip yet → claim stays open until a real SELL/BUY lands.
+- **Follow-on work (commits bcc700f + pending):**
+  - Multi-provider LLM: one OpenAI-compatible provider for groq/mistral/openrouter/openai (presets carry base URL + default model); gemini stays native REST. `LlmError{kind}` classifies non-2xx (429→rate_limited, 401/403→config, else unavailable); only a 2xx-with-bad-shape is `malformed`. Engine re-prompts only on `malformed`; rate-limit/outage/bad-key fail soft with an honest reason. Malformed errors carry a 400-char raw-body snippet to #errors.
+  - **Dynamic provider/model selection** (design decision — pre-builds Batch 15's LLM dropdown): selection stored in `app_config` (`llm_provider`/`llm_model`); keys stay in `.env`. New `appConfig.ts` (generic get/set), `llmConfig.ts` (`getLlmSelection`/`activeLlm`/`setLlmSelection`, app_config→env fallback), `routes/config.ts` (`GET`/`POST /api/config/llm`, validates provider is implemented+keyed). FE `useLlmConfig` hook (Realtime-synced) + Settings "Analysis engine" provider/model picker. `LLM_BASE_URL` env override dropped — base URL coded per provider.
+  - Manual prereq: set `LLM_PROVIDER=groq` + `GROQ_API_KEY` (and/or `MISTRAL_API_KEY`) in VPS `.env`, `git pull && ./bin/upside rebuild api`.
 
 ## Known issues (deferred fixes)
 

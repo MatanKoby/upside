@@ -30,8 +30,8 @@ export const env = {
 
   // gemini = native REST. groq / mistral / openrouter / openai all speak the
   // OpenAI chat-completions shape and share one provider (see llm.ts). Pick a
-  // provider, set its key below; optionally override the model with LLM_MODEL
-  // or the endpoint with LLM_BASE_URL (defaults baked in per provider).
+  // provider, set its key below. Base URL is coded per provider; add a preset
+  // for a new host. LLM_MODEL optionally overrides the provider's default model.
   llmProvider: optional('LLM_PROVIDER', 'gemini') as
     | 'gemini'
     | 'claude'
@@ -39,7 +39,6 @@ export const env = {
     | 'groq'
     | 'mistral'
     | 'openrouter',
-  llmBaseUrl: optional('LLM_BASE_URL'),
   llmModel: optional('LLM_MODEL'),
   geminiApiKey: optional('GEMINI_API_KEY'),
   anthropicApiKey: optional('ANTHROPIC_API_KEY'),

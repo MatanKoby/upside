@@ -884,3 +884,20 @@
   font-size: var(--fs-12);
   color: rgb(var(--loss-rgb));
 }
+.settings-select,
+.settings-input {
+  padding: var(--sp-8) var(--sp-10);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  min-width: 0;
+}
+.settings-input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  flex: 1;
+  margin-left: var(--sp-12);
+}

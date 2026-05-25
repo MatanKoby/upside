@@ -195,8 +195,70 @@ function stripFences(text: string): string {
   return t;
 }
 
+// ---------------------------------------------------------------------------
+// Provider registry. `gemini` is native REST; groq/mistral/openrouter/openai
+// share one OpenAI-compatible provider. Presets carry the base URL + a free-
+// tier-friendly default model per host — add an entry to support a new host.
+// Provider + model are injected per call (resolved from app_config, then env,
+// in services/llmConfig.ts) so they can be switched on the fly.
+// ---------------------------------------------------------------------------
+export type LlmProviderName = 'gemini' | 'claude' | 'groq' | 'mistral' | 'openrouter' | 'openai';
+
+interface OpenAiCompatPreset {
+  baseUrl: string;
+  defaultModel: string;
+  apiKey: string;
+}
+
+const OPENAI_COMPAT_PRESETS: Record<string, OpenAiCompatPreset> = {
+  groq: {
+    baseUrl: 'https://api.groq.com/openai/v1',
+    defaultModel: 'llama-3.3-70b-versatile',
+    apiKey: env.groqApiKey,
+  },
+  mistral: {
+    baseUrl: 'https://api.mistral.ai/v1',
+    defaultModel: 'mistral-small-latest',
+    apiKey: env.mistralApiKey,
+  },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    defaultModel: 'meta-llama/llama-3.3-70b-instruct:free',
+    apiKey: env.openrouterApiKey,
+  },
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4o-mini',
+    apiKey: env.openaiApiKey,
+  },
+};
+
+const API_KEY_BY_PROVIDER: Record<string, string> = {
+  gemini: env.geminiApiKey,
+  groq: env.groqApiKey,
+  mistral: env.mistralApiKey,
+  openrouter: env.openrouterApiKey,
+  openai: env.openaiApiKey,
+};
+
+// Providers that are actually implemented (claude is a stub) and so selectable.
+const IMPLEMENTED_PROVIDERS: LlmProviderName[] = ['gemini', 'groq', 'mistral', 'openrouter', 'openai'];
+
+// The provider's coded default model — shown in the UI as the "(default)" hint.
+export function defaultModelFor(provider: string): string {
+  if (provider === 'gemini') return 'gemini-2.0-flash';
+  return OPENAI_COMPAT_PRESETS[provider]?.defaultModel ?? '';
+}
+
+// Implemented providers whose API key is present in env — the only ones the FE
+// should offer and the config endpoint should accept (picking a keyless
+// provider would just 503 on the next analyze).
+export function availableProviders(): LlmProviderName[] {
+  return IMPLEMENTED_PROVIDERS.filter((p) => !!API_KEY_BY_PROVIDER[p]);
+}
+
 class GeminiProvider implements LlmProvider {
-  private model = 'gemini-2.0-flash';
+  constructor(private readonly model: string) {}
 
   async analyze(input: LlmAnalysisInput, opts?: { strict?: boolean }): Promise<LlmAnalysisOutput> {
     if (!env.geminiApiKey) throw new LlmError('config', 'GEMINI_API_KEY not set — cannot run Gemini analysis');
@@ -221,98 +283,68 @@ class ClaudeProvider implements LlmProvider {
   async analyze(): Promise<LlmAnalysisOutput> {
     throw new LlmError(
       'config',
-      'ClaudeProvider not implemented — set LLM_PROVIDER=gemini|groq|mistral|openrouter or implement using ANTHROPIC_API_KEY',
+      'ClaudeProvider not implemented — pick gemini | groq | mistral | openrouter | openai',
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// One provider for every OpenAI chat-completions endpoint. Presets carry the
-// base URL + a sensible default model and free-tier-friendly choice per host;
-// LLM_BASE_URL / LLM_MODEL override either. Swap hosts by changing env only.
-// ---------------------------------------------------------------------------
-interface OpenAiCompatPreset {
-  baseUrl: string;
-  defaultModel: string;
-  apiKey: string;
-}
-
-function openAiCompatPreset(): { provider: string } & OpenAiCompatPreset {
-  const presets: Record<string, OpenAiCompatPreset> = {
-    groq: {
-      baseUrl: 'https://api.groq.com/openai/v1',
-      defaultModel: 'llama-3.3-70b-versatile',
-      apiKey: env.groqApiKey,
-    },
-    mistral: {
-      baseUrl: 'https://api.mistral.ai/v1',
-      defaultModel: 'mistral-small-latest',
-      apiKey: env.mistralApiKey,
-    },
-    openrouter: {
-      baseUrl: 'https://openrouter.ai/api/v1',
-      defaultModel: 'meta-llama/llama-3.3-70b-instruct:free',
-      apiKey: env.openrouterApiKey,
-    },
-    openai: {
-      baseUrl: 'https://api.openai.com/v1',
-      defaultModel: 'gpt-4o-mini',
-      apiKey: env.openaiApiKey,
-    },
-  };
-  const p = presets[env.llmProvider];
-  if (!p) throw new LlmError('config', `no OpenAI-compatible preset for LLM_PROVIDER=${env.llmProvider}`);
-  return {
-    provider: env.llmProvider,
-    baseUrl: env.llmBaseUrl || p.baseUrl,
-    defaultModel: env.llmModel || p.defaultModel,
-    apiKey: p.apiKey,
-  };
-}
-
 class OpenAiCompatibleProvider implements LlmProvider {
+  constructor(
+    private readonly provider: string,
+    private readonly model: string,
+  ) {}
+
   async analyze(input: LlmAnalysisInput, opts?: { strict?: boolean }): Promise<LlmAnalysisOutput> {
-    const { provider, baseUrl, defaultModel, apiKey } = openAiCompatPreset();
-    if (!apiKey) {
-      throw new LlmError('config', `${provider.toUpperCase()}_API_KEY not set — cannot run ${provider} analysis`);
+    const preset = OPENAI_COMPAT_PRESETS[this.provider];
+    if (!preset) throw new LlmError('config', `no OpenAI-compatible preset for provider=${this.provider}`);
+    if (!preset.apiKey) {
+      throw new LlmError('config', `${this.provider.toUpperCase()}_API_KEY not set — cannot run ${this.provider} analysis`);
     }
     const res = await axios.post(
-      `${baseUrl}/chat/completions`,
+      `${preset.baseUrl}/chat/completions`,
       {
-        model: defaultModel,
+        model: this.model,
         messages: [{ role: 'user', content: buildPrompt(input, opts?.strict ?? false) }],
         response_format: { type: 'json_object' },
         temperature: 0.4,
       },
       {
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: { Authorization: `Bearer ${preset.apiKey}` },
         timeout: 30_000,
         validateStatus: () => true,
       },
     );
-    notifyApiFailure(`llm.${provider}`, res.status, { params: { model: defaultModel }, body: res.data });
+    notifyApiFailure(`llm.${this.provider}`, res.status, { params: { model: this.model }, body: res.data });
     if (res.status < 200 || res.status >= 300) {
       throw new LlmError(
         classifyStatus(res.status),
-        `${provider} ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`,
+        `${this.provider} ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`,
       );
     }
     return parseAndValidate(res.data?.choices?.[0]?.message?.content);
   }
 }
 
-export function llm(): LlmProvider {
-  switch (env.llmProvider) {
+// Build a provider for an explicit selection. Empty/null `model` → provider default.
+export function llmFor(provider: string, model?: string | null): LlmProvider {
+  const resolvedModel = (model && model.trim()) || defaultModelFor(provider);
+  switch (provider) {
     case 'gemini':
-      return new GeminiProvider();
+      return new GeminiProvider(resolvedModel);
     case 'claude':
       return new ClaudeProvider();
     case 'groq':
     case 'mistral':
     case 'openrouter':
     case 'openai':
-      return new OpenAiCompatibleProvider();
+      return new OpenAiCompatibleProvider(provider, resolvedModel);
     default:
-      throw new Error(`Unknown LLM_PROVIDER: ${env.llmProvider}`);
+      throw new LlmError('config', `Unknown LLM provider: ${provider}`);
   }
+}
+
+// Env-configured default selection — the boot fallback when app_config has no
+// row yet. Runtime selection goes through services/llmConfig.ts:activeLlm().
+export function llm(): LlmProvider {
+  return llmFor(env.llmProvider, env.llmModel || null);
 }
