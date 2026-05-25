@@ -351,12 +351,17 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   for (const r of assembled) {
     const e = existingMap.get(r.symbol);
     if (!e) { toUpsert.push(r); continue; }
-    // change detection — only the fields users see ticking.
-    // first_seen_at / first_seen_source are intentionally excluded: they're
-    // stable per (user, symbol), but trading_days_held + daily_return derived
-    // from them will tick at most once per day. We catch that via the
-    // unrealized_pnl path (which moves intraday) — when PnL moves, daily_return
-    // is recomputed and persisted alongside.
+    // change detection — the price/size fields users see ticking, PLUS entry
+    // provenance. We MUST force an upsert when first_seen_source flips
+    // (observed→ib_transactions) or first_seen_at resolves to an exact date:
+    // that event doesn't move on its own, and when the market is closed IB's
+    // snapshot price equals finnhub's last write, so no price field changes to
+    // carry it through. Excluding it (as we used to) meant a freshly resolved
+    // entry date was recomputed every cycle but never persisted, and the hourly
+    // resolve-throttle then re-locked the row to 'observed'. Once
+    // source='ib_transactions' the resolver short-circuits, so this fires at
+    // most once per real resolution — no thrash. (trading_days_held +
+    // daily_return derive from first_seen_at and ride along on the same write.)
     if (
       Number(e.current_price) !== r.current_price
       || Number(e.market_value) !== r.market_value
@@ -364,6 +369,8 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
       || Number(e.vwap_value ?? NaN) !== (r.vwap_value ?? NaN)
       || Number(e.shares) !== r.shares
       || Number(e.avg_cost) !== r.avg_cost
+      || String(e.first_seen_source ?? '') !== r.first_seen_source
+      || String(e.first_seen_at ?? '') !== String(r.first_seen_at ?? '')
     ) {
       toUpsert.push(r);
     }
