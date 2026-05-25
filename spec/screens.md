@@ -159,7 +159,7 @@ Opens as a full-screen slide-in from the right when tapping a TickerCard. Route:
 - Label: "Today's range" (left) + "Open $139.20" (right, muted).
 - Visual range bar: horizontal track with colored dot showing current price position.
 - Low (red, left) / High (green, right). Dot position: `(currentPrice - dayLow) / (dayHigh - dayLow) * 100%`.
-- **Data source:** `GET /api/marketdata/snapshot/:symbol` (`dayLow`/`dayHigh`/open) — IB snapshot, Finnhub fallback. Until that endpoint lands these read 0 and the bar is inert (see queue Batch 14e).
+- **Data source:** `GET /api/marketdata/snapshot/:symbol` (`dayLow`/`dayHigh`/open) — IB snapshot when the IB session is live, Finnhub `/quote` otherwise. Wired in Batch 14e; `currentInRange` is computed FE-side from the live price.
 
 ### Market Stats (above chart, below today's range)
 Dense, customizable stats panel:
@@ -173,7 +173,7 @@ Dense, customizable stats panel:
   - Each stat: drag handle (ti-grip-vertical) for reordering + toggle switch for visibility.
   - Pool: Volume, Forward P/E, Prior close, Beta, 52-week range, Open, EPS, Market cap, Dividend amount, Dividend date, Put/call interest, Put/call volume, Tweet volume, Avg volume (30d).
   - Selection/order persisted to `user_preferences.stat_config` — applies to ALL ticker screens.
-- **Data source:** `GET /api/marketdata/snapshot/:symbol` — the stat pool + 52-week range come from IB fundamentals (Finnhub fallback). Empty until that endpoint lands (queue Batch 14e).
+- **Data source:** `GET /api/marketdata/snapshot/:symbol` — the stat pool + 52-week range come from **Finnhub** `/stock/metric` (basic financials), not IB. IB Client Portal's snapshot fundamental fields are subscription-gated/unreliable, and under the on-demand IBeam model IB is usually OFF — so IB-sourced fundamentals would be blank most of the time. Finnhub is IB-independent and free-tier. (Intraday range fields above stay IB-primary.) Volume is IB-only (Finnhub free `/quote` omits it → "—" when IB is off); put/call + tweet volume have no source yet → "—". Wired in Batch 14e.
 
 ### Chart Controls (between stats and chart)
 - Left: Line / Candle toggle.
