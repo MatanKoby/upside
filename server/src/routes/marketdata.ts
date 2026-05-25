@@ -164,7 +164,7 @@ function pickMetric(metric: FinnhubMetrics | null, keys: string[]): number | nul
 }
 
 interface Intraday {
-  source: 'ib' | 'finnhub' | 'none';
+  source: 'ib' | 'finnhub' | 'mixed' | 'none';
   last: number | null;
   open: number | null;
   prevClose: number | null;
@@ -173,9 +173,15 @@ interface Intraday {
   volume: number | null;
 }
 
-// Intraday tier: IB snapshot when the session is live; only fall back to a
-// Finnhub /quote when IB is off or gave nothing. 60s cache so repeat opens
-// (and the always-running screen) don't re-hit either source.
+// Both IB (closed-market snapshots) and Finnhub (unknown symbols) report 0 for
+// fields they don't have. 0 is never a real price → treat it as "unknown" so we
+// render "—" / fall back rather than showing a bogus $0.00.
+const nz = (v: number | null): number | null => (v === 0 ? null : v);
+
+// Intraday tier: IB snapshot when the session is live; fall back to a Finnhub
+// /quote when IB is off OR when IB's snapshot is incomplete (a closed market
+// returns 0s for open/prevClose/etc., which Finnhub still has). 60s cache so
+// repeat opens (and the always-running screen) don't re-hit either source.
 async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
   const key = marketIntradayKey(symbol);
   try {
@@ -198,36 +204,54 @@ async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
     }
   }
 
-  const ibLast = parseAbbrev(ibRow?.['31']);
-  const ibHigh = parseAbbrev(ibRow?.['70']);
-  let result: Intraday;
-  if (ibLast != null || ibHigh != null) {
-    result = {
-      source: 'ib',
-      last: ibLast,
-      dayHigh: ibHigh,
-      dayLow: parseAbbrev(ibRow?.['71']),
-      open: parseAbbrev(ibRow?.['7295']),
-      prevClose: parseAbbrev(ibRow?.['7296']),
-      volume: parseAbbrev(ibRow?.['87']),
-    };
-  } else {
-    // IB off / empty — fall back to one Finnhub /quote. 0 means "unknown".
+  const result: Intraday = {
+    source: 'none',
+    last: nz(parseAbbrev(ibRow?.['31'])),
+    dayHigh: nz(parseAbbrev(ibRow?.['70'])),
+    dayLow: nz(parseAbbrev(ibRow?.['71'])),
+    open: nz(parseAbbrev(ibRow?.['7295'])),
+    prevClose: nz(parseAbbrev(ibRow?.['7296'])),
+    volume: nz(parseAbbrev(ibRow?.['87'])),
+  };
+  const ibContributed = result.last != null || result.dayHigh != null;
+
+  // Fill any gaps from Finnhub. When IB is fully populated (market open) there
+  // are no gaps → no Finnhub call. A closed/empty IB snapshot leaves gaps →
+  // one cached /quote fills open/prevClose/range. Finnhub free /quote has no
+  // volume field, so volume stays IB-only.
+  const missing =
+    result.last == null ||
+    result.dayHigh == null ||
+    result.dayLow == null ||
+    result.open == null ||
+    result.prevClose == null;
+  let fhContributed = false;
+  if (missing) {
     const quote = await getQuote(symbol).catch(() => null);
-    const fq = (v: number | null | undefined): number | null =>
-      v == null || v === 0 ? null : v;
-    result = quote
-      ? {
-          source: 'finnhub',
-          last: fq(quote.c),
-          dayHigh: fq(quote.h),
-          dayLow: fq(quote.l),
-          open: fq(quote.o),
-          prevClose: fq(quote.pc),
-          volume: null, // Finnhub free /quote omits today's volume
-        }
-      : { source: 'none', last: null, dayHigh: null, dayLow: null, open: null, prevClose: null, volume: null };
+    if (quote) {
+      const before = { ...result };
+      result.last ??= nz(quote.c ?? null);
+      result.dayHigh ??= nz(quote.h ?? null);
+      result.dayLow ??= nz(quote.l ?? null);
+      result.open ??= nz(quote.o ?? null);
+      result.prevClose ??= nz(quote.pc ?? null);
+      fhContributed =
+        result.last !== before.last ||
+        result.dayHigh !== before.dayHigh ||
+        result.dayLow !== before.dayLow ||
+        result.open !== before.open ||
+        result.prevClose !== before.prevClose;
+    }
   }
+
+  result.source =
+    ibContributed && fhContributed
+      ? 'mixed'
+      : ibContributed
+        ? 'ib'
+        : fhContributed
+          ? 'finnhub'
+          : 'none';
 
   void setWithTtl(key, JSON.stringify(result), INTRADAY_TTL_S).catch(() => undefined);
   return result;
@@ -267,17 +291,11 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
   const marketCapM = pickMetric(metric, ['marketCapitalization']);
   const avgVolM = pickMetric(metric, ['10DayAverageTradingVolume', '3MonthAverageTradingVolume']);
 
-  const fhUsed = intraday.source === 'finnhub' || metric != null;
+  const ibUsed = intraday.source === 'ib' || intraday.source === 'mixed';
+  const fhUsed = intraday.source === 'finnhub' || intraday.source === 'mixed' || metric != null;
   const snapshot: MarketSnapshot = {
     symbol,
-    source:
-      intraday.source === 'ib' && fhUsed
-        ? 'mixed'
-        : intraday.source === 'ib'
-          ? 'ib'
-          : fhUsed
-            ? 'finnhub'
-            : 'none',
+    source: ibUsed && fhUsed ? 'mixed' : ibUsed ? 'ib' : fhUsed ? 'finnhub' : 'none',
     last: intraday.last,
     open: intraday.open,
     prevClose: intraday.prevClose,

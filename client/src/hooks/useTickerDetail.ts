@@ -53,9 +53,11 @@ function buildMarketStats(snap: MarketSnapshot): MarketStat[] {
     { key: 'fwdPE', label: 'P/E', value: num(s.peRatio, 1), enabled: true },
     { key: 'priorClose', label: 'Prior close', value: cur(snap.prevClose), enabled: true },
     { key: 'beta', label: 'Beta', value: num(s.beta, 2), enabled: true },
-    { key: 'range52w', label: '52w range', value: range52, enabled: true },
     { key: 'open', label: 'Open', value: cur(snap.open), enabled: true },
     { key: 'eps', label: 'EPS', value: cur(s.eps), enabled: true },
+    // 52w range is shown as the bar below the grid by default — keep the text
+    // cell in the pool (toggleable) but off, to avoid duplicating the bar.
+    { key: 'range52w', label: '52w range', value: range52, enabled: false },
     { key: 'marketCap', label: 'Market cap', value: s.marketCap == null ? DASH : formatCompactCurrency(s.marketCap), enabled: false },
     { key: 'dividend', label: 'Dividend', value: cur(s.dividend), enabled: false },
     { key: 'putCall', label: 'Put/call', value: DASH, enabled: false },
