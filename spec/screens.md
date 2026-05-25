@@ -147,6 +147,8 @@ Opens as a full-screen slide-in from the right when tapping a TickerCard. Route:
 
 > **Held vs. unheld tickers render the same screen.** Same layout, same market-stats panel, same chart, same collapsible sections. The only difference: **Position Stats** section is present for held positions and absent for non-held. Everything else renders identically.
 
+> ⚠ **Loading / error states (deferred — Batch 16 scope):** `TickerDetailPage` currently reuses the `ComingSoon` placeholder for its loading, error, and not-held branches, so while a position loads the user sees the misleading "Loading SYMBOL… · SYMBOL — coming soon". Replace with proper states: a skeleton/spinner while loading, a real error card on failure, and a distinct "not in your portfolio" empty state (none should say "coming soon"). Folds into Batch 16's loading/error/empty-states sweep.
+
 ### Navigation
 - Slide-in animation from right (CSS transform).
 - Back arrow (ti-arrow-left) returns to portfolio home.
@@ -221,6 +223,7 @@ Dense, customizable stats panel:
 - Icon: ti-activity.
 - Header: bearish/bullish summary count.
 - Body rows: RSI (14), VWAP divergence, MACD, Volume trend, Bollinger, Earnings date. Each row: indicator name | current value | colored status badge.
+- ⚠ **Not yet wired (deferred):** `IndicatorsSection` renders an empty list today — `useTickerDetail` hardcodes `indicators: []`. The data already exists: `signalEngine` computes RSI/MACD/Bollinger/VWAP and persists them on `analyses.indicator_snapshot` (Batch 14a). A future batch should surface the latest non-superseded analysis's `indicator_snapshot` into this section (independent of having a live signal), so indicators are visible even before/without an Analyze. Indicators are a primary read for understanding a position's situation — this is wanted, not optional. Pre-Analyze (no analysis yet) shows an empty/"Analyze to compute indicators" state.
 
 ---
 
