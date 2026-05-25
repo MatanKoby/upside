@@ -82,6 +82,9 @@ export type PositionStatsDetail = {
   // unrealizedPnLPercent / tradingDaysHeld. Null when entry date unknown or
   // first poll hasn't completed.
   dailyReturnPercent: number | null;
+  // ISO entry timestamp (positions.first_seen_at). Drives the chart's entry
+  // marker, which only renders when this falls in the visible window.
+  entryDate: string | null;
 };
 
 export type IndicatorStatus = 'bullish' | 'neutral' | 'bearish' | 'event';

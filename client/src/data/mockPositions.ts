@@ -163,6 +163,7 @@ export const mockTickerDetails: Record<string, TickerDetailData> = {
       daysHeld: 96,
       daysHeldSource: 'ib_transactions',
       dailyReturnPercent: 18.2 / 96,
+      entryDate: null,
     },
     indicators: [
       { name: 'RSI (14)', value: '74.1', status: 'bearish', note: 'Overbought' },
@@ -230,6 +231,7 @@ export function getTickerDetail(symbol: string): TickerDetailData | null {
       daysHeld: 0,
       daysHeldSource: 'observed',
       dailyReturnPercent: null,
+      entryDate: null,
     },
     indicators: [
       { name: 'RSI (14)', value: '-', status: 'neutral' },

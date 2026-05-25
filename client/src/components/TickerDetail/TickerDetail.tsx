@@ -14,6 +14,8 @@ import { PositionStats } from './PositionStats';
 import { IndicatorsSection } from './IndicatorsSection';
 import { CollapsibleSection } from '../common/CollapsibleSection';
 import { PriceChart } from './PriceChart';
+import { useSignals } from '../../hooks/useSignals';
+import { SignalPill } from '../primitives/SignalPill';
 
 export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   const navigate = useNavigate();
@@ -25,6 +27,26 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
     rsi: false,
   });
   const tone = useMemo(() => getPnlColor(detail.todayChangePercent), [detail.todayChangePercent]);
+
+  // Lifted here (rather than inside SignalSection) so the same subscription
+  // feeds both the section body and the collapsed-header pill row.
+  const signalsResult = useSignals(detail.symbol);
+  const actionableSignals = signalsResult.signals.filter((s) => s.type !== 'no_signal');
+  const signalAccessory =
+    actionableSignals.length > 0 ? (
+      <span className="td-section-pills">
+        {actionableSignals.map((s) => (
+          <SignalPill
+            key={s.id}
+            type={s.type}
+            quality={s.quality}
+            motivation={s.motivation}
+            low={s.priceRangeLow}
+            high={s.priceRangeHigh}
+          />
+        ))}
+      </span>
+    ) : undefined;
 
   return (
     <div className="ticker-detail-screen">
@@ -54,6 +76,7 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
           mode={mode}
           overlays={overlays}
           entryPrice={detail.positionStats?.avgCost}
+          entryDate={detail.positionStats?.entryDate ?? undefined}
         />
         <ChartControls
           mode={mode}
@@ -66,8 +89,8 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
         <TimeframeBar active={timeframe} onChange={setTimeframe} />
       </section>
 
-      <CollapsibleSection title="Signal">
-        <SignalSection symbol={detail.symbol} />
+      <CollapsibleSection title="Signal" headerAccessory={signalAccessory}>
+        <SignalSection symbol={detail.symbol} signalsResult={signalsResult} />
       </CollapsibleSection>
 
       {detail.positionStats && (

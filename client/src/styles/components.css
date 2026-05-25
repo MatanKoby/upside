@@ -572,6 +572,21 @@
   padding: 0 var(--sp-12) var(--sp-12);
   border-top: 0.5px solid var(--border);
 }
+.td-section-title { flex-shrink: 0; }
+.td-section-accessory {
+  margin-left: auto;
+  margin-right: var(--sp-8);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.td-section-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
 
 .td-signal-head {
   display: flex;

@@ -26,6 +26,7 @@ interface DbPosition {
   trading_days_held: number | string | null;
   daily_return: number | string | null;
   first_seen_source: string | null;
+  first_seen_at: string | null;
 }
 
 function num(v: number | string | null | undefined): number {
@@ -75,6 +76,7 @@ function rowToTickerDetail(r: DbPosition, totalPortfolioValue: number): TickerDe
       daysHeld: num(r.trading_days_held),
       daysHeldSource: r.first_seen_source === 'ib_transactions' ? 'ib_transactions' : 'observed',
       dailyReturnPercent: r.daily_return == null ? null : num(r.daily_return),
+      entryDate: r.first_seen_at,
     },
     indicators: [],
   };

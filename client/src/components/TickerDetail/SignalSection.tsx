@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../services/supabase';
-import { useSignals, type ActiveSignal } from '../../hooks/useSignals';
+import { type ActiveSignal, type UseSignalsResult } from '../../hooks/useSignals';
 import { useAnalysisLock } from '../../hooks/useAnalysisLock';
 import { SignalPill } from '../primitives/SignalPill';
 
@@ -50,8 +50,8 @@ function DirectionBlock({ signal }: { signal: ActiveSignal }) {
   );
 }
 
-export function SignalSection({ symbol }: { symbol: string }) {
-  const { analysis, signals, previousCount, isLoading } = useSignals(symbol);
+export function SignalSection({ symbol, signalsResult }: { symbol: string; signalsResult: UseSignalsResult }) {
+  const { analysis, signals, previousCount, isLoading } = signalsResult;
   const { isLocked } = useAnalysisLock(symbol);
 
   const [btn, setBtn] = useState<ButtonState>('idle');
