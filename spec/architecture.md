@@ -9,12 +9,12 @@ Upside's runtime shape: where things run, how they talk, who can sign in.
 - **Broker API**: IB Client Portal API (REST), gateway runs on same Oracle VPS
 - **Market Data**: IB API (prices, OHLCV bars, fundamentals — VWAP computed BE-side, not provided by IB), Finnhub (news, sentiment, insider trades, earnings, intraday candles — free 60 calls/min, all routed through a rate-limited queue, see `schema.md`)
 - **Technical Indicators**: Computed locally from IB price data using `technicalindicators` npm library (RSI, MACD, Bollinger, SMA/EMA, Stochastic, support/resistance, volume profile)
-- **AI/LLM**: Multi-provider, provider-agnostic. Gemini (native REST) + one OpenAI-compatible provider with presets for Groq / Mistral / OpenRouter / OpenAI. **Dev default: Groq `llama-3.3-70b-versatile`** (free tier; Gemini's free tier was too rate-limited for even a single analysis). Active provider/model chosen at **runtime** via `app_config` + `/api/config/llm` (Settings dropdown) — keys live in `.env`, no restart to switch. No vendor lock-in. See `signal-model.md` → LLM Provider Abstraction.
+- **AI/LLM**: Multi-provider, provider-agnostic. **Current: Groq `llama-3.3-70b-versatile`** (free tier, proven) via an OpenAI-compatible provider; **Mistral** configured but not yet used; OpenRouter / OpenAI available the same way. **Gemini** (native REST) is implemented but parked — its free tier was too rate-limited for even a single analysis; may revisit on a paid tier. Active provider/model chosen at **runtime** via `app_config` + `/api/config/llm` (Settings dropdown) — keys live in `.env`, no restart to switch. No vendor lock-in. See `signal-model.md` → LLM Provider Abstraction.
 - **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
 - **Hosting**: Vercel (frontend, free *.vercel.app subdomain), Oracle Cloud (backend + IB gateway + Redis, free)
 - **CI/CD**: GitHub (PUBLIC repo, proper secret isolation) + manual deploy initially, GitHub Actions later
 - **Auth**: Google OAuth via Supabase Auth + hard-coded email whitelist (invite-only for MVP)
-- **Total monthly cost**: $0 (Groq/Gemini/Mistral free tiers). Upgrade path: ~$5-10/mo if switching to a paid Claude/OpenAI tier.
+- **Total monthly cost**: $0 (Groq free tier; Mistral free tier available). Upgrade path: ~$5-10/mo if switching to a paid Claude/OpenAI tier.
 
 ## Infrastructure — Oracle Cloud VPS (US-Ashburn)
 
