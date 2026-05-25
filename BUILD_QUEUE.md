@@ -558,6 +558,57 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ---
 
+## Batch 14e: Marketdata snapshot endpoint + TickerDetail wire-up
+
+**Depends on:** Batch 13 (live IB), Batch 13.8 (Finnhub queue for fallback).
+
+**Scope:** Fill the TickerDetail data that's been hardcoded empty since the screen was built against mock data. `useTickerDetail` currently returns `dayLow/dayHigh: 0`, `currentInRange: 0`, `marketStats: []` (see comments in `client/src/hooks/useTickerDetail.ts`), so **Today's Range** shows zeros and **Market Stats** is blank. This batch builds the snapshot endpoint that feeds both. Spec: `screens.md` → Today's Range / Market Stats (data-source notes).
+
+### Deliverables
+1. **`GET /api/marketdata/snapshot/:symbol`** (`server/src/routes/marketdata.ts`) — auth-gated. Returns `{ dayLow, dayHigh, open, prevClose, last, week52High, week52Low, stats: { volume, peRatio, eps, marketCap, beta, avgVol30d, ... } }`.
+   - Primary source: IB snapshot (subscribe-wait-fetch `ibSnapshot`, already built) for day range + intraday fields; IB fundamentals for 52-week range / P-E / EPS / beta / market cap.
+   - Fallback: Finnhub quote + basic-financials via the rate-limited queue when IB is disconnected.
+2. **`useTickerDetail` wire-up**: replace the hardcoded `0`/`[]` with the snapshot fields; compute `currentInRange` from real `dayLow/dayHigh`. Map the stat pool to the `MarketStats` panel; keep `stat_config` ordering.
+3. **Caching**: short Redis TTL (e.g. 30-60s) on the snapshot per symbol to avoid hammering IB on every TickerDetail open.
+
+### Files
+- `server/src/routes/marketdata.ts`, `server/src/services/ibGateway.ts` (snapshot/fundamentals field mapping), `server/src/services/finnhub.ts` (fallback), `server/src/services/redis.ts` (cache helper), `client/src/hooks/useTickerDetail.ts`, `client/src/components/TickerDetail/MarketStats.tsx`.
+
+### Does NOT touch
+- Signal engine, chart history endpoint (already real), pollers.
+
+### Verification
+- Open a held ticker → Today's Range bar reflects real day low/high with the dot positioned correctly; Market Stats grid populated; 52-week range bar shows real bounds.
+- Disconnect IB → snapshot still returns via Finnhub fallback (some fundamental fields may be null — render "—").
+
+---
+
+## Batch 14f: TickerDetail real-data chart + signal polish
+
+**Depends on:** Batch 14a (signals/pills). Independent of 14e.
+
+**Scope:** Four FE fixes where the chart/signal UI was built against mock data and doesn't behave on real data. Frontend-only (Vercel deploy). Spec: `screens.md` → Price Chart / Signal Section.
+
+### Deliverables
+1. **RSI subchart** — `PriceChart.tsx` hardcodes `rsi: []` on the real-data path (line ~40), so the RSI line never draws while the decorative band `<div>`s still render ("bands but no data"). Compute RSI **client-side** from the fetched candles and render the line; render the bands only when RSI data is present.
+2. **Y-axis scaling** — the main price scale uses default autoscale margins (~20% top), pushing the top far above the day's high (e.g. 4.8 shown for a 4.59 high). Set explicit `rightPriceScale.scaleMargins` (tighter top) so the high sits closer to the top edge.
+3. **Entry / position-price line** — already wired to `positionStats.avgCost` but too faint, and the "Entry" arrow marker lands at the chart's left edge when no real entry date is in-window. Make the horizontal avg-cost line prominent + labeled ("Avg $XX.XX"); render the entry-date marker only when the purchase date falls in the visible window.
+4. **Collapsed Signal section shows pills** — extend `CollapsibleSection` with an optional header accessory; in the Signal section render the `SignalPill` row there so the actionable signals stay visible when collapsed (parity with TickerCard).
+
+### Files
+- `client/src/components/TickerDetail/PriceChart.tsx`, `client/src/components/common/CollapsibleSection.tsx`, `client/src/components/TickerDetail/TickerDetail.tsx`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/styles/components.css`. RSI: reuse `technicalindicators` or a small local RSI util.
+
+### Does NOT touch
+- Backend, marketdata snapshot (that's 14e), signal engine.
+
+### Verification
+- Toggle RSI on a real ticker → line renders inside the banded pane; bands gone when RSI unavailable.
+- Chart top sits just above the day's high, not ~5% over.
+- Avg-cost line is clearly visible + labeled; no stray "Entry" marker at the chart edge.
+- Collapse the Signal section → the SELL/BUY pills remain visible in the header.
+
+---
+
 ## Batch 14.5: Schema cleanup — remove `position_history`
 
 **Depends on:** Batch 13.
@@ -651,7 +702,7 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
    - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
    - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
    - **Theme** (Dark / Light / System, persists).
-   - **LLM provider** dropdown (Gemini / Claude / OpenAI, persists; takes effect on next analyze).
+   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a** (Settings "Analysis engine" section): lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced, takes effect on next analyze. Batch 15 just folds it into the final Settings layout — no rebuild.
    - **Sign out** button.
 
 6. **`PUT /api/user/preferences`** — BE endpoint validates + upserts the user_preferences row. FE writes through this rather than directly to Supabase to keep validation centralized.

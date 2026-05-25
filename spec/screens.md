@@ -159,6 +159,7 @@ Opens as a full-screen slide-in from the right when tapping a TickerCard. Route:
 - Label: "Today's range" (left) + "Open $139.20" (right, muted).
 - Visual range bar: horizontal track with colored dot showing current price position.
 - Low (red, left) / High (green, right). Dot position: `(currentPrice - dayLow) / (dayHigh - dayLow) * 100%`.
+- **Data source:** `GET /api/marketdata/snapshot/:symbol` (`dayLow`/`dayHigh`/open) — IB snapshot, Finnhub fallback. Until that endpoint lands these read 0 and the bar is inert (see queue Batch 14e).
 
 ### Market Stats (above chart, below today's range)
 Dense, customizable stats panel:
@@ -172,6 +173,7 @@ Dense, customizable stats panel:
   - Each stat: drag handle (ti-grip-vertical) for reordering + toggle switch for visibility.
   - Pool: Volume, Forward P/E, Prior close, Beta, 52-week range, Open, EPS, Market cap, Dividend amount, Dividend date, Put/call interest, Put/call volume, Tweet volume, Avg volume (30d).
   - Selection/order persisted to `user_preferences.stat_config` — applies to ALL ticker screens.
+- **Data source:** `GET /api/marketdata/snapshot/:symbol` — the stat pool + 52-week range come from IB fundamentals (Finnhub fallback). Empty until that endpoint lands (queue Batch 14e).
 
 ### Chart Controls (between stats and chart)
 - Left: Line / Candle toggle.
@@ -182,10 +184,10 @@ Dense, customizable stats panel:
 - Library: Lightweight Charts by TradingView (free, open source).
 - Candlestick and line modes, toggled by Chart Controls.
 - Entry price: horizontal dashed amber line at user's avg cost basis, labeled "Avg $XX.XX".
-- Entry date: vertical dashed amber marker at purchase date, labeled "Entry [date]".
-- VWAP overlay: purple line, toggleable.
+- Entry date: vertical dashed amber marker at purchase date, labeled "Entry [date]" — rendered only when the purchase date falls within the visible timeframe window (otherwise the horizontal avg-cost line alone marks the position).
+- VWAP overlay: purple line, toggleable. Intraday only (VWAP resets each session).
 - Volume bars at bottom of main chart area, subtle gray, toggleable.
-- RSI subchart: separate pane below main chart, toggleable. Overbought (>70) shaded faintly red. Oversold (<30) shaded faintly green.
+- RSI subchart: separate pane below main chart, toggleable, **computed client-side from the chart's fetched bars** (not the signal engine's snapshot). Overbought (>70) shaded faintly red. Oversold (<30) shaded faintly green. Bands render only when RSI data is present.
 - Touch-friendly: pinch-zoom, drag-pan.
 - Dark mode compatible.
 
@@ -197,6 +199,7 @@ Dense, customizable stats panel:
 **Signal Section** (only if active signal(s) exist):
 - Icon: ti-alert-triangle (colored by signal type).
 - Header: signal type(s) + Quality (e.g. "Sell · 82%" or "Sell · 82% + Buy · 71%").
+- **Collapsed state shows the signal pill row** (same `SignalPill`s as the TickerCard), so the actionable signals stay visible without expanding.
 - Body — Style A breakdown:
   - Shared **Indicator analysis** + **Overall reasoning** header (from `analyses.reasoning`).
   - Then per-direction blocks (one each for SELL and BUY if both signals exist on the latest non-superseded analysis):
