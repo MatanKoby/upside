@@ -15,9 +15,17 @@ import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGatew
 import { companyNews, earningsCalendar, insiderTransactions } from './finnhub.js';
 import { rsi, macd, bollinger, vwap } from './technicals.js';
 import { incrLlmCallsToday } from './redis.js';
-import { llm, type LlmAnalysisInput, type LlmAnalysisOutput } from './llm.js';
+import { llm, LlmError, type LlmAnalysisInput, type LlmAnalysisOutput } from './llm.js';
 
 const DEFAULT_EXPIRY_DAYS = 7;
+
+// User-facing `no_signal` reasons for LLM failures that re-prompting can't fix
+// (the raw error detail still goes to #errors via notifyError).
+const NON_MALFORMED_REASON: Record<'rate_limited' | 'unavailable' | 'config', string> = {
+  rate_limited: 'LLM rate-limited (quota/billing) — try again shortly',
+  unavailable: 'LLM provider unavailable — try again',
+  config: 'LLM not configured — check API key / model',
+};
 
 interface RunOpts {
   userId: string;
@@ -197,12 +205,24 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     try {
       output = await provider.analyze(input);
     } catch (first) {
+      // Only a malformed body is worth re-prompting. A rate-limit / outage /
+      // bad-key won't be fixed by asking again, so fail soft immediately with
+      // an honest reason instead of mislabeling it "malformed".
+      const kind = first instanceof LlmError ? first.kind : 'malformed';
+      if (kind !== 'malformed') {
+        void notifyError('signalEngine.llm', `LLM ${kind} for ${sym}: ${(first as Error).message}`, first);
+        await persistNoSignal(userId, sym, conid, NON_MALFORMED_REASON[kind], indicatorSnapshot);
+        return;
+      }
       try {
         output = await provider.analyze(input, { strict: true });
       } catch (second) {
+        // Malformed even after the stricter retry — surface the raw body (carried
+        // on the error) to #errors; it's a real failure for our use case.
         void notifyError(
           'signalEngine.llm',
           `LLM malformed for ${sym} after retry: ${(second as Error).message}`,
+          second,
         );
         await persistNoSignal(userId, sym, conid, 'LLM response malformed', indicatorSnapshot);
         return;

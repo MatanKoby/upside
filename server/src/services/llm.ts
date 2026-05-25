@@ -77,6 +77,51 @@ export interface LlmProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Typed failures. `signalEngine` only re-prompts on `malformed`; a quota/outage
+// won't be fixed by re-asking, so those skip the stricter retry and fail soft
+// with an honest reason instead of being mislabeled "malformed".
+// ---------------------------------------------------------------------------
+export type LlmErrorKind = 'rate_limited' | 'unavailable' | 'malformed' | 'config';
+
+export class LlmError extends Error {
+  constructor(
+    public readonly kind: LlmErrorKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'LlmError';
+  }
+}
+
+function classifyStatus(status: number): LlmErrorKind {
+  if (status === 429) return 'rate_limited'; // quota / rate cap — transient
+  if (status === 401 || status === 403) return 'config'; // bad/missing key
+  return 'unavailable'; // 5xx, timeouts, status 0 (network), other non-2xx
+}
+
+// Shared body handling for every provider: strip fences, JSON.parse, Zod —
+// any failure here is genuinely `malformed` (a 2xx with the wrong shape).
+function parseAndValidate(text: unknown): LlmAnalysisOutput {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new LlmError('malformed', 'provider returned no text');
+  }
+  // Include the raw response so the #errors channel shows *what* was malformed,
+  // not just that validation failed — the only way to debug a bad LLM body.
+  const raw = `raw: ${text.trim().slice(0, 400)}`;
+  let json: unknown;
+  try {
+    json = JSON.parse(stripFences(text));
+  } catch {
+    throw new LlmError('malformed', `response was not valid JSON | ${raw}`);
+  }
+  try {
+    return normalize(llmAnalysisSchema.parse(json));
+  } catch (e) {
+    throw new LlmError('malformed', `schema validation failed: ${(e as Error).message} | ${raw}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Prompt — provider-agnostic. `strict` is used for the single retry after a
 // malformed first response.
 // ---------------------------------------------------------------------------
@@ -154,7 +199,7 @@ class GeminiProvider implements LlmProvider {
   private model = 'gemini-2.0-flash';
 
   async analyze(input: LlmAnalysisInput, opts?: { strict?: boolean }): Promise<LlmAnalysisOutput> {
-    if (!env.geminiApiKey) throw new Error('GEMINI_API_KEY not set — cannot run Gemini analysis');
+    if (!env.geminiApiKey) throw new LlmError('config', 'GEMINI_API_KEY not set — cannot run Gemini analysis');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
     const res = await axios.post(
       url,
@@ -166,24 +211,93 @@ class GeminiProvider implements LlmProvider {
     );
     notifyApiFailure('llm.gemini', res.status, { params: { model: this.model }, body: res.data });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`Gemini ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`);
+      throw new LlmError(classifyStatus(res.status), `Gemini ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`);
     }
-    const text: unknown = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (typeof text !== 'string' || !text.trim()) throw new Error('Gemini returned no text');
-    const json = JSON.parse(stripFences(text)); // throws on non-JSON → caught by engine
-    return normalize(llmAnalysisSchema.parse(json));
+    return parseAndValidate(res.data?.candidates?.[0]?.content?.parts?.[0]?.text);
   }
 }
 
 class ClaudeProvider implements LlmProvider {
   async analyze(): Promise<LlmAnalysisOutput> {
-    throw new Error('ClaudeProvider not implemented — set LLM_PROVIDER=gemini or implement using ANTHROPIC_API_KEY');
+    throw new LlmError(
+      'config',
+      'ClaudeProvider not implemented — set LLM_PROVIDER=gemini|groq|mistral|openrouter or implement using ANTHROPIC_API_KEY',
+    );
   }
 }
 
-class OpenAiProvider implements LlmProvider {
-  async analyze(): Promise<LlmAnalysisOutput> {
-    throw new Error('OpenAiProvider not implemented — set LLM_PROVIDER=gemini or implement using OPENAI_API_KEY');
+// ---------------------------------------------------------------------------
+// One provider for every OpenAI chat-completions endpoint. Presets carry the
+// base URL + a sensible default model and free-tier-friendly choice per host;
+// LLM_BASE_URL / LLM_MODEL override either. Swap hosts by changing env only.
+// ---------------------------------------------------------------------------
+interface OpenAiCompatPreset {
+  baseUrl: string;
+  defaultModel: string;
+  apiKey: string;
+}
+
+function openAiCompatPreset(): { provider: string } & OpenAiCompatPreset {
+  const presets: Record<string, OpenAiCompatPreset> = {
+    groq: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      defaultModel: 'llama-3.3-70b-versatile',
+      apiKey: env.groqApiKey,
+    },
+    mistral: {
+      baseUrl: 'https://api.mistral.ai/v1',
+      defaultModel: 'mistral-small-latest',
+      apiKey: env.mistralApiKey,
+    },
+    openrouter: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      defaultModel: 'meta-llama/llama-3.3-70b-instruct:free',
+      apiKey: env.openrouterApiKey,
+    },
+    openai: {
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o-mini',
+      apiKey: env.openaiApiKey,
+    },
+  };
+  const p = presets[env.llmProvider];
+  if (!p) throw new LlmError('config', `no OpenAI-compatible preset for LLM_PROVIDER=${env.llmProvider}`);
+  return {
+    provider: env.llmProvider,
+    baseUrl: env.llmBaseUrl || p.baseUrl,
+    defaultModel: env.llmModel || p.defaultModel,
+    apiKey: p.apiKey,
+  };
+}
+
+class OpenAiCompatibleProvider implements LlmProvider {
+  async analyze(input: LlmAnalysisInput, opts?: { strict?: boolean }): Promise<LlmAnalysisOutput> {
+    const { provider, baseUrl, defaultModel, apiKey } = openAiCompatPreset();
+    if (!apiKey) {
+      throw new LlmError('config', `${provider.toUpperCase()}_API_KEY not set — cannot run ${provider} analysis`);
+    }
+    const res = await axios.post(
+      `${baseUrl}/chat/completions`,
+      {
+        model: defaultModel,
+        messages: [{ role: 'user', content: buildPrompt(input, opts?.strict ?? false) }],
+        response_format: { type: 'json_object' },
+        temperature: 0.4,
+      },
+      {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 30_000,
+        validateStatus: () => true,
+      },
+    );
+    notifyApiFailure(`llm.${provider}`, res.status, { params: { model: defaultModel }, body: res.data });
+    if (res.status < 200 || res.status >= 300) {
+      throw new LlmError(
+        classifyStatus(res.status),
+        `${provider} ${res.status}: ${JSON.stringify(res.data).slice(0, 300)}`,
+      );
+    }
+    return parseAndValidate(res.data?.choices?.[0]?.message?.content);
   }
 }
 
@@ -193,8 +307,11 @@ export function llm(): LlmProvider {
       return new GeminiProvider();
     case 'claude':
       return new ClaudeProvider();
+    case 'groq':
+    case 'mistral':
+    case 'openrouter':
     case 'openai':
-      return new OpenAiProvider();
+      return new OpenAiCompatibleProvider();
     default:
       throw new Error(`Unknown LLM_PROVIDER: ${env.llmProvider}`);
   }

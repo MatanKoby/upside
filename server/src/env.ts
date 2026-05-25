@@ -28,10 +28,25 @@ export const env = {
 
   googleOauthClientId: optional('GOOGLE_OAUTH_CLIENT_ID'),
 
-  llmProvider: (optional('LLM_PROVIDER', 'gemini') as 'gemini' | 'claude' | 'openai'),
+  // gemini = native REST. groq / mistral / openrouter / openai all speak the
+  // OpenAI chat-completions shape and share one provider (see llm.ts). Pick a
+  // provider, set its key below; optionally override the model with LLM_MODEL
+  // or the endpoint with LLM_BASE_URL (defaults baked in per provider).
+  llmProvider: optional('LLM_PROVIDER', 'gemini') as
+    | 'gemini'
+    | 'claude'
+    | 'openai'
+    | 'groq'
+    | 'mistral'
+    | 'openrouter',
+  llmBaseUrl: optional('LLM_BASE_URL'),
+  llmModel: optional('LLM_MODEL'),
   geminiApiKey: optional('GEMINI_API_KEY'),
   anthropicApiKey: optional('ANTHROPIC_API_KEY'),
   openaiApiKey: optional('OPENAI_API_KEY'),
+  groqApiKey: optional('GROQ_API_KEY'),
+  mistralApiKey: optional('MISTRAL_API_KEY'),
+  openrouterApiKey: optional('OPENROUTER_API_KEY'),
   // Daily cap on unified analyses (each counts as one, regardless of how many
   // signals it emits). Per-day Redis counter resets at midnight UTC.
   maxLlmCallsPerDay: Number(optional('MAX_LLM_CALLS_PER_DAY', '50')),

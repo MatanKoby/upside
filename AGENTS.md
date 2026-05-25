@@ -96,7 +96,8 @@ Entry format:
    - `Finished: YYYY-MM-DD HH:MM`
    - `Commit: <short SHA of the final work commit>`
 3. Commit `meta: complete batch-N` and push.
-4. Decide: claim the next eligible batch (re-run the claim protocol) or stop. Either is fine.
+4. Prompt the user to run `/compact` to reset the context window now that the batch is closed, suggesting which threads are worth preserving (e.g. `/compact keep <topic> data`). You cannot run `/compact` yourself — it's a user-driven command — so this is a reminder, not an action.
+5. Decide: claim the next eligible batch (re-run the claim protocol) or stop. Either is fine.
 
 ## Push race recovery
 
