@@ -8,21 +8,23 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 14a — Signal engine + manual unified analysis end-to-end
-- Owner: claude
-- Started: 2026-05-25
-- Files: migration `008_unified_signals.sql` (new); `server/src/services/{llm,signalEngine(new),technicals,finnhub,redis}.ts`, `server/src/routes/signals.ts`, `server/src/cron/lockCleanup.ts` (renamed from signalRunner.ts); `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/components/primitives/SignalPill.tsx` (new), `client/src/hooks/{useAnalysisLock,useSignals}.ts`
-- **Verify run 2026-05-25:** schema 008 live; full engine pipeline runs end-to-end (lock→IB→technicals→Finnhub→LLM→persist→supersede→FE). Blocker found: Gemini free tier returns 429 on a single analysis, which the engine mislabeled "malformed". No successful LLM round-trip yet → claim stays open until a real SELL/BUY lands.
-- **Follow-on work (commits bcc700f + pending):**
-  - Multi-provider LLM: one OpenAI-compatible provider for groq/mistral/openrouter/openai (presets carry base URL + default model); gemini stays native REST. `LlmError{kind}` classifies non-2xx (429→rate_limited, 401/403→config, else unavailable); only a 2xx-with-bad-shape is `malformed`. Engine re-prompts only on `malformed`; rate-limit/outage/bad-key fail soft with an honest reason. Malformed errors carry a 400-char raw-body snippet to #errors.
-  - **Dynamic provider/model selection** (design decision — pre-builds Batch 15's LLM dropdown): selection stored in `app_config` (`llm_provider`/`llm_model`); keys stay in `.env`. New `appConfig.ts` (generic get/set), `llmConfig.ts` (`getLlmSelection`/`activeLlm`/`setLlmSelection`, app_config→env fallback), `routes/config.ts` (`GET`/`POST /api/config/llm`, validates provider is implemented+keyed). FE `useLlmConfig` hook (Realtime-synced) + Settings "Analysis engine" provider/model picker. `LLM_BASE_URL` env override dropped — base URL coded per provider.
-  - Manual prereq: set `LLM_PROVIDER=groq` + `GROQ_API_KEY` (and/or `MISTRAL_API_KEY`) in VPS `.env`, `git pull && ./bin/upside rebuild api`.
+(none)
 
 ## Known issues (deferred fixes)
 
 (none)
 
 ## Completed
+
+### Batch 14a — Signal engine + manual unified analysis end-to-end (2026-05-25)
+- Owner: claude
+- Started: 2026-05-25 · Finished: 2026-05-25
+- Commits: 185b793 (engine + schema 008) → 0556976 (SignalPills on cards) → d7eb7a8 (008 re-runnable) → bcc700f (multi-provider LLM + honest failure classification) → 046b60b (on-the-fly provider/model selection via app_config + Settings).
+- **What shipped:** tap Analyze → unified SELL+BUY analysis lands + renders. Migration 008 (analyses table + signals reshape: buy/no_signal types, analysis_id, motivation, rationale, whole-analysis supersede). signalEngine orchestrates IB history+snapshot + Finnhub + technicals → one Zod-validated LLM call (one stricter retry on malformed, else no_signal fallback) → persists 1 analyses + 1-2 signals + supersedes prior. Route: 5-min soft-block (429 recent_analysis), daily ceiling (429 daily_limit_reached), 202 async. FE: two-step Analyze, soft-block + daily-limit UIs, shared-reasoning + per-direction SELL/BUY blocks, SignalPill on TickerCards, useSignals/useAnalysisLock Realtime hooks.
+- **Multi-provider LLM:** one OpenAI-compatible provider for groq/mistral/openrouter/openai (presets carry base URL + default model); gemini stays native REST. `LlmError{kind}` classifies non-2xx (429→rate_limited, 401/403→config, else unavailable); only a 2xx-with-bad-shape is `malformed`. Engine re-prompts only on `malformed`; rate-limit/outage/bad-key fail soft with an honest reason. Malformed errors carry a 400-char raw-body snippet to #errors. `LLM_BASE_URL` env override dropped — base URL coded per provider.
+- **Dynamic provider/model selection** (pre-builds Batch 15's LLM dropdown): selection in `app_config` (`llm_provider`/`llm_model`); keys stay in `.env`. `appConfig.ts` (generic get/set), `llmConfig.ts` (app_config→env fallback), `routes/config.ts` (`GET`/`POST /api/config/llm`, validates provider implemented+keyed). FE `useLlmConfig` (Realtime-synced) + Settings "Analysis engine" picker.
+- **Verified live (2026-05-25):** Gemini free tier 429'd on a single analysis (drove the multi-provider work); switched to Groq (`llama-3.3-70b-versatile`). BBAI happy path → SELL+BUY rendered on FE, #errors clean. Soft-block confirmed ("Last analyzed 3 min ago — re-analyze anyway?"). Forced re-run produced different SELL/BUY and whole-analysis supersede confirmed in psql (first analysis's rows `superseded_by_analysis_id` set; latest current). Manual prereq done: `LLM_PROVIDER=groq` + keys in VPS `.env`.
+- **Known follow-ups (TickerDetail, not blockers):** chart RSI subchart hardcoded `rsi:[]` for real data (bands render, no line); chart Y-axis top margin too wide; entry/position-price line too faint + "Entry" marker mislocated; collapsed Signal section doesn't show pills. Market stats / day high-low still await the marketdata-snapshot endpoint (separate batch). Daily-limit + crash-recovery edge paths coded but not individually live-tested.
 
 ### Batch 13.5 — `tradingDaysHeld` + MTD return (2026-05-25)
 - Owner: claude
