@@ -14,7 +14,8 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Known issues (deferred fixes)
 
-(none)
+- **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens.md` → Screen 2 note.
+- **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens.md` → Indicators note.
 
 ## Completed
 
