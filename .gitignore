@@ -79,6 +79,11 @@ logs/
 # Expires ~1h; re-paste when calls start returning 401.
 /.upside-token
 
+# === Discord bot token for reading error channels (bin/upside-errors) ===
+# Single line: the bot token from the Discord Developer Portal (Bot tab →
+# Reset Token). A long-lived credential — never commit. Rotate via Reset Token.
+/.upside-discord-token
+
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.
 captures/

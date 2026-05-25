@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""bin/upside-errors — read recent messages from the Discord error channels.
+
+Companion to bin/upside-ib. Uses the bot token in .upside-discord-token
+(Discord Developer Portal -> Bot -> Reset Token) to read channel history via
+the Discord REST API, so debugging doesn't require copy-pasting from Discord.
+
+The bot must be in the server with View Channels + Read Message History, and
+Message Content Intent must be ON (else content/embeds come back empty).
+
+Usage:
+  bin/upside-errors --list                 List the bot's guild text channels.
+  bin/upside-errors [TARGET] [--limit N] [--json]
+      TARGET  channel id, or a substring of the channel name.
+              Default: every channel whose name contains "error".
+      --limit N   messages per channel (default 20, max 100).
+      --json      dump raw message JSON instead of the rendered view.
+
+Examples:
+  bin/upside-errors --list
+  bin/upside-errors                        # all #...error... channels
+  bin/upside-errors critical --limit 10
+  bin/upside-errors 123456789012345678
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+API = "https://discord.com/api/v10"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOKEN_FILE = os.path.join(ROOT, ".upside-discord-token")
+
+_token = None
+
+
+def token() -> str:
+    global _token
+    if _token:
+        return _token
+    try:
+        t = open(TOKEN_FILE, encoding="utf-8").read().strip()
+    except FileNotFoundError:
+        sys.exit(f"Missing {TOKEN_FILE}")
+    if not t or t.startswith("PASTE_"):
+        sys.exit(f"{TOKEN_FILE} is empty or still the placeholder")
+    _token = t
+    return t
+
+
+def api(path: str):
+    # Discord sits behind Cloudflare, which rejects urllib's default User-Agent
+    # with "error code: 1010". A DiscordBot UA (or any normal UA) clears it.
+    req = urllib.request.Request(
+        API + path,
+        headers={
+            "Authorization": f"Bot {token()}",
+            "User-Agent": "DiscordBot (https://github.com/MatanKoby/upside, 1.0)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:300]
+        sys.exit(f"Discord {e.code} on {path}: {body}")
+    except urllib.error.URLError as e:
+        sys.exit(f"Network error on {path}: {e}")
+
+
+def text_channels(gid: str):
+    return [c for c in api(f"/guilds/{gid}/channels") if c.get("type") in (0, 5)]
+
+
+def list_channels() -> None:
+    for g in api("/users/@me/guilds"):
+        print(f"# {g['name']} ({g['id']})")
+        for c in sorted(text_channels(g["id"]), key=lambda c: c.get("position", 0)):
+            print(f"  {c['id']}  #{c['name']}")
+
+
+def find_channels(target):
+    out = []
+    for g in api("/users/@me/guilds"):
+        for c in text_channels(g["id"]):
+            name = c["name"].lower()
+            if target is None:
+                if "error" in name:
+                    out.append(c)
+            elif target == c["id"] or target.lower() in name:
+                out.append(c)
+    return out
+
+
+def fmt_ts(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return dt.strftime("%m-%d %H:%M:%SZ")
+    except Exception:
+        return iso
+
+
+def render(msg) -> str:
+    ts = fmt_ts(msg.get("timestamp", ""))
+    lines = []
+    if msg.get("content"):
+        lines.append(f"[{ts}] {msg['content']}")
+    for e in msg.get("embeds", []):
+        if e.get("title"):
+            lines.append(f"[{ts}] {e['title']}")
+        if e.get("description"):
+            lines.append("    " + e["description"].replace("\n", "\n    "))
+        for f in e.get("fields", []):
+            lines.append(f"    {f.get('name')}: {f.get('value')}")
+    if not lines:
+        lines.append(f"[{ts}] (empty — is Message Content Intent enabled?)")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if "--list" in args:
+        list_channels()
+        return
+    limit = 20
+    if "--limit" in args:
+        i = args.index("--limit")
+        limit = max(1, min(100, int(args[i + 1])))
+        del args[i : i + 2]
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
+    target = args[0] if args else None
+
+    chans = find_channels(target)
+    if not chans:
+        sys.exit("No matching channels. Run: bin/upside-errors --list")
+    for c in chans:
+        print(f"=== #{c['name']} ({c['id']}) — last {limit} ===")
+        msgs = api(f"/channels/{c['id']}/messages?limit={limit}")
+        if as_json:
+            print(json.dumps(msgs, indent=2))
+            continue
+        for m in reversed(msgs):  # oldest first
+            print(render(m))
+        print()
+
+
+if __name__ == "__main__":
+    main()
