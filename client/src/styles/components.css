@@ -230,12 +230,19 @@
 .position-card-signal {
   width: 100%;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: var(--sp-8);
   padding: var(--sp-8) var(--sp-12);
   border-top: 0.5px solid var(--border);
   text-align: left;
+}
+.position-card-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .signal-pill {
   font-size: var(--fs-10);

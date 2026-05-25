@@ -1,7 +1,9 @@
 import { useNavigate } from 'react-router-dom';
 import { IconChevronRight, IconArrowUp, IconArrowDown } from '@tabler/icons-react';
 import { Sparkline } from '../common/Sparkline';
+import { SignalPill } from '../primitives/SignalPill';
 import { useSparkline } from '../../hooks/useSparkline';
+import type { ActiveSignal } from '../../hooks/useSignals';
 import {
   formatCurrency,
   formatSignedCurrency,
@@ -14,23 +16,16 @@ import {
   getVwapDelta,
   getPositionWeight,
 } from '../../utils/calculations';
-import type { Position, Signal } from '../../types';
-
-function signalPillLabel(s: Signal): string {
-  switch (s.type) {
-    case 'sell': return `Sell · ${s.confidence}%`;
-    case 'buy': return `Add · ${s.confidence}%`;
-    case 'event': return `Earnings · ${s.daysAway ?? 0}d`;
-    case 'watch': return `Watch · ${s.confidence}%`;
-  }
-}
+import type { Position } from '../../types';
 
 export function PositionCard({
   position,
   totalPortfolioValue,
+  signals = [],
 }: {
   position: Position;
   totalPortfolioValue: number;
+  signals?: ActiveSignal[];
 }) {
   const navigate = useNavigate();
   // Prefer real sparkline closes from the BE; fall back to whatever's on the
@@ -52,6 +47,8 @@ export function PositionCard({
   };
 
   const goToDetail = () => navigate(`/ticker/${position.symbol}`);
+
+  const actionable = signals.filter((s) => s.type !== 'no_signal');
 
   return (
     <article className="position-card" style={cardStyle} data-tone={tone}>
@@ -83,12 +80,20 @@ export function PositionCard({
         </div>
         <div className="weight-bar" style={weightBarStyle} aria-hidden="true" />
       </button>
-      {position.signal && (
+      {actionable.length > 0 && (
         <button className="position-card-signal" onClick={goToDetail} type="button">
-          <span className={`signal-pill signal-pill-${position.signal.type}`}>
-            {signalPillLabel(position.signal)}
+          <span className="position-card-pills">
+            {actionable.map((s) => (
+              <SignalPill
+                key={s.id}
+                type={s.type}
+                quality={s.quality}
+                motivation={s.motivation}
+                low={s.priceRangeLow}
+                high={s.priceRangeHigh}
+              />
+            ))}
           </span>
-          <span className="signal-summary">{position.signal.summary}</span>
           <IconChevronRight size={14} stroke={1.5} className="signal-chevron" />
         </button>
       )}

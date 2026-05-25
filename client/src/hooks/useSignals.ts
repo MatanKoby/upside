@@ -43,6 +43,7 @@ function num(v: number | string | null | undefined): number | null {
 
 interface DbSignal {
   id: string;
+  symbol: string;
   analysis_id: string | null;
   signal_type: SignalDirection;
   signal_quality: number | string;
@@ -162,4 +163,62 @@ export function useSignals(symbol: string | undefined): UseSignalsResult {
   }, [symbol]);
 
   return { analysis, signals, previousCount, isLoading };
+}
+
+export interface UseAllSignalsResult {
+  signalsBySymbol: Record<string, ActiveSignal[]>;
+  isLoading: boolean;
+}
+
+// List-level variant: loads every active (non-superseded) signal for the user
+// grouped by symbol, with a single `signals` Realtime subscription. Lets the
+// portfolio list render SignalPills per card without one subscription per card.
+export function useAllSignals(): UseAllSignalsResult {
+  const [signalsBySymbol, setSignalsBySymbol] = useState<Record<string, ActiveSignal[]>>({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session.session?.user.id;
+      if (!userId) {
+        if (alive) {
+          setSignalsBySymbol({});
+          setIsLoading(false);
+        }
+        return;
+      }
+      const { data } = await supabase
+        .from('signals')
+        .select('*')
+        .eq('user_id', userId)
+        .is('superseded_by_analysis_id', null)
+        .order('analyzed_at', { ascending: false });
+      if (!alive) return;
+      const map: Record<string, ActiveSignal[]> = {};
+      for (const r of (data ?? []) as DbSignal[]) {
+        (map[r.symbol] ??= []).push(rowToSignal(r));
+      }
+      setSignalsBySymbol(map);
+      setIsLoading(false);
+    }
+
+    void load();
+
+    const channel = supabase
+      .channel('signals-all')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, () => {
+        void load();
+      })
+      .subscribe();
+
+    return () => {
+      alive = false;
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
+  return { signalsBySymbol, isLoading };
 }

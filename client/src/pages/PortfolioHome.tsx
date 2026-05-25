@@ -5,6 +5,7 @@ import { SummaryStrip } from '../components/PortfolioHome/SummaryStrip';
 import { SortBar } from '../components/PortfolioHome/SortBar';
 import { PositionList } from '../components/PortfolioHome/PositionList';
 import { usePositions } from '../hooks/usePositions';
+import { useAllSignals } from '../hooks/useSignals';
 import { usePortfolioSummary } from '../hooks/usePortfolioSummary';
 import type { MarketSessionState } from '../hooks/useMarketSession';
 import type { SortKey } from '../types';
@@ -13,6 +14,7 @@ export default function PortfolioHome() {
   const [sort, setSort] = useState<SortKey>('signals');
   const session = useOutletContext<MarketSessionState>();
   const { positions, isLoading } = usePositions();
+  const { signalsBySymbol } = useAllSignals();
   const { mtdReturn, mtdReturnPercent } = usePortfolioSummary();
 
   // Portfolio value is computed FE-side from the live `positions` rows so it
@@ -44,6 +46,7 @@ export default function PortfolioHome() {
           positions={positions}
           sort={sort}
           totalPortfolioValue={portfolioValue}
+          signalsBySymbol={signalsBySymbol}
         />
       )}
     </div>
