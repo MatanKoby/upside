@@ -256,7 +256,7 @@ Empty state: "No signals yet. Tap Analyze on any position to generate one."
 - **Suppressed symbols**: text list — symbols where Analyze is disabled.
 - **Profit-Taking Zone Threshold**: slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`. Determines when a position enters profit-taking zone.
 - **Theme**: Dark / Light / System.
-- **LLM Provider**: Dropdown (Gemini / Claude / OpenAI).
+- **Analysis engine**: Provider dropdown listing only providers with a key configured on the server (e.g. Groq / Mistral / Gemini) + an optional model field (blank = provider default). Persists to `app_config` via `POST /api/config/llm`, takes effect on the next Analyze (no restart), and syncs across devices via Realtime. API keys stay server-side. See `signal-model.md` → LLM Provider Abstraction.
 - **Notifications** (Batch 16): PWA push permission status, quiet-hours toggle. Discord-only is acceptable MVP if scope tightens.
 - **Account**: Email, sign out.
 

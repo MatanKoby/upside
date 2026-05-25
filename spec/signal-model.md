@@ -191,10 +191,12 @@ Zone state is recomputed on every `positions` row write by both `ibPricePoller` 
 
 ## LLM Provider Abstraction
 
-- Provider-agnostic interface: `analyzePosition(context: PositionContext) → Signal`.
-- Implementations: `gemini.ts` (default for MVP — free tier), `claude.ts`, `openai.ts` (upgrade paths).
-- Selected via `LLM_PROVIDER` env var (`gemini` | `claude` | `openai`).
-- Switching providers requires backend restart.
+- Provider-agnostic interface: `analyze(context) → unified analysis`. Two implementations in `server/src/services/llm.ts`:
+  - **`GeminiProvider`** — native Google AI Studio REST.
+  - **`OpenAiCompatibleProvider`** — one provider for every OpenAI chat-completions host. Presets (base URL + a free-tier-friendly default model) for **groq**, **mistral**, **openrouter**, **openai** — add a preset to support a new host. Base URL is coded per provider (no `LLM_BASE_URL` override). `ClaudeProvider` is a stub.
+- **Selection is runtime, not env-locked.** The active provider + model live in `app_config` (`llm_provider` / `llm_model`); `.env` (`LLM_PROVIDER`, optional `LLM_MODEL`) is the boot fallback. Switched on the fly via `GET`/`POST /api/config/llm` (`services/llmConfig.ts`) and the Settings "Analysis engine" picker — **no restart**. **API keys stay in `.env`** — never in `app_config`, which the FE can read; only the *choice* is in Supabase. The endpoint only accepts a provider that is implemented and has a key configured.
+- **Dev default: Groq `llama-3.3-70b-versatile`** — Gemini's free tier returned 429 on a single analysis, which drove the multi-provider work. Swap provider/model from Settings without redeploying.
+- **Failure handling** (`LlmError{ kind }`): non-2xx is classified — `429`→`rate_limited`, `401/403`→`config`, else `unavailable`; only a 2xx body that fails JSON/Zod parsing is `malformed`. The engine re-prompts once (stricter) **only** on `malformed`; a rate-limit / outage / bad-key fails soft to a `no_signal` row with an honest reason instead of a misleading "malformed". Malformed responses carry a raw-body snippet to the `#errors` Discord channel for debugging.
 
 ## Data Sources (per analysis)
 

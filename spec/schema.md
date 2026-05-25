@@ -40,7 +40,8 @@ What's stored where, in what shape, with what semantics.
   Index: `signals(user_id, symbol, analyzed_at desc)` for the "latest non-superseded" query.
 
 - **`user_preferences`** — one row per user, keyed by Supabase user ID:
-  - `sort_order`, `theme`, `llm_provider`
+  - `sort_order`, `theme`
+  - (LLM provider/model is **not** here — it's app-level, in `app_config`. Keys are global, so the choice is global.)
   - `signal_threshold` (generation-time minimum; distinct from Alerts feed's display filter)
   - `signal_min_market_value` (default 1000)
   - `suppressed_symbols` (text list)
@@ -55,7 +56,9 @@ What's stored where, in what shape, with what semantics.
 
 - **`external_api_metrics`** — per-API-call instrumentation: `provider` ('ib' | 'finnhub'), endpoint/category, `duration_ms`, `retries`, status. 30-day TTL. Foundation for empirical perf tuning of both IB and Finnhub call patterns.
 
-- **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Currently holds `api_url` (current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription). See `architecture.md` → Public URL Discovery. Designed as a generic home for future runtime flags.
+- **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Generic home for app-level runtime flags. Current keys:
+  - `api_url` — current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription. See `architecture.md` → Public URL Discovery.
+  - `llm_provider` / `llm_model` — active LLM selection (app-level, since API keys are global), written by `POST /api/config/llm`, read by the signal engine per analysis and by the Settings picker via Realtime. Keys themselves stay in `.env` — only the choice is here. See `signal-model.md` → LLM Provider Abstraction.
 
 ### Realtime publications
 
