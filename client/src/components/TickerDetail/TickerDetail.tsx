@@ -66,11 +66,9 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
         <TimeframeBar active={timeframe} onChange={setTimeframe} />
       </section>
 
-      {detail.signal && (
-        <CollapsibleSection title="Signal">
-          <SignalSection signal={detail.signal} />
-        </CollapsibleSection>
-      )}
+      <CollapsibleSection title="Signal">
+        <SignalSection symbol={detail.symbol} />
+      </CollapsibleSection>
 
       {detail.positionStats && (
         <CollapsibleSection title="Position stats">

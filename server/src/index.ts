@@ -7,7 +7,7 @@ import marketdataRoutes from './routes/marketdata.js';
 import signalRoutes from './routes/signals.js';
 import healthRoutes from './routes/health.js';
 import debugRoutes from './routes/debug.js';
-import { startSignalRunner } from './cron/signalRunner.js';
+import { startLockCleanup } from './cron/lockCleanup.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startIbPricePoller } from './cron/ibPricePoller.js';
 import { startFinnhubPricePoller } from './cron/finnhubPricePoller.js';
@@ -45,7 +45,7 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(env.port, () => {
   console.log(`[upside] listening on :${env.port} (${env.nodeEnv})`);
-  startSignalRunner();
+  startLockCleanup();
   startKeepalive();
   startIbPricePoller();
   startFinnhubPricePoller();

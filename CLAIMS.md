@@ -8,7 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-(none)
+### Batch 14a — Signal engine + manual unified analysis end-to-end
+- Owner: claude
+- Started: 2026-05-25
+- Files: migration `008_unified_signals.sql` (new); `server/src/services/{llm,signalEngine(new),technicals,finnhub,redis}.ts`, `server/src/routes/signals.ts`, `server/src/cron/lockCleanup.ts` (renamed from signalRunner.ts); `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/components/primitives/SignalPill.tsx` (new), `client/src/hooks/{useAnalysisLock,useSignals}.ts`
 
 ## Known issues (deferred fixes)
 

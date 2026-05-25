@@ -20,7 +20,8 @@
     "express": "^4.21.1",
     "jose": "^5.9.6",
     "redis": "^4.7.0",
-    "technicalindicators": "^3.1.0"
+    "technicalindicators": "^3.1.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

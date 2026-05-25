@@ -32,6 +32,9 @@ export const env = {
   geminiApiKey: optional('GEMINI_API_KEY'),
   anthropicApiKey: optional('ANTHROPIC_API_KEY'),
   openaiApiKey: optional('OPENAI_API_KEY'),
+  // Daily cap on unified analyses (each counts as one, regardless of how many
+  // signals it emits). Per-day Redis counter resets at midnight UTC.
+  maxLlmCallsPerDay: Number(optional('MAX_LLM_CALLS_PER_DAY', '50')),
 
   finnhubApiKey: optional('FINNHUB_API_KEY'),
   // Global token-bucket cap for Finnhub calls. Finnhub free tier is 60/min;

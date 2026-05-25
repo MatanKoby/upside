@@ -588,6 +588,65 @@
   gap: 4px;
 }
 
+/* --- Signal engine (Batch 14a) --- */
+.signal-pill-no_signal { background: var(--bg-elevated); color: var(--text-tertiary); }
+
+.td-signal-meta {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+.td-signal-empty,
+.td-signal-warn {
+  margin: var(--sp-10) 0 0;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+.td-signal-warn { color: var(--pill-sell-text); }
+
+.td-signal-directions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  margin-top: var(--sp-10);
+}
+.td-signal-direction {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.td-signal-rationale {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+
+.td-signal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-top: var(--sp-12);
+}
+
+.btn {
+  padding: var(--sp-8) var(--sp-12);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--pill-buy-bg);
+  color: var(--pill-buy-text);
+  border-color: transparent;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .td-stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
