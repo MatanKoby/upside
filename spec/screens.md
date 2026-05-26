@@ -165,17 +165,22 @@ Opens as a full-screen slide-in from the right when tapping a TickerCard. Route:
 
 ### Market Stats (above chart, below today's range)
 Dense, customizable stats panel:
-- Two rows of four stats each, very compact.
+- 4-per-row grid (wraps to as many rows as there are enabled stats — no fixed
+  height/cap, so nothing truncates).
 - Each stat: tiny label (10px, muted) + value (11px, weight 500).
 - Row 1 default: Vol | P/E | Prev close | Beta
-- Row 2 default: Open | EPS | MktCap | AvgVol
-- 52-week range bar below stat rows (smaller version of today's range bar).
+- Row 2 default: Open | EPS | 52w range | MktCap
+- Row 3 default: AvgVol | Dividend
+- 52-week range is a **text cell** (`$3.01–$9.39`) in the grid — the separate
+  52-week range bar was removed (redundant with the compact text, and it cost
+  vertical space). The standalone Today's Range bar above stays.
 - "Edit" link (top-right) opens inline customization panel:
   - "Visible" and "Hidden" groups.
   - Each stat: drag handle (ti-grip-vertical) for reordering + toggle switch for visibility.
   - Pool: Volume, Forward P/E, Prior close, Beta, 52-week range, Open, EPS, Market cap, Dividend amount, Dividend date, Put/call interest, Put/call volume, Tweet volume, Avg volume (30d).
   - Selection/order persisted to `user_preferences.stat_config` — applies to ALL ticker screens.
 - **Data source:** `GET /api/marketdata/snapshot/:symbol` — the stat pool + 52-week range come from **Finnhub** `/stock/metric` (basic financials), not IB. IB Client Portal's snapshot fundamental fields are subscription-gated/unreliable, and under the on-demand IBeam model IB is usually OFF — so IB-sourced fundamentals would be blank most of the time. Finnhub is IB-independent and free-tier. (Intraday range fields above stay IB-primary.) Volume is IB-only (Finnhub free `/quote` omits it → "—" when IB is off); put/call + tweet volume have no source yet → "—". Wired in Batch 14e.
+- **Volume sanity cap (Batch 14e):** IB's snapshot volume field (87) sometimes returns garbage — observed `"65595.7B"` (≈6.6e13) for a stock whose real volume was ~65M, i.e. a wrong magnitude suffix. The BE rejects any volume above `VOLUME_SANITY_CAP` (2e10) to `null` rather than rendering an absurd "65.60T". With IB off and no Finnhub fallback for volume, the cell shows "—". (If a real >20B-share volume ever needs to display, raise the cap.)
 
 ### Chart Controls (between stats and chart)
 - Left: Line / Candle toggle.
@@ -188,7 +193,7 @@ Dense, customizable stats panel:
 - Entry price: horizontal dashed amber line at user's avg cost basis, labeled "Avg $XX.XX".
 - Entry date: vertical dashed amber marker at purchase date, labeled "Entry [date]" — rendered only when the purchase date falls within the visible timeframe window (otherwise the horizontal avg-cost line alone marks the position).
 - VWAP overlay: purple line, toggleable. Intraday only (VWAP resets each session).
-- Volume bars at bottom of main chart area, subtle gray, toggleable.
+- Volume bars at bottom of main chart area, subtle gray, toggleable. No last-value price tag on the histogram — the per-bar figure (e.g. "5.59K" for one candle's volume) read as a misleading daily-total, so the axis label + price line are suppressed (`lastValueVisible`/`priceLineVisible` off); the bars themselves stay.
 - RSI subchart: separate pane below main chart, toggleable, **computed client-side from the chart's fetched bars** (not the signal engine's snapshot). Overbought (>70) shaded faintly red. Oversold (<30) shaded faintly green. Bands render only when RSI data is present.
 - Touch-friendly: pinch-zoom, drag-pan.
 - Dark mode compatible.
