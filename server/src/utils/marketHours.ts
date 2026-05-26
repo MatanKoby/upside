@@ -91,6 +91,13 @@ export function isMarketActive(period: MarketPeriod): boolean {
   return period !== 'closed';
 }
 
+/** The ET calendar date (YYYY-MM-DD) for `now`. Used by zoneGapCleanup to
+ *  clear the per-trading-day "via gap" badge exactly once per ET day. */
+export function etDateString(now: Date = new Date()): string {
+  const t = partsInTimezone(now);
+  return isoDate(t.year, t.month, t.day);
+}
+
 /**
  * US trading days from `entry` through `now`, both ET-calendar-day inclusive.
  * Returns 1 on the entry day itself (so the %/day metric never divides by 0),

@@ -27,7 +27,8 @@
 import { supabase } from '../services/supabase.js';
 import { getQuote } from '../services/finnhub.js';
 import { resolveOwnerUserId } from '../services/owner.js';
-import { notifyError } from '../services/notify.js';
+import { notifyError, notifyZoneEntry } from '../services/notify.js';
+import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const FRESHNESS_THRESHOLD_MS = 90_000;
@@ -41,6 +42,11 @@ interface PositionRow {
   shares: number | string | null;
   avg_cost: number | string | null;
   last_price_update_at: string | null;
+  // Profit-taking zone state (Batch 14c) — carried so we can recompute on write.
+  zone_entered_at: string | null;
+  zone_exited_at: string | null;
+  last_zone_notification_at: string | null;
+  entered_zone_via_gap: boolean | null;
 }
 
 function num(v: number | string | null | undefined): number {
@@ -54,9 +60,11 @@ async function tick(): Promise<void> {
     const userId = await resolveOwnerUserId();
     if (!userId) return;
 
+    const threshold = await getProfitZoneThreshold(userId);
+
     const { data: rows, error } = await supabase()
       .from('positions')
-      .select('symbol, shares, avg_cost, last_price_update_at, market_value')
+      .select('symbol, shares, avg_cost, last_price_update_at, market_value, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
       .eq('user_id', userId);
     if (error) {
       void notifyError('finnhubPricePoller.read', error.message);
@@ -94,6 +102,18 @@ async function tick(): Promise<void> {
         const unrealizedPnl = marketValue - costBasis;
         const unrealizedPnlPct = costBasis !== 0 ? (unrealizedPnl / costBasis) * 100 : null;
 
+        // Recompute profit-taking-zone state from the new P&L (Batch 14c).
+        const zone = computeZoneState(
+          {
+            zone_entered_at: p.zone_entered_at,
+            zone_exited_at: p.zone_exited_at,
+            last_zone_notification_at: p.last_zone_notification_at,
+            entered_zone_via_gap: Boolean(p.entered_zone_via_gap),
+          },
+          unrealizedPnlPct,
+          threshold,
+        );
+
         const { error: upErr } = await supabase()
           .from('positions')
           .update({
@@ -106,12 +126,21 @@ async function tick(): Promise<void> {
             price_source: 'finnhub',
             last_price_update_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            ...zone.fields,
           })
           .eq('user_id', userId)
           .eq('symbol', p.symbol);
         if (upErr) {
           void notifyError(`finnhubPricePoller.update.${p.symbol}`, upErr.message);
           continue;
+        }
+        if (zone.notify && unrealizedPnlPct != null) {
+          void notifyZoneEntry({
+            symbol: p.symbol,
+            pnlPct: unrealizedPnlPct,
+            thresholdPct: threshold,
+            viaGap: zone.fields.entered_zone_via_gap,
+          });
         }
         anyUpdated = true;
       } catch (e: unknown) {

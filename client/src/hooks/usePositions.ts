@@ -18,6 +18,8 @@ interface DbPosition {
   vwap_value: number | string | null;
   industry: string | null;
   category: string | null;
+  zone_entered_at: string | null;
+  entered_zone_via_gap: boolean | null;
 }
 
 function n(v: number | string | null | undefined): number {
@@ -41,6 +43,8 @@ function rowToPosition(r: DbPosition): Position {
     vwap: n(r.vwap_value),
     sparkline: [],            // populated by PositionCard via /sparkline endpoint
     signal: undefined,        // signals merged in by PortfolioHome via useSignals (Batch 14)
+    zoneEnteredAt: r.zone_entered_at ?? null,
+    enteredZoneViaGap: Boolean(r.entered_zone_via_gap),
   };
 }
 

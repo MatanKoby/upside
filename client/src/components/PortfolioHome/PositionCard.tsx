@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
-import { IconChevronRight, IconArrowUp, IconArrowDown } from '@tabler/icons-react';
+import { IconChevronRight, IconArrowUp, IconArrowDown, IconArrowBarToUp } from '@tabler/icons-react';
 import { Sparkline } from '../common/Sparkline';
+import { Tooltip } from '../common/Tooltip';
 import { SignalPill } from '../primitives/SignalPill';
 import { useSparkline } from '../../hooks/useSparkline';
 import type { ActiveSignal } from '../../hooks/useSignals';
@@ -49,6 +50,7 @@ export function PositionCard({
   const goToDetail = () => navigate(`/ticker/${position.symbol}`);
 
   const actionable = signals.filter((s) => s.type !== 'no_signal');
+  const inZone = position.zoneEnteredAt != null;
 
   return (
     <article className="position-card" style={cardStyle} data-tone={tone}>
@@ -60,6 +62,18 @@ export function PositionCard({
           </div>
           <div className="position-card-center">
             <div className={`pnl pnl-${tone}`}>
+              {inZone && (
+                <Tooltip label="Profit-taking zone — unrealized P&L crossed your profit-taking threshold. Consider analyzing.">
+                  <span className="zone-icon" aria-label="In profit-taking zone">
+                    <IconArrowBarToUp size={13} stroke={2} />
+                  </span>
+                </Tooltip>
+              )}
+              {inZone && position.enteredZoneViaGap && (
+                <Tooltip label="Entered the zone outside regular hours (gap) — gap moves often fade at the open.">
+                  <span className="gap-badge">GAP</span>
+                </Tooltip>
+              )}
               {formatPnL(position.unrealizedPnL, position.unrealizedPnLPercent)}
             </div>
             <Sparkline data={sparklineData} />

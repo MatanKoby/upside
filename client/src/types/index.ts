@@ -21,6 +21,10 @@ export type Position = {
   vwap: number;
   sparkline: number[];
   signal?: Signal;
+  // Profit-taking zone (Batch 14c). `zoneEnteredAt` non-null ⇒ currently in
+  // zone; `enteredZoneViaGap` flags an entry outside regular hours (GAP badge).
+  zoneEnteredAt?: string | null;
+  enteredZoneViaGap?: boolean;
 };
 
 export type MarketPeriod = 'pre-market' | 'regular' | 'after-hours' | 'closed';

@@ -185,10 +185,58 @@
   font-family: var(--font-mono);
   font-size: var(--fs-13);
   font-weight: var(--fw-medium);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .pnl-gain { color: rgb(var(--gain-rgb)); }
 .pnl-loss { color: rgb(var(--loss-rgb)); }
 .pnl-neutral { color: var(--text-tertiary); }
+
+/* Profit-taking zone affordances on the card (Batch 14c). */
+.zone-icon {
+  display: inline-flex;
+  align-items: center;
+  color: rgb(var(--gain-rgb));
+}
+.gap-badge {
+  font-family: var(--font-sans);
+  font-size: 8px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.06em;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  color: var(--bg);
+  background: rgb(var(--gain-rgb) / 0.85);
+}
+
+/* Generic hover/tap tooltip (common/Tooltip.tsx). */
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  cursor: default;
+}
+.tooltip-bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: 220px;
+  padding: var(--sp-8);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+  font-family: var(--font-sans);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-regular);
+  line-height: 1.35;
+  color: var(--text-secondary);
+  white-space: normal;
+  text-align: left;
+}
 
 .position-card-right {
   text-align: right;

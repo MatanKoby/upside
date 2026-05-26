@@ -178,6 +178,36 @@ export interface ApiFailureContext {
   body?: unknown;                               // the response body that came back
 }
 
+/**
+ * Profit-taking-zone entry alert (Batch 14c). Posts to the dedicated
+ * DISCORD_WEBHOOK_ZONES channel. Unlike the error path, this has NO in-memory
+ * cooldown — the 4h re-entry cooldown is owned by the caller (anchored on
+ * `positions.last_zone_notification_at` so it survives restarts). No-ops when
+ * the zones webhook isn't configured.
+ */
+export function notifyZoneEntry(args: {
+  symbol: string;
+  pnlPct: number;
+  thresholdPct: number;
+  viaGap: boolean;
+}): Promise<void> {
+  const { symbol, pnlPct, thresholdPct, viaGap } = args;
+  const gapSuffix = viaGap ? ' · entered outside regular hours (gap — often fades at open)' : '';
+  const line = `🔔 ${symbol} entered profit-taking zone — P&L +${pnlPct.toFixed(2)}% (threshold +${thresholdPct}%)${gapSuffix}`;
+  console.log(`[zone] ${line}`);
+  const url = env.discordZonesWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🔔 ${symbol} · profit-taking zone`,
+      description: line,
+      color: 0x43A047,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyApiFailure(key: string, status: number, ctx: ApiFailureContext = {}): void {
   if (status < 400 || status === 401 || status === 403 || status === 429) return;
   const fields: EmbedField[] = [{ name: 'Status', value: String(status), inline: true }];

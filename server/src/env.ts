@@ -72,4 +72,7 @@ export const env = {
   // See server/src/services/notify.ts.
   discordWebhookUrl: optional('DISCORD_ERRORS_WEBHOOK_URL'),
   discordCriticalWebhookUrl: optional('DISCORD_ERRORS_CRITICAL_WEBHOOK_URL'),
+  // User-facing profit-taking-zone alerts (Batch 14c) — separate channel so it
+  // can be tuned independently of the error channels. No-ops when unset.
+  discordZonesWebhookUrl: optional('DISCORD_WEBHOOK_ZONES'),
 };

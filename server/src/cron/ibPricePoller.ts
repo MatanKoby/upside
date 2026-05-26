@@ -31,9 +31,10 @@ import {
   ibBarToOhlc,
 } from '../services/ibMappers.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
-import { notifyError, notifyCritical } from '../services/notify.js';
+import { notifyError, notifyCritical, notifyZoneEntry } from '../services/notify.js';
 import { marketPeriodAt, tradingDaysHeld } from '../utils/marketHours.js';
 import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
+import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 
 // Polling cadences, in ms. We always poll at least once when IB is connected;
@@ -159,6 +160,13 @@ interface AssembledPosition {
   price_source: 'ib';
   last_price_update_at: string;
   updated_at: string;
+  // Batch 14c: profit-taking zone state. Defaulted in assemblePosition, then
+  // overwritten with the computed transition in pollCycle (which has the prior
+  // row + threshold).
+  zone_entered_at: string | null;
+  zone_exited_at: string | null;
+  last_zone_notification_at: string | null;
+  entered_zone_via_gap: boolean;
 }
 
 interface EntryInfo {
@@ -286,6 +294,12 @@ async function assemblePosition(
     price_source: 'ib',
     last_price_update_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    // Zone fields are placeholders here — pollCycle recomputes the real
+    // transition from the prior row + the user's threshold.
+    zone_entered_at: null,
+    zone_exited_at: null,
+    last_zone_notification_at: null,
+    entered_zone_via_gap: false,
   };
 }
 
@@ -308,15 +322,18 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     return;
   }
 
-  // Pull existing rows once — used both for entry-date preservation and the
-  // change-detection skip below.
+  // Pull existing rows once — used for entry-date preservation, the
+  // change-detection skip below, and prior profit-taking-zone state.
   const { data: existing } = await supabase()
     .from('positions')
-    .select('symbol, current_price, market_value, unrealized_pnl, vwap_value, shares, avg_cost, first_seen_at, first_seen_source')
+    .select('symbol, current_price, market_value, unrealized_pnl, vwap_value, shares, avg_cost, first_seen_at, first_seen_source, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
     .eq('user_id', userId);
 
   const existingMap = new Map<string, Record<string, unknown>>();
   for (const r of existing ?? []) existingMap.set(r.symbol, r);
+
+  const threshold = await getProfitZoneThreshold(userId);
+  const zoneNotifications: { symbol: string; pnlPct: number; viaGap: boolean }[] = [];
 
   const conids = positions.map((p) => p.conid);
   const snapshots = await ibSnapshot(conids);
@@ -335,7 +352,26 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
       (existingRow?.first_seen_at as string | null) ?? null,
       (existingRow?.first_seen_source as string | null) ?? null,
     );
-    assembled.push(await assemblePosition(raw, snap, contract, userId, entryInfo));
+    const a = await assemblePosition(raw, snap, contract, userId, entryInfo);
+    // Recompute profit-taking-zone state from the prior row + new P&L (14c).
+    const zone = computeZoneState(
+      {
+        zone_entered_at: (existingRow?.zone_entered_at as string | null) ?? null,
+        zone_exited_at: (existingRow?.zone_exited_at as string | null) ?? null,
+        last_zone_notification_at: (existingRow?.last_zone_notification_at as string | null) ?? null,
+        entered_zone_via_gap: Boolean(existingRow?.entered_zone_via_gap),
+      },
+      a.unrealized_pnl_pct,
+      threshold,
+    );
+    a.zone_entered_at = zone.fields.zone_entered_at;
+    a.zone_exited_at = zone.fields.zone_exited_at;
+    a.last_zone_notification_at = zone.fields.last_zone_notification_at;
+    a.entered_zone_via_gap = zone.fields.entered_zone_via_gap;
+    if (zone.notify && a.unrealized_pnl_pct != null) {
+      zoneNotifications.push({ symbol: a.symbol, pnlPct: a.unrealized_pnl_pct, viaGap: a.entered_zone_via_gap });
+    }
+    assembled.push(a);
   }
   finalizePortfolioMetrics(assembled);
 
@@ -371,9 +407,20 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
       || Number(e.avg_cost) !== r.avg_cost
       || String(e.first_seen_source ?? '') !== r.first_seen_source
       || String(e.first_seen_at ?? '') !== String(r.first_seen_at ?? '')
+      // Zone transitions can carry a write even when the price-derived fields
+      // above round to the same value (e.g. the daily gap-badge set on entry).
+      || String(e.zone_entered_at ?? '') !== String(r.zone_entered_at ?? '')
+      || Boolean(e.entered_zone_via_gap) !== r.entered_zone_via_gap
     ) {
       toUpsert.push(r);
     }
+  }
+
+  // Fire zone-entry notifications regardless of whether the row landed in the
+  // change-detected upsert set — a fresh entry always changes zone_entered_at,
+  // so it'll be in toUpsert, but the ping is best-effort and independent.
+  for (const z of zoneNotifications) {
+    void notifyZoneEntry({ symbol: z.symbol, pnlPct: z.pnlPct, thresholdPct: threshold, viaGap: z.viaGap });
   }
 
   if (toUpsert.length === 0) return;
