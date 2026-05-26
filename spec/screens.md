@@ -20,7 +20,7 @@ Single component, internal branching on three conditionals (P&L tint vs. none, w
 
 **Held + watchlisted ticker** renders differently per surface — held variant on Portfolio screen card, watchlist variant on each Watchlist screen card the ticker appears on. Same ticker, same `signals` data, two card layouts. Both surfaces query the same `signals` table.
 
-**Signal pills carry ranges in both variants.** Pills render as `[<type> · <quality>% · <motivation> · $<low>-<high>]`. Both SELL and BUY pills render simultaneously when both signals exist. Pill row policy: fit comfortably, wrap if needed, never truncate a signal pill — info badges are the things that get truncated to the +N overflow first.
+**Signal pills carry the immediate action.** A pill renders as `[<type> · <quality>% · <motivation> · $<price>]` (leg 1 of the playbook). Analyses are single-direction now (held → SELL, not-held → BUY; see `signal-model.md`), so a card shows one signal pill. Pill row policy: never truncate a signal pill — info badges are the things that get truncated to the +N overflow first.
 
 Primitives extraction is a candidate to land earlier than Track 1 — could fit in MVP polish (Batch 16) as pure refactor, which would make Track 1 a pure compose job.
 
@@ -203,21 +203,17 @@ Dense, customizable stats panel:
 
 ### Collapsible sections (using shared `CollapsibleSection` component)
 
-**Signal Section** (only if active signal(s) exist):
-- Icon: ti-alert-triangle (colored by signal type).
-- Header: signal type(s) + Quality (e.g. "Sell · 82%" or "Sell · 82% + Buy · 71%").
-- **Collapsed state shows the signal pill row** (same `SignalPill`s as the TickerCard), so the actionable signals stay visible without expanding.
-- Body — Style A breakdown:
-  - Shared **Indicator analysis** + **Overall reasoning** header (from `analyses.reasoning`).
-  - Then per-direction blocks (one each for SELL and BUY if both signals exist on the latest non-superseded analysis):
-    - Quality bar (0-100%, colored fill)
-    - Timeframe + Target price range
-    - Risk/reward ratio
-    - Direction-specific rationale (from `signals.rationale`)
-    - Indicator status table (per indicator: name | current value | Bullish / Bearish / Neutral badge)
-    - "Ask about this signal" button → post-MVP hook for AI chat.
-  - If position is `inZone`: inline "Analyze for profit-taking?" shortcut button (triggers normal Analyze flow with `contextualTriggers` auto-attached).
-  - "View history" expands to show all prior analyses chronologically.
+**Signal Section** — single-direction **playbook** (Batch 14g/14h; see `signal-model.md`):
+- Icon: ti-alert-triangle (colored by direction).
+- Header: direction + Quality + horizon (e.g. "Sell · 78% · ⏱ Intraday"). The one signal pill renders in the collapsed header so the immediate action stays visible.
+- Body:
+  - **Overall thesis** (from `analyses.reasoning`).
+  - **Playbook** — the ordered legs, each: action (SELL / REBUY / SELL …) · price (with condition, e.g. "at/above $4.28") · per-leg **confidence** · a one-line **reasoning** ("why" — cites a level/indicator). Leg 1 is the immediate move; later legs are the round-trip.
+  - **Live leg status (14h):** each leg shows ✓ hit / ✗ missed (with the actual extreme) / ⋯ pending, plus an "on track / diverged" summary — updated live by the pollers, no LLM.
+  - Indicator readings table (from `analyses.indicator_snapshot`: name | value | Bullish / Bearish / Neutral).
+  - If `inZone`, the thesis addresses profit-taking directly (zone context is fed into the prompt — see `contextualTriggers`).
+  - "View history" expands prior analyses chronologically (a Refine links back to its parent).
+- **Actions:** when no active signal → one **Analyze** button. When an active signal exists → **Refine** (follow-up: revises the playbook from the realized path) + **Re-analyze (fresh)** (cold restart). Both use the two-step friction + soft-block + daily ceiling.
 
 **Position Stats** (held positions only):
 - Icon: ti-wallet.

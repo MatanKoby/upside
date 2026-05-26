@@ -2,18 +2,22 @@
 
 End-to-end flows that thread across multiple components. Each one is a sequence — what triggers, what runs, what's persisted, what's notified.
 
-## Signal Engine Flow (user-triggered, manual)
+## Signal Engine Flow (user-triggered, manual — single-direction playbook)
 
-1. **Pre-check**: re-analyze soft-block (last analysis within 5 min? → 429 with confirm prompt). Daily cost ceiling exceeded? → 429. Lock acquisition (`analysis_locks` row insert; see `signal-model.md` → Concurrency lock).
-2. **Filter**: skip if held position with market value < threshold, or symbol explicitly suppressed.
-3. **Collect**: Fetch OHLCV bars from IB Client Portal (Redis cache if fresh).
-4. **Compute**: RSI, MACD, Bollinger, VWAP via `technicalindicators` library locally.
-5. **Enrich**: News + sentiment + insider + earnings from Finnhub (through the rate-limited queue — see `schema.md`).
-6. **Context triggers**: read position's zone state; populate `contextualTriggers.inProfitTakingZone` if applicable (see `signal-model.md` → Profit-Taking Zone Detection).
-7. **Synthesize**: send structured indicator state + news context + contextualTriggers to LLM via the provider-agnostic abstraction. Request unified output (both SELL and BUY directions, each nullable).
-8. **Validate**: Zod-parse LLM response. On malformed: retry once with stricter prompt. Second failure: persist `no_signal` row with reason "LLM response malformed".
-9. **Store**: Insert one `analyses` row + 1-2 `signals` rows (one per non-null direction, or one `no_signal` row if both null). Update prior `signals` rows for the same `(user, symbol)` to set `supersededByAnalysisId`. Release lock.
-10. **Notify**: Supabase Realtime pushes new signal(s) to FE → signal pill(s) appear on TickerCard and TickerDetail's SignalSection updates. Discord notification fires later when live price enters a signal's range (see "Signal-Range Entry Flow").
+Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an active signal). See `signal-model.md` → Two Analyze modes.
+
+1. **Pre-check**: re-analyze soft-block (last analysis within 5 min? → 429 with confirm prompt). Daily cost ceiling exceeded? → 429. Lock acquisition (`analysis_locks` row insert).
+2. **Filter**: skip if held position with market value < threshold, or symbol suppressed.
+3. **Direction**: held position → `sell`; not held → `buy`. (MVP is held-only → SELL.)
+4. **Collect**: OHLCV bars from IB (Redis cache if fresh).
+5. **Feature pack**: compute the precise level/volatility/trend/momentum/volume features locally (`technicals.ts`) — pivots, swing highs/lows, ATR, SMA/EMA, RSI, MACD, Bollinger, VWAP, relative volume. These are the LLM's grounding (it anchors legs to these levels, doesn't invent prices).
+6. **Enrich**: news headlines + sentiment + insider + earnings from Finnhub (rate-limited queue).
+7. **Context triggers**: read zone state; populate `contextualTriggers.inProfitTakingZone` if applicable (now wired into the prompt — Batch 14g).
+8. **Refine only (14h)**: also attach the prior playbook + realized leg outcomes (from live tracking) + an anti-anchoring instruction.
+9. **Synthesize**: send feature pack + context to the LLM for the chosen direction. Request a **playbook** (ordered legs, each with price/condition/confidence/reasoning) under one horizon, or `null` (no_signal).
+10. **Validate**: Zod-parse (direction-specific motivation enum). On malformed: one stricter retry; second failure → `no_signal` row "LLM response malformed". Rate-limit/outage/bad-key → soft `no_signal` with honest reason.
+11. **Store**: insert one `analyses` row (+ `refined_from_analysis_id` for a Refine) + **one** `signals` row (`signal_type` = direction or `no_signal`; leg[0] → `price_range_*`/`optimal_price`; full legs + horizon → `playbook jsonb`). Supersede prior non-superseded signals for the `(user, symbol)`. Release lock.
+12. **Notify**: Realtime pushes the new signal → pill appears on TickerCard, playbook renders on TickerDetail. Live per-leg tracking (14h) then marks legs hit/missed as price moves.
 
 ## Profit-Taking Zone Flow (continuous, automated)
 
