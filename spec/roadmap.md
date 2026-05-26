@@ -208,3 +208,20 @@ Each is a small additive feature on top of the existing engine. No new schema; j
 ## Track 8: New Asset Classes
 
 1. **Options / shorts / trade execution** — separate concern, separate scope. Likely never enters this app's domain (Upside is intelligence, not execution); execution stays in IBKR Mobile / TWS. Listed for completeness.
+
+---
+
+## Track 9: Chart Data Resilience (research)
+
+**Current limitation.** The TickerDetail price chart (`PriceChart.tsx`, fed by `GET /api/marketdata/history/:symbol`) draws candles from **IB history only** — there is no fallback source and the history endpoint does not cache to Redis. So when the IB session is disconnected the chart has nothing to plot and renders an explicit empty state ("Chart data unavailable — Live charts need an Interactive Brokers connection"). This is the honest state after the mock-data fallback was removed; previously it silently showed synthetic candles. Finnhub does **not** fill this gap: its free tier dropped `/stock/candle`, so `finnhub.ts` has no candle fetch — we use Finnhub only for `/quote` (price fallback) and `/stock/metric` (fundamentals).
+
+> Note: `architecture.md` / `signal-model.md` / `flows.md` reference "Finnhub intraday candles" for the daily-hindsight accuracy cron. Verify whether that path is actually wired before relying on it as a chart source — it may share the same gap.
+
+**Research task.** Investigate free-tier market-data providers that could supply intraday + historical OHLCV bars so charts survive IB outages (and ideally so a Redis-cached last-good window can render instantly). Candidates to evaluate on free-tier rate limits, history depth, intraday granularity, and ToS for redistribution/caching:
+
+- **Alpaca Market Data** (free IEX feed — bars + historical).
+- **Polygon.io** (free tier: limited calls/min, delayed data).
+- **Twelve Data**, **Tiingo**, **Alpha Vantage** (free but very low daily ceilings — Alpha Vantage was already rejected for live polling at 25/day, see `archive.md`).
+- **yfinance / Yahoo** (unofficial, no key, ToS-gray).
+
+Deliverable of the research: pick one, define the timeframe→provider-param mapping (mirroring `TIMEFRAME_MAP` in `marketdata.ts`), and decide the caching/persistence model (per-symbol Redis window vs. DB-backed history) so charts no longer go blank when IB drops.
