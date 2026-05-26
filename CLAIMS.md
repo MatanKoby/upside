@@ -18,6 +18,12 @@ _(none)_
 
 ## Completed
 
+### Batch 14.5 — Schema cleanup: remove `position_history` (2026-05-26)
+- Owner: claude
+- Started: 2026-05-26 · Finished: 2026-05-26
+- **Finding: no-op at the schema level.** `position_history` was already absent — the baseline `001_initial.sql` doesn't define it (only a comment noting it was dropped), the live DB confirms `to_regclass('public.position_history')` is null, and no server/client code references it. So the batch's acceptance (`select * from position_history` → "relation does not exist") was already met. **No drop migration added** — a `drop if exists` against a table that never existed in any deployed environment would be pure cargo-cult.
+- **What changed:** corrected a stale comment in `001_initial.sql` that claimed MTD comes from "IB's account summary endpoint" — it actually comes from the Redis-cached month-start value (Batch 13.5). Credited the close to 14.5. (Spec — `schema.md`/`archive.md`/`architecture.md` — already described the table as removed; no spec change needed.)
+
 ### Batch 14c — Profit-taking zone detection + Discord notifications + card UI (2026-05-26)
 - Owner: claude
 - Started: 2026-05-26 · Finished: 2026-05-26
@@ -30,7 +36,8 @@ _(none)_
   - **Daily cleanup** (`cron/zoneGapCleanup.ts`): clears `entered_zone_via_gap` once per ET day after the regular session ends. `marketHours.etDateString()` added.
   - **FE:** `Position` gains `zoneEnteredAt`/`enteredZoneViaGap` (mapped in `usePositions`); `PositionCard` renders a zone icon (+ "GAP" badge) before the P&L when in zone, each wrapped in a new `common/Tooltip` (hover desktop / tap mobile, ESC + outside-click dismiss, stops card nav). CSS for icon/badge/tooltip.
 - **Deferred (deliverables 4 + 6):** feeding `inProfitTakingZone` into the LLM prompt + the inline "Analyze for profit-taking?" shortcut — both entangled with the pending single-direction signal-engine redesign (see Known issues), so deferred to avoid prompt churn. Detection/notification/UI are independent and shipped.
-- **Status:** server + client typecheck clean, client build clean. **Needs manual: (1) apply migration `009_profit_zone.sql` to Supabase; (2) create `#upside-zone-profit` Discord channel + add its `DISCORD_WEBHOOK_ZONE_PROFIT` to VPS `.env`; (3) `./bin/upside rebuild`.** Then verify (temporarily lower threshold → cross it → Discord ping in `#upside-zone-profit` + card icon). FE auto-deploys via Vercel.
+- **Status: verified live (2026-05-26).** Migration applied, `#upside-zone-profit` channel + `DISCORD_WEBHOOK_ZONE_PROFIT` configured, VPS rebuilt. BBAI crossed +2% (default; no `user_preferences` row yet → fallback) → DB showed `zone_entered_at` + `entered_zone_via_gap` + `last_zone_notification_at` set; user confirmed the Discord ping, the zone icon, and the GAP badge on the card.
+- **Follow-up fix shipped same day:** a pre-market price flicker (BBAI 4.28↔4.18, total tracking it) traced to `finnhubPricePoller` overwriting a steady IB price with Finnhub's delayed prior-close quote — diagnosed from a user HAR (`src=finnhub price=4.18` then `src=ib price=4.28`). Fixed by gating the Finnhub poller on IB connection status (skip while IB connected) rather than the leaky 90s per-row staleness. See commit + `architecture.md`.
 
 ### Batch 14e — Marketdata snapshot endpoint + TickerDetail wire-up (2026-05-26)
 - Owner: claude

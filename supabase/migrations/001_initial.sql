@@ -2,9 +2,10 @@
 --
 -- Consolidated schema reflecting Batches 5, 6 (schema reconciliation from IB
 -- captures), and 7.5 (this collapse). Future post-deploy migrations will be
--- 002+. position_history was specced originally but DROPPED from MVP — MTD
--- return is pulled directly from IB's account summary endpoint and signal
--- accuracy lives on the signals row itself.
+-- 002+. position_history was specced originally but DROPPED from MVP (closed in
+-- Batch 14.5) — MTD return comes from a Redis-cached month-start portfolio value
+-- (Batch 13.5) and signal accuracy lives on the signals row itself, so no
+-- daily-snapshot table is needed.
 
 create extension if not exists "uuid-ossp";
 
