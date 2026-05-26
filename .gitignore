@@ -88,3 +88,8 @@ logs/
 # May contain account identifiers from IB's responses. Never commit.
 captures/
 
+# === Browser network captures (HAR) ===
+# Contain Authorization bearer tokens + full responses. Never commit.
+network_captures/
+*.har
+

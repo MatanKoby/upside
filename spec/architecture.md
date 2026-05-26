@@ -97,7 +97,7 @@ Abandoned approaches (kept in `archive.md` so the next agent doesn't redo them):
 The "real-time loop" is implemented as two cooperating pollers writing to the same `positions` row:
 
 - **Primary (`ibPricePoller`)**: runs only when IB session is `connected`. Adaptive cadence (10s / 60s / 5min depending on market period). Writes to Supabase with `price_source: 'ib'` and stamps `last_price_update_at`. Best granularity, requires IB connected.
-- **Fallback (`finnhubPricePoller`)**: runs continuously, 60s cadence. For each held position, if `last_price_update_at` is null or older than 90s, fetches a quote via `finnhubQueue.request('quote', symbol, ...)` and writes with `price_source: 'finnhub'`. Routes through the rate-limited queue, no risk of 429s.
+- **Fallback (`finnhubPricePoller`)**: runs continuously, 60s cadence, but **skips the whole tick while the IB session is authenticated+connected** — IB is authoritative for all held positions when live, so Finnhub must not write. (The earlier per-row "older than 90s" staleness check was leaky: `ibPricePoller`'s change-detection skips the write *and* the `last_price_update_at` bump when a price holds steady, so a quiet IB price would "expire" after 90s and Finnhub would overwrite it with its delayed quote — e.g. pre-market IB 4.28 vs Finnhub prior-close 4.18 — causing a price/total flicker. Gating on IB connection status fixes that.) When IB is down, it fetches a quote via `finnhubQueue.request('quote', symbol, ...)` for each held position older than 90s and writes with `price_source: 'finnhub'`. Note Finnhub free `/quote` carries no extended-hours price, so the fallback shows the prior close pre/post-market.
 
 Both pollers recompute zone state on every write (see `signal-model.md` → Profit-Taking Zone Detection). The FE renders `current_price` agnostic to source.
 
@@ -105,7 +105,7 @@ Both pollers recompute zone state on every write (see `signal-model.md` → Prof
 
 ## Three Loops in the Node.js app
 
-1. **Multi-source price polling** (continuous): `ibPricePoller` (IB-only, adaptive cadence) + `finnhubPricePoller` (fallback, 60s, only writes if IB hasn't within 90s). Both recompute zone state on each write and trigger zone/signal-range Discord notifications inline.
+1. **Multi-source price polling** (continuous): `ibPricePoller` (IB-only, adaptive cadence) + `finnhubPricePoller` (fallback, 60s, skips entirely while IB is connected). Both recompute zone state on each write and trigger zone/signal-range Discord notifications inline.
 2. **Daily hindsight accuracy cron** (`accuracyUpdater`, once daily at ~4:30 PM ET): for each non-superseded signal in last 30 days, pull today's intraday candles from Finnhub, update `actualMaxSinceAnalysis` / `actualMinSinceAnalysis`, stamp `enteredRangeAt` / `exitedRangeAt`. IB-independent.
 3. **Keepalive loop** (every few hours): Supabase ping + IB session tickle (when connected).
 
