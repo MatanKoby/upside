@@ -6,6 +6,8 @@ Single source of truth for how the two AI agents collaborate on this project. Bo
 
 **Upside** is a mobile-first PWA portfolio intelligence layer for Interactive Brokers. The product spec is in the `spec/` directory (see "Spec layout" below). Work batches are declared in `BUILD_QUEUE.md`. Active and historical claim state is in `CLAIMS.md`. This file does not duplicate any of those.
 
+Claude web is used as a read-only **ideation surface** upstream of the queue — it raises ideas and research leads, it does not execute. See "Ideation handoff (Claude web → code)" below.
+
 ## Repo & branches
 
 - `dev` — shared working branch. Both agents commit directly. Always `git pull --ff-only origin dev` before claiming.
@@ -40,6 +42,32 @@ The spec lives in the `spec/` directory, split across 6 domain files plus an arc
 **Editing convention:** when you edit the spec, edit the file matching the concern. If a change naturally crosses multiple files, that's a signal the concern might be miscarved — flag it before duplicating content. Cross-reference by file path (`see schema.md → Supabase Schema`) rather than restating.
 
 The spec describes the **current intended design** — not the history of how we got there. Move historical context to `archive.md` when it stops being part of the live system.
+
+## Ideation handoff (Claude web → code)
+
+Claude web is an **ideation and research surface**, not an executor. It has no repo access, never claims batches, never commits, and everything it produces is vetted by the user + a code agent before anything changes. Because that vet-pass is the correctness filter, web does **not** need ground truth — and over-feeding it repo detail narrows its output toward what already exists. Keep its context minimal on purpose.
+
+**What web reads:** exactly two files — `spec/README.md` (product identity + domain map) and `spec/roadmap.md` (post-MVP frontier). Nothing else. Not the queue, schema, screens, flows, or code. Deduping a web idea against those is the code agent's job on the vet-pass, not web's.
+
+**What web emits:** a structured worklist, one tagged line per item — not prose:
+
+```
+[CHECK]    <does X already happen / is Y true?>   — why it matters
+[ADD]      <new feature/idea>                      — rationale — what to verify before queueing
+[REFINE]   <existing thing> → <change>             — why
+[RESEARCH] <open question>                          — what a good answer unblocks
+```
+
+**What the code agent does** when the user pastes that list — triage each item against the live repo, with the user:
+
+| Tag | Action |
+|---|---|
+| `CHECK` | Inspect code/DB now; report the actual current behavior. |
+| `ADD` | Confirm it isn't already built or queued; if it survives, draft a `BUILD_QUEUE.md` batch. |
+| `REFINE` | Confirm against the current design; if it survives, draft a `spec:` edit. |
+| `RESEARCH` | Run the search / doc-dig with the user. |
+
+The worklist is **ephemeral** — a triage input, never a record. The durable outcome of the pass lands in `BUILD_QUEUE.md` (new batches) and `spec/**` (design edits) per the normal conventions. Any item not echoed into the queue or spec is dropped on purpose: the list is not stored, not committed, and is never a source of truth.
 
 ## The work queue
 
