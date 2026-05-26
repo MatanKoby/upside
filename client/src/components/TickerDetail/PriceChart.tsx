@@ -10,10 +10,10 @@ import {
   type LineData,
   type Time,
 } from 'lightweight-charts';
-import { mockChartDataByTimeframe, type ChartTimeframe } from '../../data/mockChartData';
 import { useChartHistory, type ChartHistory } from '../../hooks/useChartHistory';
 import { rsiLineFromCandles } from '../../utils/rsi';
 import type { ChartMode, OverlayKey } from './ChartControls';
+import type { ChartTimeframe } from './TimeframeBar';
 
 type ChartData = ChartHistory & { rsi: LineData<Time>[]; entryDate?: Time };
 
@@ -36,7 +36,7 @@ export function PriceChart({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const rsiHostRef = useRef<HTMLDivElement | null>(null);
-  const { history: fetched, isLoading } = useChartHistory(symbol, timeframe);
+  const { history: fetched, isLoading, error } = useChartHistory(symbol, timeframe);
 
   const entrySec = useMemo<Time | undefined>(() => {
     if (!entryDate) return undefined;
@@ -44,29 +44,21 @@ export function PriceChart({
     return Number.isFinite(ms) ? (Math.floor(ms / 1000) as Time) : undefined;
   }, [entryDate]);
 
-  // Assemble the chart bundle once per data/timeframe change. RSI is computed
-  // client-side from fetched candle closes (the BE history endpoint doesn't
-  // return it); the mock path carries its own decorative RSI.
-  const data = useMemo<ChartData>(() => {
-    if (fetched) {
-      return { ...fetched, rsi: rsiLineFromCandles(fetched.candles), entryDate: entrySec };
-    }
-    const mock = mockChartDataByTimeframe[timeframe];
-    return {
-      candles: mock.candles,
-      closeLine: mock.closeLine,
-      vwap: mock.vwap,
-      volume: mock.volume,
-      rsi: mock.rsi,
-      entryDate: mock.entryDate,
-    };
-  }, [fetched, timeframe, entrySec]);
+  // Assemble the chart bundle from real fetched candles only. RSI is computed
+  // client-side from the closes (the BE history endpoint doesn't return it).
+  // No data → null, and we render an empty/loading/error state instead of a
+  // chart. There is no synthetic fallback: the sole candle source is IB
+  // history, so when IB is down there is genuinely nothing to plot.
+  const data = useMemo<ChartData | null>(() => {
+    if (!fetched) return null;
+    return { ...fetched, rsi: rsiLineFromCandles(fetched.candles), entryDate: entrySec };
+  }, [fetched, entrySec]);
 
-  const hasRsi = data.rsi.length > 0;
+  const hasRsi = (data?.rsi.length ?? 0) > 0;
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return undefined;
+    if (!host || !data) return undefined;
 
     const textPrimary = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#f5f5f3';
     const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || 'rgba(255,255,255,0.08)';
@@ -230,10 +222,27 @@ export function PriceChart({
     };
   }, [mode, overlays.rsi, overlays.volume, overlays.vwap, data, entryPrice]);
 
+  // The host div stays mounted so the effect can attach a chart the moment
+  // data arrives. With no candles we overlay a status message instead of
+  // plotting anything — IB history is the only source, so "unavailable"
+  // usually means IB is disconnected.
+  const status = !data
+    ? isLoading
+      ? { text: 'Loading chart…', hint: undefined }
+      : error === 'symbol_not_held'
+        ? { text: 'No chart data', hint: 'Charts are available for held positions only.' }
+        : { text: 'Chart data unavailable', hint: 'Live charts need an Interactive Brokers connection.' }
+    : null;
+
   return (
     <div className="price-chart-wrap">
       <div ref={hostRef} className="price-chart-main">
-        {isLoading && !fetched && <div className="price-chart-loading">Loading chart…</div>}
+        {status && (
+          <div className="price-chart-status">
+            <span className="price-chart-status-text">{status.text}</span>
+            {status.hint && <span className="price-chart-status-hint">{status.hint}</span>}
+          </div>
+        )}
       </div>
       {overlays.rsi && hasRsi && (
         <div className="price-chart-rsi-wrap">

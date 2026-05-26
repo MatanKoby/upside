@@ -1,4 +1,4 @@
-import type { ChartTimeframe } from '../../data/mockChartData';
+export type ChartTimeframe = '30m' | '2h' | '1D' | '2D' | '1W' | '1M' | '3M' | '1Y' | '5Y' | 'All';
 
 const TIMEFRAMES: ChartTimeframe[] = ['30m', '2h', '1D', '2D', '1W', '1M', '3M', '1Y', '5Y', 'All'];
 
