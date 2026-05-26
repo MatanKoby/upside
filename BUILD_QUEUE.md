@@ -428,6 +428,8 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ## Batch 14b: Daily hindsight accuracy tracking cron
 
+**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. Before un-deferring, revisit whether the engine should produce **single-direction** analyses (SELL *or* BUY per run, not both) to sharpen the LLM's focus. See `CLAIMS.md` → Known issues.
+
 **Depends on:** Batch 14a, 13.7.
 
 **Scope:** Once daily, after market close, update accuracy fields on all open signals using Finnhub intraday candles. Empirical foundation for "is the LLM actually good." IB-independent — works whether or not the user has IB connected.
@@ -522,6 +524,8 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 ---
 
 ## Batch 14d: Signal-range Discord notifications (SELL + BUY)
+
+**DEFERRED (2026-05-26):** deferred alongside Batch 14b until signal quality improves (see the 14b note + `CLAIMS.md` → Known issues). The zone-entry notifications in 14c still ship; this is specifically the *signal-range* pings.
 
 **Depends on:** Batch 14a, 14c.
 

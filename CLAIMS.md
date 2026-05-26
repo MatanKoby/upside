@@ -12,10 +12,25 @@ _(none)_
 
 ## Known issues (deferred fixes)
 
+- **Signal quality poor → 14b + 14d deferred (2026-05-26)** — the unified SELL+BUY analyses we're getting are low quality. Hypothesis: the prompt asks for both directions at once, splitting the LLM's focus; switching to **single-direction** analysis (ask for SELL *or* BUY per run, not both) may sharpen them. Until signals improve there's no point measuring them, so **Batch 14b (accuracy cron) is deferred**, and **Batch 14d (signal-range pings) is deferred** with it. Revisit the single-direction redesign before un-deferring 14b/14d. (User call, 2026-05-26.)
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens.md` → Screen 2 note.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens.md` → Indicators note.
 
 ## Completed
+
+### Batch 14c — Profit-taking zone detection + Discord notifications + card UI (2026-05-26)
+- Owner: claude
+- Started: 2026-05-26 · Finished: 2026-05-26
+- Commit: 71897ff
+- **What shipped:** continuous detection that a position crossed its profit-taking threshold, a Discord ping on entry, and card UI.
+  - **Schema** (migration `009_profit_zone.sql`): `positions` gains `zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap`; `user_preferences` gains `profit_zone_threshold_pct numeric default 2.0` (check > 0).
+  - **Shared state machine** (`services/profitZone.ts`): `computeZoneState(prev, pnlPct, threshold)` returns the next zone fields + `changed`/`notify`. Entry (`!inZone→inZone`) stamps `zone_entered_at`, sets `entered_zone_via_gap` when the market period is pre-market/closed, and flags `notify` only if `last_zone_notification_at` is >4h old (cooldown). Exit clears `zone_entered_at`, stamps `zone_exited_at`, never notifies. `getProfitZoneThreshold(userId)` reads the pref (defaults 2.0).
+  - **Both pollers** (`ibPricePoller`, `finnhubPricePoller`) recompute zone state on every write and fire `notifyZoneEntry` on a fresh, cooldown-passed entry. IB poller adds zone to its change-detection so a transition always persists.
+  - **Discord** (`notify.ts:notifyZoneEntry`): posts to `DISCORD_WEBHOOK_ZONES` (new env var); no in-memory cooldown — the 4h re-entry cooldown is DB-anchored (`last_zone_notification_at`) so it survives restarts.
+  - **Daily cleanup** (`cron/zoneGapCleanup.ts`): clears `entered_zone_via_gap` once per ET day after the regular session ends. `marketHours.etDateString()` added.
+  - **FE:** `Position` gains `zoneEnteredAt`/`enteredZoneViaGap` (mapped in `usePositions`); `PositionCard` renders a zone icon (+ "GAP" badge) before the P&L when in zone, each wrapped in a new `common/Tooltip` (hover desktop / tap mobile, ESC + outside-click dismiss, stops card nav). CSS for icon/badge/tooltip.
+- **Deferred (deliverables 4 + 6):** feeding `inProfitTakingZone` into the LLM prompt + the inline "Analyze for profit-taking?" shortcut — both entangled with the pending single-direction signal-engine redesign (see Known issues), so deferred to avoid prompt churn. Detection/notification/UI are independent and shipped.
+- **Status:** server + client typecheck clean, client build clean. **Needs manual: (1) apply migration `009_profit_zone.sql` to Supabase; (2) add `DISCORD_WEBHOOK_ZONES` to VPS `.env`; (3) `./bin/upside rebuild`.** Then verify per BUILD_QUEUE (temporarily lower threshold → cross it → Discord ping + card icon). FE auto-deploys via Vercel.
 
 ### Batch 14e — Marketdata snapshot endpoint + TickerDetail wire-up (2026-05-26)
 - Owner: claude
