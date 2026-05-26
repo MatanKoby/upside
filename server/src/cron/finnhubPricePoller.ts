@@ -26,6 +26,7 @@
 
 import { supabase } from '../services/supabase.js';
 import { getQuote } from '../services/finnhub.js';
+import { ibStatus } from '../services/ibGateway.js';
 import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
@@ -59,6 +60,16 @@ async function tick(): Promise<void> {
   try {
     const userId = await resolveOwnerUserId();
     if (!userId) return;
+
+    // Defer entirely to IB while it's live — it's authoritative for every held
+    // position and updates on its own cadence. The per-row 90s staleness check
+    // below is a leaky proxy: ibPricePoller's change-detection skips the write
+    // (and the last_price_update_at bump) when a price holds steady, so a quiet
+    // IB price "expires" after 90s and we'd overwrite it with Finnhub's delayed
+    // quote — e.g. pre-market IB 4.28 vs Finnhub's prior-close 4.18 — causing a
+    // visible flicker. Only act as a fallback when IB is actually down.
+    const auth = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+    if (auth.authenticated && auth.connected) return;
 
     const threshold = await getProfitZoneThreshold(userId);
 
