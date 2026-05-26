@@ -8,7 +8,24 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch 14g — Single-direction playbook engine
+- Owner: claude
+- Started: 2026-05-26
+- **Design locked + spec written** (`signal-model.md` rewritten, `screens.md`/`flows.md` updated). Replaces the unified SELL+BUY analysis (14a) with a single-direction **playbook**. Scope for 14g (Fresh Analyze only):
+  - **Direction by holding:** held → SELL playbook, not-held → BUY. MVP held-only → SELL today.
+  - **Computed feature pack** (`technicals.ts`): pivots, swing highs/lows, N-day/52w highs/lows, ATR, SMA/EMA, RSI(+state), MACD(+cross), Bollinger(+%B/bandwidth), VWAP+distance, relative volume, position-relative distances. The LLM anchors legs to these levels — must not invent prices. (Biggest quality lever.)
+  - **Playbook output** (Zod): `{ indicatorAnalysis, reasoning, signal: { direction, signalQuality, motivation, horizon: intraday|multiday, horizonWindow, legs:[{action, price, condition, confidence, reasoning}] } | null }`. Per-leg confidence; horizon-only timing (no per-leg timing).
+  - **Persistence:** one `analyses` + **one** `signals` row; leg[0] → existing `price_range_*`/`optimal_price`; full legs+horizon → new `playbook jsonb`. Migration `010_playbook.sql` (also adds `analyses.refined_from_analysis_id` for 14h).
+  - **Prompt:** single-direction, level-anchored, with `contextualTriggers.inProfitTakingZone` wired in (resolves the 14c-deferred prompt piece).
+  - **FE:** render the playbook (legs + per-leg confidence + reasoning) in SignalSection; single pill on cards.
+  - Expiry: intraday → end of session; multiday → window.
+- Honesty caveats baked into spec: specific ≠ accurate (raises 14b's value); model strength matters (revisit provider later, not in 14g).
+
+### Batch 14h — Live leg tracking + Refine follow-up (planned, after 14g)
+- Owner: claude (queued)
+- **Half A:** pollers mark each active playbook leg `hit/missed/pending` + actual extreme on every price write (no LLM, no cron) → mechanical "on track / diverged"; feeds 14b.
+- **Half B:** a second, manually-triggered **Refine** analyze mode — sends fresh feature pack + prior playbook + realized outcomes + anti-anchoring instruction → revised playbook; supersedes + records `refined_from_analysis_id`. Two buttons when an active signal exists (Refine / Re-analyze fresh).
+- Deliberately split from 14g: validate base playbook quality on real tickers before building the refinement loop.
 
 ## Known issues (deferred fixes)
 

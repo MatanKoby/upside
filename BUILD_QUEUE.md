@@ -428,7 +428,7 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ## Batch 14b: Daily hindsight accuracy tracking cron
 
-**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. Before un-deferring, revisit whether the engine should produce **single-direction** analyses (SELL *or* BUY per run, not both) to sharpen the LLM's focus. See `CLAIMS.md` → Known issues.
+**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework is now happening as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signal-model.md`; scope in `CLAIMS.md`.
 
 **Depends on:** Batch 14a, 13.7.
 
