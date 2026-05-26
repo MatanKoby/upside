@@ -123,6 +123,10 @@ export function PriceChart({
       const volumeSeries = chart.addSeries(HistogramSeries, {
         priceFormat: { type: 'volume' },
         priceScaleId: '',
+        // Bars only — the per-bar last-value tag (e.g. "5.59K") read as a
+        // confusing daily-total figure, so suppress the axis label + price line.
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       volumeSeries.priceScale().applyOptions({
         scaleMargins: { top: 0.75, bottom: 0 },

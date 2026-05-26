@@ -44,10 +44,15 @@ function buildMarketStats(snap: MarketSnapshot): MarketStat[] {
   const cur = (v: number | null) => (v == null ? DASH : formatCurrency(v));
   const num = (v: number | null, d = 2) => (v == null ? DASH : v.toFixed(d));
   const cnt = (v: number | null) => (v == null ? DASH : formatCompact(v));
+  // Compact "$3.01–$9.39" (no spaces) so it fits a 4-up grid cell.
   const range52 =
     snap.week52Low == null || snap.week52High == null
       ? DASH
-      : `${formatCurrency(snap.week52Low)} - ${formatCurrency(snap.week52High)}`;
+      : `${formatCurrency(snap.week52Low)}–${formatCurrency(snap.week52High)}`;
+  // Default-visible set, shown 4-per-row (up to 3 rows). put/call + tweet
+  // volume have no data source yet, so they stay off. The grid renders every
+  // enabled stat (no fixed cap); the Edit panel toggles them (persistence is
+  // Batch 15).
   return [
     { key: 'volume', label: 'Volume', value: cnt(s.volume), enabled: true },
     { key: 'fwdPE', label: 'P/E', value: num(s.peRatio, 1), enabled: true },
@@ -55,14 +60,12 @@ function buildMarketStats(snap: MarketSnapshot): MarketStat[] {
     { key: 'beta', label: 'Beta', value: num(s.beta, 2), enabled: true },
     { key: 'open', label: 'Open', value: cur(snap.open), enabled: true },
     { key: 'eps', label: 'EPS', value: cur(s.eps), enabled: true },
-    // 52w range is shown as the bar below the grid by default — keep the text
-    // cell in the pool (toggleable) but off, to avoid duplicating the bar.
-    { key: 'range52w', label: '52w range', value: range52, enabled: false },
-    { key: 'marketCap', label: 'Market cap', value: s.marketCap == null ? DASH : formatCompactCurrency(s.marketCap), enabled: false },
-    { key: 'dividend', label: 'Dividend', value: cur(s.dividend), enabled: false },
+    { key: 'range52w', label: '52w range', value: range52, enabled: true },
+    { key: 'marketCap', label: 'Market cap', value: s.marketCap == null ? DASH : formatCompactCurrency(s.marketCap), enabled: true },
+    { key: 'avgVolume', label: 'Avg volume', value: cnt(s.avgVol30d), enabled: true },
+    { key: 'dividend', label: 'Dividend', value: cur(s.dividend), enabled: true },
     { key: 'putCall', label: 'Put/call', value: DASH, enabled: false },
     { key: 'tweetVolume', label: 'Tweet volume', value: DASH, enabled: false },
-    { key: 'avgVolume', label: 'Avg volume', value: cnt(s.avgVol30d), enabled: false },
   ];
 }
 
@@ -244,13 +247,6 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
       dayHigh: snapshot.dayHigh ?? 0,
       currentInRange: ratioInRange(detail.price, snapshot.dayLow, snapshot.dayHigh),
       marketStats: stats,
-      week52: snapshot.week52Low != null && snapshot.week52High != null
-        ? {
-            low: snapshot.week52Low,
-            high: snapshot.week52High,
-            currentRatio: ratioInRange(detail.price, snapshot.week52Low, snapshot.week52High),
-          }
-        : null,
     },
   };
 }

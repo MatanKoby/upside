@@ -178,6 +178,15 @@ interface Intraday {
 // render "—" / fall back rather than showing a bogus $0.00.
 const nz = (v: number | null): number | null => (v === 0 ? null : v);
 
+// IB CP field 87 (volume) occasionally returns a wrong-suffix value — e.g.
+// "65595.7B" (raw 6.56e13) for BBAI when the real volume is ~65.6M — on a
+// partially-warmed / glitched snapshot. No US stock trades anywhere near 20B
+// shares/day, so reject anything above that as garbage rather than render
+// "65.60T". (Finnhub free /quote has no volume, so the cell then shows "—".)
+const VOLUME_SANITY_CAP = 2e10;
+const saneVolume = (v: number | null): number | null =>
+  v != null && v > VOLUME_SANITY_CAP ? null : v;
+
 // Intraday tier: IB snapshot when the session is live; fall back to a Finnhub
 // /quote when IB is off OR when IB's snapshot is incomplete (a closed market
 // returns 0s for open/prevClose/etc., which Finnhub still has). 60s cache so
@@ -211,7 +220,7 @@ async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
     dayLow: nz(parseAbbrev(ibRow?.['71'])),
     open: nz(parseAbbrev(ibRow?.['7295'])),
     prevClose: nz(parseAbbrev(ibRow?.['7296'])),
-    volume: nz(parseAbbrev(ibRow?.['87'])),
+    volume: saneVolume(nz(parseAbbrev(ibRow?.['87']))),
   };
   const ibContributed = result.last != null || result.dayHigh != null;
 

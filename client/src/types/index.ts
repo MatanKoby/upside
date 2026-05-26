@@ -141,9 +141,6 @@ export type TickerDetailData = {
   dayHigh: number;
   currentInRange: number;
   marketStats: MarketStat[];
-  // 52-week range bar (below the Market Stats grid). Null until the snapshot
-  // resolves or when the source has no 52-week data. Batch 14e.
-  week52?: { low: number; high: number; currentRatio: number } | null;
   // Signal absent for positions that have never been analyzed. Populated by
   // Batch 14a's signal engine once that lands.
   signal: TickerSignalDetail | null;

@@ -67,7 +67,7 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
       </header>
 
       <TodayRange low={detail.dayLow} high={detail.dayHigh} currentRatio={detail.currentInRange} />
-      <MarketStats initialStats={detail.marketStats} week52={detail.week52} />
+      <MarketStats initialStats={detail.marketStats} />
 
       <section className="td-chart-shell" aria-label="Chart placeholder">
         <PriceChart
