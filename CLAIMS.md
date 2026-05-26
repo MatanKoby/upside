@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 14e — Marketdata snapshot endpoint + TickerDetail wire-up
-- Owner: claude
-- Started: 2026-05-25 16:01
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,18 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens.md` → Indicators note.
 
 ## Completed
+
+### Batch 14e — Marketdata snapshot endpoint + TickerDetail wire-up (2026-05-26)
+- Owner: claude
+- Started: 2026-05-25 16:01 · Finished: 2026-05-26
+- Commits: (snapshot endpoint + caching arc) 282212c → e7f83cc → 849e24c → **542939c** (4-up grid / volume cap / chart tag) + **6bea739** (spec).
+- **What shipped:** `GET /api/marketdata/snapshot/:symbol` powering TickerDetail's Today's Range + Market Stats (were hardcoded `0`/`[]`).
+  - **Endpoint** (`routes/marketdata.ts`): `getIntraday()` is IB-primary (snapshot fields 31/70/71/82/83/87/7295/7296) when the IB session is live, gap-filled from one cached Finnhub `/quote` (`source: ib|finnhub|mixed|none`); `getFundamentals()` from Finnhub `/stock/metric?metric=all` (52w hi/lo, peTTM, epsTTM, beta, marketCap, 10d avg vol, dividend). `parseAbbrev()` parses IB's K/M/B/T suffix strings. Two-tier Redis cache by volatility — intraday 60s, fundamentals 6h — so reopening a ticker is cheap (IB-on = 0 Finnhub calls; IB-off = ≤1 `/quote`/60s + ≤1 `/stock/metric`/6h per symbol).
+  - **0-as-unknown:** IB returns `0` for fields on a closed market; `nz()` maps `0→null` then Finnhub gap-fills, so closed-market fields show real values (e.g. open `$4.23`) instead of `$0.00`.
+  - **Volume sanity-cap:** IB field 87 occasionally returns a wrong-magnitude string (observed `"65595.7B"` ≈6.6e13 for a ~65M-vol stock); `VOLUME_SANITY_CAP = 2e10` rejects it to null (cell shows "—"; Finnhub free `/quote` has no volume).
+  - **FE:** `useTickerDetail` fetches the snapshot in its own effect, merges day-range + builds the Market Stats pool (`buildMarketStats`); `MarketStats` re-seeds via `useEffect` since the snapshot resolves after mount. 4-per-row grid renders every enabled stat (no fixed height/cap); 52w range is a compact text cell ($3.01–$9.39), the separate 52w bar removed. Chart volume histogram keeps its bars but drops the per-bar last-value tag (the "5.59K" read as a misleading daily total).
+- **Status:** code committed + pushed (FE auto-deploys via Vercel). **BE volume-cap needs `./bin/upside rebuild` on the VPS** to take effect. Server + client typecheck clean, client build clean. Live diagnosis done via IB passthrough capture ($0.00 + 65.60T bugs both root-caused on real data); final FE-flow visual confirmation is user-driven.
+- **Deferred (see Known issues):** loading/error "coming soon" states; empty Indicators section.
 
 ### Batch 14f — TickerDetail real-data chart + signal polish (2026-05-25)
 - Owner: claude
