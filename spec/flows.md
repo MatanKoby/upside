@@ -19,7 +19,7 @@ End-to-end flows that thread across multiple components. Each one is a sequence 
 
 1. **Both pollers** (`ibPricePoller` and `finnhubPricePoller`) recompute zone state on every `positions` row write.
 2. Compare `pnlPercent` to `user_preferences.profit_zone_threshold_pct`:
-   - `!wasInZone && nowInZone` (transition into zone): set `zone_entered_at = now()`, `entered_zone_via_gap = (now() < todays_market_open)`. Check 4h cooldown on `last_zone_notification_at`; if outside cooldown, fire Discord notification to `#upside-zones`, set `last_zone_notification_at = now()`.
+   - `!wasInZone && nowInZone` (transition into zone): set `zone_entered_at = now()`, `entered_zone_via_gap = (now() < todays_market_open)`. Check 4h cooldown on `last_zone_notification_at`; if outside cooldown, fire Discord notification to `#upside-zone-profit` (env `DISCORD_WEBHOOK_ZONE_PROFIT`), set `last_zone_notification_at = now()`.
    - `wasInZone && !nowInZone` (transition out of zone): set `zone_exited_at = now()`, clear `zone_entered_at`. No notification.
 3. Supabase Realtime pushes updated position to FE → zone icon (and GAP badge if applicable) appears on card.
 4. At end of regular session each day: clear `entered_zone_via_gap` for all positions (small daily cleanup task).

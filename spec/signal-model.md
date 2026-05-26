@@ -160,7 +160,7 @@ A position enters "profit-taking zone" when its unrealized P&L percent crosses a
 Zone state is recomputed on every `positions` row write by both `ibPricePoller` and `finnhubPricePoller`. A position is `inZone` when `pnl_percent >= profit_zone_threshold_pct`.
 
 **Notifications:**
-- On zone-entry (transition `!inZone → inZone`), fire one Discord notification to `#upside-zones` (separate channel from signal-range notifications so the user can independently tune Discord notification settings).
+- On zone-entry (transition `!inZone → inZone`), fire one Discord notification to `#upside-zone-profit` (one channel per alert type — separate from signal-range and any future zone channels — so the user can independently mute/enable each in Discord). Env var `DISCORD_WEBHOOK_ZONE_PROFIT`.
 - Re-entry suppressed by a 4-hour cooldown keyed on `last_zone_notification_at`. Position can enter, exit, and re-enter within the cooldown window without triggering a new notification. Avoids chop spamming the user near the threshold.
 - Zone-exit does NOT fire a notification in MVP (would create noise). Exit data is recorded for post-MVP analysis ("opportunity to take profit at +2.3% passed, position now at +0.8%").
 
