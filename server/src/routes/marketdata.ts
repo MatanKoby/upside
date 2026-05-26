@@ -178,14 +178,20 @@ interface Intraday {
 // render "—" / fall back rather than showing a bogus $0.00.
 const nz = (v: number | null): number | null => (v === 0 ? null : v);
 
-// IB CP field 87 (volume) occasionally returns a wrong-suffix value — e.g.
-// "65595.7B" (raw 6.56e13) for BBAI when the real volume is ~65.6M — on a
-// partially-warmed / glitched snapshot. No US stock trades anywhere near 20B
-// shares/day, so reject anything above that as garbage rather than render
-// "65.60T". (Finnhub free /quote has no volume, so the cell then shows "—".)
+// IB CP field 87 (volume) carries a wrong magnitude suffix: a live capture of
+// BBAI returned "87":"65595.7B" / "87_raw":65595700000000 (6.56e13) when the
+// real volume was ~65.6M — the mantissa 65595.7 is correct but tagged "B"
+// (billion) where it should be "K" (thousand), inflating it by exactly 1e6.
+// So when the parsed value is implausibly large (no US single name trades near
+// 20B shares/day), undo that 1e6 inflation and surface the real number. We
+// never blank a value IB actually gave us — the only "—" is genuinely-absent
+// volume (null), e.g. market closed with no field 87 in the snapshot.
 const VOLUME_SANITY_CAP = 2e10;
-const saneVolume = (v: number | null): number | null =>
-  v != null && v > VOLUME_SANITY_CAP ? null : v;
+const IB_VOLUME_INFLATION = 1e6;
+const saneVolume = (v: number | null): number | null => {
+  if (v == null) return null;
+  return v > VOLUME_SANITY_CAP ? Math.round(v / IB_VOLUME_INFLATION) : v;
+};
 
 // Intraday tier: IB snapshot when the session is live; fall back to a Finnhub
 // /quote when IB is off OR when IB's snapshot is incomplete (a closed market
