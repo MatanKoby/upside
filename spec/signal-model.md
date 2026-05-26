@@ -181,6 +181,7 @@ Zone state is recomputed on every `positions` row write by both `ibPricePoller` 
   ```
 - The LLM prompt reserves a "Contextual triggers" section. When triggers are non-null, the prompt instructs the LLM to address them specifically. For zone: "should we take profit here, or hold for more?" — and if `viaGap`, additionally: "zone entry was caused by an overnight gap, which often fades at open due to others taking profit."
 - The framework is forward-compatible: new trigger types can be added without prompt re-engineering. **Reserved in the prompt structure from Batch 14a onward** even though only `inProfitTakingZone` is populated initially.
+- **Status (2026-05-26):** zone *detection*, the Discord ping, and the card UI shipped in Batch 14c. Wiring `inProfitTakingZone` into the actual LLM prompt is **deferred** alongside the single-direction signal-engine redesign (see `CLAIMS.md` → Known issues) — no point tuning prompt context while the prompt itself is about to change.
 
 ## Realtime Update Architecture
 
