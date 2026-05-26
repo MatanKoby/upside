@@ -31,7 +31,7 @@ import {
   ibBarToOhlc,
 } from '../services/ibMappers.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
-import { notifyError, notifyCritical, notifyZoneEntry } from '../services/notify.js';
+import { notifyError, notifyCritical, notifyProfitZoneEntry } from '../services/notify.js';
 import { marketPeriodAt, tradingDaysHeld } from '../utils/marketHours.js';
 import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
@@ -420,7 +420,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   // change-detected upsert set — a fresh entry always changes zone_entered_at,
   // so it'll be in toUpsert, but the ping is best-effort and independent.
   for (const z of zoneNotifications) {
-    void notifyZoneEntry({ symbol: z.symbol, pnlPct: z.pnlPct, thresholdPct: threshold, viaGap: z.viaGap });
+    void notifyProfitZoneEntry({ symbol: z.symbol, pnlPct: z.pnlPct, thresholdPct: threshold, viaGap: z.viaGap });
   }
 
   if (toUpsert.length === 0) return;

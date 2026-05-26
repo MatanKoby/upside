@@ -27,7 +27,7 @@
 import { supabase } from '../services/supabase.js';
 import { getQuote } from '../services/finnhub.js';
 import { resolveOwnerUserId } from '../services/owner.js';
-import { notifyError, notifyZoneEntry } from '../services/notify.js';
+import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -135,7 +135,7 @@ async function tick(): Promise<void> {
           continue;
         }
         if (zone.notify && unrealizedPnlPct != null) {
-          void notifyZoneEntry({
+          void notifyProfitZoneEntry({
             symbol: p.symbol,
             pnlPct: unrealizedPnlPct,
             thresholdPct: threshold,

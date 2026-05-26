@@ -26,7 +26,7 @@ export interface ZoneFields {
 export interface ZoneResult {
   fields: ZoneFields;
   changed: boolean; // any field differs from `prev` → caller must persist it
-  notify: boolean;  // fresh entry past the cooldown → caller fires notifyZoneEntry
+  notify: boolean;  // fresh entry past the cooldown → caller fires notifyProfitZoneEntry
 }
 
 // Pure (save for the clock + market-period read). Given the prior zone fields,

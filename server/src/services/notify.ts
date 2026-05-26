@@ -180,12 +180,16 @@ export interface ApiFailureContext {
 
 /**
  * Profit-taking-zone entry alert (Batch 14c). Posts to the dedicated
- * DISCORD_WEBHOOK_ZONES channel. Unlike the error path, this has NO in-memory
- * cooldown — the 4h re-entry cooldown is owned by the caller (anchored on
- * `positions.last_zone_notification_at` so it survives restarts). No-ops when
- * the zones webhook isn't configured.
+ * DISCORD_WEBHOOK_ZONE_PROFIT channel. Unlike the error path, this has NO
+ * in-memory cooldown — the 4h re-entry cooldown is owned by the caller (anchored
+ * on `positions.last_zone_notification_at` so it survives restarts). No-ops when
+ * the channel isn't configured.
+ *
+ * One function per alert type (each its own channel) so notifications can be
+ * tuned independently — a future drawdown zone gets a parallel
+ * notifyDrawdownZoneEntry + DISCORD_WEBHOOK_ZONE_DRAWDOWN.
  */
-export function notifyZoneEntry(args: {
+export function notifyProfitZoneEntry(args: {
   symbol: string;
   pnlPct: number;
   thresholdPct: number;
@@ -195,7 +199,7 @@ export function notifyZoneEntry(args: {
   const gapSuffix = viaGap ? ' · entered outside regular hours (gap — often fades at open)' : '';
   const line = `🔔 ${symbol} entered profit-taking zone — P&L +${pnlPct.toFixed(2)}% (threshold +${thresholdPct}%)${gapSuffix}`;
   console.log(`[zone] ${line}`);
-  const url = env.discordZonesWebhookUrl;
+  const url = env.discordZoneProfitWebhookUrl;
   if (!url) return Promise.resolve();
   return postWebhook(url, {
     username: 'upside',
