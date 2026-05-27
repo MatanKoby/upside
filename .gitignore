@@ -11,7 +11,10 @@ desktop.ini
 *~
 
 # === Agent session state ===
-.claude/
+# Track shared agent tooling (.claude/skills, a shared settings.json) but keep
+# personal/local config out. settings.local.json is where Claude Code writes
+# this machine's permission grants — never commit it.
+.claude/settings.local.json
 .cursor/
 
 # === Node / npm / yarn / pnpm ===
