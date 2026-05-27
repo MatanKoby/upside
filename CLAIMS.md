@@ -20,6 +20,8 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
   - **FE:** render the playbook (legs + per-leg confidence + reasoning) in SignalSection; single pill on cards.
   - Expiry: intraday → end of session; multiday → window.
 - Honesty caveats baked into spec: specific ≠ accurate (raises 14b's value); model strength matters (revisit provider later, not in 14g).
+- **Implementation built + pushed (commits 8631379 code, ce6166f spec/schema).** Migration `010_playbook.sql` (signals.playbook jsonb + analyses.refined_from_analysis_id); `technicals.buildFeaturePack` (pivots / swing H-L / 20d+52w H-L / round magnets / ATR / SMA-EMA + price-vs-MA / structure / RSI+state / MACD+cross / Bollinger+%B+bandwidth / VWAP+distance / relative volume / position-relative); `llm.ts` direction-specific Zod + level-anchored single-direction prompt with zone trigger wired in; `signalEngine` rewritten (direction by holding, one analyses + one signals row, leg[0]→price_range_* via half-ATR band, horizon-driven expiry via new `marketHours.endOfRegularSessionEtIso`); FE SignalPill→single leg[0] price, SignalSection renders ordered legs (action·price/condition·confidence·why) under a horizon header (forward-compatible 14h status glyphs). Server+client typecheck + client build clean; `buildFeaturePack` runtime-checked on full/empty/3-bar inputs.
+- **Pending before Completed:** (1) apply migration `010_playbook.sql` to Supabase; (2) `./bin/upside rebuild` on the VPS (FE auto-deploys via Vercel); (3) live walkthrough — tap Analyze on a held position, confirm a SELL playbook with ≥1 leg renders + a single pill on the card. Then move this entry to Completed.
 
 ### Batch 14h — Live leg tracking + Refine follow-up (planned, after 14g)
 - Owner: claude (queued)
