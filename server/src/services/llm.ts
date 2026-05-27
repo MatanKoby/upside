@@ -180,10 +180,14 @@ function buildPrompt(input: LlmAnalysisInput, direction: SignalDirection, strict
   const motivations = (isSell ? SELL_MOTIVATIONS : BUY_MOTIVATIONS).map((m) => `"${m}"`).join(' | ');
 
   const zone = input.contextualTriggers.inProfitTakingZone;
+  // Neutral framing: state the fact, but make clear crossing the threshold is
+  // context, not a directive to sell now — holding / waiting / no_signal are
+  // all valid. (The earlier "take profit here, or hold?" wording biased the
+  // model toward an immediate sell.)
   const zoneLine = zone
-    ? `In profit-taking zone: P&L crossed +${zone.thresholdPct}% (currently ${zone.currentPnlPct.toFixed(2)}%)` +
+    ? `P&L has crossed +${zone.thresholdPct}% (currently ${zone.currentPnlPct.toFixed(2)}%)` +
       (zone.viaGap ? ', entered via an overnight gap (gaps often fade at open as others take profit).' : '.') +
-      ' You are being asked partly *because* of this — address it directly in the thesis: take profit here, or hold for more?'
+      ' Treat this as context, NOT a directive: do not sell at the current price merely because of it. Holding, waiting for a better level, or returning no signal are all valid — only act if the levels and indicators justify it.'
     : 'None.';
 
   const strictPreamble = strict
@@ -206,9 +210,17 @@ INSIDER ACTIVITY (Finnhub): ${JSON.stringify(input.insider ?? null)}
 CONTEXTUAL TRIGGERS:
 - Profit-taking zone: ${zoneLine}
 
-A "playbook" is an ordered list of legs. Leg 1 is the immediate move; later legs are the round-trip plan (e.g. ${
-    isSell ? 'sell high → rebuy on a pullback → resell into strength' : 'buy the pullback → add on confirmation → trim into resistance'
+A "playbook" is an ordered list of legs. Leg 1 is the first action in the plan; later legs are the round-trip continuation (e.g. ${
+    isSell ? 'sell into strength → rebuy on a pullback → resell higher' : 'buy the pullback → add on confirmation → trim into resistance'
   }). Each later leg should be LESS confident than the one before it.
+
+Leg 1 does NOT have to execute at the current price — it is usually a RESTING ORDER at a level you expect price to reach. Choose the leg price from the feature pack first, then set "condition" by where that level sits relative to the current price (${input.currentPrice ?? 'current'}):
+- level ABOVE current price → "at_or_above" (you are waiting for price to rise to it)
+- level BELOW current price → "at_or_below" (you are waiting for price to fall to it)
+- level AT/≈ current price → "about"
+This is geometric, not directional: e.g. taking profit into resistance above price is "at_or_above"; a protective exit below price is "at_or_below".
+
+Weigh the trend STRUCTURE before defaulting to mean-reversion: if the feature pack shows consolidation / a fresh range low / building relative volume (a coiling, pre-breakout setup), favour patience (a higher sell target, or no signal) over selling into a base.
 
 Choose ONE horizon for the whole playbook: "intraday" (plays out within today's session) or "multiday" (then set horizonWindow, e.g. "1-2 weeks"). Leg timing is implied by order, not predicted per leg.
 
