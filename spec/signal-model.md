@@ -88,7 +88,7 @@ type AnalysisOutput = {
     legs: Array<{                              // ordered, >= 1; leg[0] = the immediate move
       action: 'sell' | 'buy';                  // sell / rebuy / resell …
       price: number;                           // anchored to a feature-pack level
-      condition: 'at_or_above' | 'at_or_below' | 'about';  // "sell at/above 4.28"
+      condition: 'at_or_above' | 'at_or_below' | 'about';  // geometric vs. current price (see note)
       confidence: number;                      // 0-100 per leg (decays down the chain)
       reasoning: string;                       // the per-leg "why", citing an indicator/level
     }>;
@@ -97,6 +97,7 @@ type AnalysisOutput = {
 ```
 
 Notes:
+- **`condition` is geometric, not directional.** It's set by where the leg's level sits relative to the current price, not by the leg's action: level **above** price → `at_or_above` (waiting for a rise), **below** → `at_or_below` (waiting for a fall), `about` at price. So a SELL into resistance above price is `at_or_above`; a protective exit below price is `at_or_below`; a pullback BUY at support below price is `at_or_below`, while a breakout-continuation BUY above price is `at_or_above`. This avoids the trap of a target level being tagged with the wrong side and collapsing leg 1 into "act now" (the prompt states the rule explicitly). Leg 1 is usually a **resting order** at a level price is expected to reach — not necessarily an action at the current price.
 - **Horizon, not per-leg timing.** The playbook declares one horizon (intraday → plays out within the session; multiday → over `horizonWindow`). Leg timing is implied by order, not predicted per leg. Horizon drives expiry.
 - **Per-leg confidence** is honest about compounding uncertainty — leg 3 ("resell *after* a hypothetical rebuy") is necessarily less knowable than leg 1. It also nudges the model to evaluate each step. Absolute calibration is poor (that's what 14b measures); the *relative* decay is the useful part.
 
@@ -171,7 +172,7 @@ A position enters "profit-taking zone" when its unrealized P&L percent crosses a
 { inProfitTakingZone: { thresholdPct, currentPnlPct, viaGap } | null,
   // post-MVP: imminentEarnings, recentInsiderTransaction, unusualVolume, … }
 ```
-When non-null, the prompt addresses it directly ("you're being asked partly *because* this just crossed +2% into the zone via an overnight gap — take profit here or hold?"). **Wired into the prompt in Batch 14g** (the 14c-era deferral resolves here, since 14g rewrites the prompt anyway). Forward-compatible: new trigger types add prompt language without re-engineering.
+When non-null, the prompt surfaces it as **neutral context, not a directive**: it states the fact ("P&L has crossed +2%, entered via an overnight gap") and explicitly tells the model not to sell at the current price merely because of it — holding, waiting for a better level, or returning no signal are all valid. (An earlier "take profit here, or hold?" framing biased the model toward an immediate sell; corrected after the first live BBAI test.) **Wired into the prompt in Batch 14g** (the 14c-era deferral resolves here, since 14g rewrites the prompt anyway). Forward-compatible: new trigger types add prompt language without re-engineering.
 
 ## Realtime Update Architecture
 
