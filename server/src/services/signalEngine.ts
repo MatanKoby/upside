@@ -266,12 +266,16 @@ function legToRange(
   leg: PlaybookLeg,
   featurePack: FeaturePack,
 ): { low: number; high: number; optimal: number } {
+  // Round to 4 dp so band arithmetic (price ± atr/2) can't leak float noise
+  // like 4.1450000000000005 into the persisted columns.
+  const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
   const price = leg.price;
   const atr = featurePack.volatility.atr14;
   const band = atr != null && atr > 0 ? atr / 2 : Math.abs(price) * 0.01;
-  if (leg.condition === 'at_or_above') return { low: price, high: price + band, optimal: price };
-  if (leg.condition === 'at_or_below') return { low: price - band, high: price, optimal: price };
-  return { low: price - band, high: price + band, optimal: price };
+  const optimal = round4(price);
+  if (leg.condition === 'at_or_above') return { low: optimal, high: round4(price + band), optimal };
+  if (leg.condition === 'at_or_below') return { low: round4(price - band), high: optimal, optimal };
+  return { low: round4(price - band), high: round4(price + band), optimal };
 }
 
 // Inserts the analyses row, supersedes prior signals, inserts the one new
