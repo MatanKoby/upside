@@ -3,8 +3,32 @@ import { supabase } from '../services/supabase';
 
 export type SignalDirection = 'sell' | 'buy' | 'no_signal';
 
-// One active (non-superseded) signal row — a single direction of the latest
-// unified analysis.
+// One step of a playbook: an action at a level, with its own confidence + why.
+// `status`/`actual` are runtime fields written by Batch 14h live tracking
+// (absent until then).
+export interface PlaybookLeg {
+  action: 'sell' | 'buy';
+  price: number;
+  condition: 'at_or_above' | 'at_or_below' | 'about';
+  confidence: number;
+  reasoning: string;
+  status?: 'pending' | 'hit' | 'missed';
+  actual?: number | null;
+}
+
+// The full single-direction playbook (mirrors the `playbook jsonb` column).
+export interface Playbook {
+  direction: 'sell' | 'buy';
+  signalQuality: number;
+  motivation: string;
+  horizon: 'intraday' | 'multiday';
+  horizonWindow: string | null;
+  legs: PlaybookLeg[];
+}
+
+// One active (non-superseded) signal row — the single-direction playbook of the
+// latest analysis. leg[0] is mirrored into priceRange*/optimalPrice; the full
+// ordered legs + horizon live on `playbook`.
 export interface ActiveSignal {
   id: string;
   analysisId: string | null;
@@ -15,6 +39,7 @@ export interface ActiveSignal {
   priceRangeHigh: number | null;
   optimalPrice: number | null;
   rationale: string | null;
+  playbook: Playbook | null;
   analyzedAt: string;
   expiresAt: string | null;
 }
@@ -52,6 +77,7 @@ interface DbSignal {
   price_range_high: number | string | null;
   optimal_price: number | string | null;
   rationale: string | null;
+  playbook: Playbook | null;
   analyzed_at: string;
   expires_at: string | null;
 }
@@ -67,6 +93,7 @@ function rowToSignal(r: DbSignal): ActiveSignal {
     priceRangeHigh: num(r.price_range_high),
     optimalPrice: num(r.optimal_price),
     rationale: r.rationale,
+    playbook: r.playbook ?? null,
     analyzedAt: r.analyzed_at,
     expiresAt: r.expires_at,
   };

@@ -710,6 +710,62 @@
   color: var(--text-secondary);
 }
 
+/* --- Playbook (Batch 14g): ordered legs under one horizon --- */
+.td-playbook-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+}
+.td-playbook-horizon {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+.td-playbook-legs {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+.td-playbook-leg {
+  padding-left: var(--sp-8);
+  border-left: 2px solid var(--border);
+}
+.td-playbook-leg-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+}
+.td-playbook-leg-action {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+}
+.td-playbook-leg-action-sell { color: var(--pill-sell-text); }
+.td-playbook-leg-action-buy  { color: var(--pill-buy-text); }
+.td-playbook-leg-price {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+.td-playbook-leg-conf {
+  margin-left: auto;
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+.td-playbook-leg-why {
+  margin: 2px 0 0;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+.td-playbook-leg-status { font-size: var(--fs-11); }
+.td-playbook-leg-status-hit     { color: var(--pill-buy-text); }
+.td-playbook-leg-status-missed  { color: var(--pill-sell-text); }
+.td-playbook-leg-status-pending { color: var(--text-tertiary); }
+
 .td-signal-actions {
   display: flex;
   align-items: center;

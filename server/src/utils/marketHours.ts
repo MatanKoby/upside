@@ -99,6 +99,22 @@ export function etDateString(now: Date = new Date()): string {
 }
 
 /**
+ * ISO timestamp of today's regular-session close (16:00 ET) for `now`'s ET
+ * calendar date. Used as the expiry for an `intraday` playbook. DST-correct:
+ * derives the ET↔UTC offset from `now` itself rather than assuming -4/-5.
+ */
+export function endOfRegularSessionEtIso(now: Date = new Date()): string {
+  const t = partsInTimezone(now);
+  // Treat the ET wall-clock components as if UTC, then subtract the difference
+  // from the real instant to recover the ET offset (negative for ET).
+  const wallAsUtc = Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute);
+  const nowMin = Math.floor(now.getTime() / 60000) * 60000;
+  const offsetMs = wallAsUtc - nowMin;
+  const closeWallAsUtc = Date.UTC(t.year, t.month - 1, t.day, 16, 0);
+  return new Date(closeWallAsUtc - offsetMs).toISOString();
+}
+
+/**
  * US trading days from `entry` through `now`, both ET-calendar-day inclusive.
  * Returns 1 on the entry day itself (so the %/day metric never divides by 0),
  * incrementing each subsequent weekday that isn't a market holiday. Returns 0

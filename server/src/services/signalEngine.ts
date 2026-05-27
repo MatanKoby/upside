@@ -1,8 +1,11 @@
-// Signal engine (Batch 14a) — orchestrates a single unified analysis.
+// Signal engine (Batch 14g) — orchestrates a single-direction playbook analysis.
 //
-// Pulls IB price/history + Finnhub context, computes indicators, asks the LLM
-// for a unified SELL+BUY read, then persists one `analyses` row plus 1-2
-// `signals` rows and supersedes any prior analysis for the same (user, symbol).
+// Direction is chosen by holding status (held → SELL playbook, not-held → BUY).
+// Pulls IB price/history + Finnhub context, computes the deterministic feature
+// pack, asks the LLM for one direction's playbook, then persists one `analyses`
+// row plus exactly ONE `signals` row (leg[0] mirrored into price_range_*; the
+// full ordered legs + horizon in `playbook jsonb`) and supersedes any prior
+// analysis for the same (user, symbol).
 //
 // Designed to run fire-and-forget from the route: it never throws to the
 // caller and always releases the `analysis_locks` row in `finally`. Failures
@@ -13,10 +16,18 @@ import { supabase } from './supabase.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions } from './finnhub.js';
-import { rsi, macd, bollinger, vwap } from './technicals.js';
+import { buildFeaturePack, type Bars, type FeaturePack } from './technicals.js';
 import { incrLlmCallsToday } from './redis.js';
-import { LlmError, type LlmAnalysisInput, type LlmAnalysisOutput } from './llm.js';
+import {
+  LlmError,
+  type LlmAnalysisInput,
+  type LlmAnalysisOutput,
+  type SignalDirection,
+  type PlaybookLeg,
+} from './llm.js';
 import { activeLlm } from './llmConfig.js';
+import { endOfRegularSessionEtIso } from '../utils/marketHours.js';
+import type { RawIbHistory } from '../types/index.js';
 
 const DEFAULT_EXPIRY_DAYS = 7;
 
@@ -34,13 +45,16 @@ interface RunOpts {
   lockId: string;
 }
 
-// Pulls the largest day-count out of a free-text timeframe ("3-7 days" → 7),
-// falling back to the default horizon.
-function timeframeDays(timeframe: string | undefined): number {
-  if (!timeframe) return DEFAULT_EXPIRY_DAYS;
-  const nums = timeframe.match(/\d+/g)?.map(Number) ?? [];
+// Largest day-count out of a free-text window ("1-2 weeks" → 14, "3 days" → 3),
+// falling back to the default horizon. Recognises weeks/months loosely.
+function windowDays(window: string | null | undefined): number {
+  if (!window) return DEFAULT_EXPIRY_DAYS;
+  const nums = window.match(/\d+/g)?.map(Number) ?? [];
   const max = nums.length ? Math.max(...nums) : DEFAULT_EXPIRY_DAYS;
-  return max > 0 ? max : DEFAULT_EXPIRY_DAYS;
+  if (max <= 0) return DEFAULT_EXPIRY_DAYS;
+  if (/month/i.test(window)) return max * 30;
+  if (/week/i.test(window)) return max * 7;
+  return max; // days (or unitless → treat as days)
 }
 
 function isoPlusDays(fromIso: string, days: number): string {
@@ -50,6 +64,18 @@ function isoPlusDays(fromIso: string, days: number): string {
 function num(v: unknown): number | null {
   const n = typeof v === 'number' ? v : parseFloat(String(v));
   return Number.isFinite(n) ? n : null;
+}
+
+// RawIbHistory bars → column-wise Bars for the feature pack.
+function toBars(hist: RawIbHistory | null): Bars {
+  const d = hist?.data ?? [];
+  return {
+    o: d.map((b) => b.o),
+    h: d.map((b) => b.h),
+    l: d.map((b) => b.l),
+    c: d.map((b) => b.c),
+    v: d.map((b) => b.v),
+  };
 }
 
 export async function runAnalysis(opts: RunOpts): Promise<void> {
@@ -72,12 +98,18 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       .eq('user_id', userId)
       .maybeSingle();
 
+    // --- Direction by holding status -------------------------------------
+    // Held → SELL playbook; not held (watchlist candidate) → BUY. MVP is
+    // held-only, so every analyze today is a SELL.
+    const isHeld = !!position && (num(position.shares) ?? 0) > 0;
+    const direction: SignalDirection = isHeld ? 'sell' : 'buy';
+
     // --- Pre-LLM filters (skip entirely) ---------------------------------
     if ((prefs?.suppressed_symbols ?? []).includes(sym)) {
       console.log(`[signalEngine] ${sym} suppressed — skipping`);
       return;
     }
-    if (position) {
+    if (isHeld) {
       const minMktValue = Number(prefs?.signal_min_market_value ?? 1000);
       const mktValue =
         num(position.market_value) ??
@@ -131,31 +163,22 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       companyName = companyName ?? contractRow.company_name ?? null;
     }
 
-    // --- IB history → indicators -----------------------------------------
-    const daily = await ibHistory(conid, '1y', '1d');
-    const intraday = await ibHistory(conid, '1d', '5min');
-    const dailyCloses = (daily?.data ?? []).map((b) => b.c);
-    const indicatorSnapshot: Record<string, unknown> = {
-      rsi14: rsi(dailyCloses),
-      macd: macd(dailyCloses),
-      bollinger: bollinger(dailyCloses),
-      vwap: intraday
-        ? vwap(
-            intraday.data.map((b) => b.h),
-            intraday.data.map((b) => b.l),
-            intraday.data.map((b) => b.c),
-            intraday.data.map((b) => b.v),
-          )
-        : null,
-      lastClose: dailyCloses.length ? dailyCloses[dailyCloses.length - 1] : null,
-      dailyBars: dailyCloses.length,
-    };
-
     // --- Current price (IB snapshot, fall back to stored price) ----------
     let currentPrice: number | null = num(position?.current_price);
     const snap = await ibSnapshot([conid]).catch(() => []);
     const live = num(snap[0]?.['31']);
     if (live != null) currentPrice = live;
+
+    // --- IB history → feature pack (the LLM's grounding) -----------------
+    const daily = await ibHistory(conid, '1y', '1d');
+    const intraday = await ibHistory(conid, '1d', '5min');
+    const avgCost = isHeld ? num(position.avg_cost) : null;
+    const featurePack = buildFeaturePack({
+      daily: toBars(daily),
+      intraday: intraday ? toBars(intraday) : null,
+      currentPrice,
+      avgCost,
+    });
 
     // --- Finnhub context (each source isolated) --------------------------
     const to = new Date().toISOString().slice(0, 10);
@@ -166,9 +189,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       insiderTransactions(sym).catch(() => null),
     ]);
 
-    // --- Contextual triggers (profit-taking zone fields land in 14c) -----
-    // `position` is selected with `*`, so pre-14c the zone columns are simply
-    // absent → inZone is false. Null-safe by construction.
+    // --- Contextual triggers (profit-taking zone) ------------------------
     const thresholdPct = Number(prefs?.profit_zone_threshold_pct ?? 2.0);
     const zoneEnteredAt = (position as Record<string, unknown> | null)?.['zone_entered_at'];
     const inZone = zoneEnteredAt != null;
@@ -185,26 +206,26 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       companyName,
       conid,
       currentPrice,
-      position: position
+      position: isHeld
         ? {
             shares: num(position.shares) ?? 0,
             avgCost: num(position.avg_cost) ?? 0,
             unrealizedPnlPct: num(position.unrealized_pnl_pct),
           }
         : null,
-      indicatorSnapshot,
+      featurePack,
       news,
       earnings,
       insider,
       contextualTriggers: { inProfitTakingZone },
     };
 
-    // --- LLM (one unified call counts once; retry once on malformed) -----
+    // --- LLM (one call counts once; retry once on malformed) -------------
     await incrLlmCallsToday();
     const provider = await activeLlm();
     let output: LlmAnalysisOutput;
     try {
-      output = await provider.analyze(input);
+      output = await provider.analyze(input, { direction });
     } catch (first) {
       // Only a malformed body is worth re-prompting. A rate-limit / outage /
       // bad-key won't be fixed by asking again, so fail soft immediately with
@@ -212,25 +233,23 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       const kind = first instanceof LlmError ? first.kind : 'malformed';
       if (kind !== 'malformed') {
         void notifyError('signalEngine.llm', `LLM ${kind} for ${sym}: ${(first as Error).message}`, first);
-        await persistNoSignal(userId, sym, conid, NON_MALFORMED_REASON[kind], indicatorSnapshot);
+        await persistNoSignal(userId, sym, conid, NON_MALFORMED_REASON[kind], featurePack);
         return;
       }
       try {
-        output = await provider.analyze(input, { strict: true });
+        output = await provider.analyze(input, { direction, strict: true });
       } catch (second) {
-        // Malformed even after the stricter retry — surface the raw body (carried
-        // on the error) to #errors; it's a real failure for our use case.
         void notifyError(
           'signalEngine.llm',
           `LLM malformed for ${sym} after retry: ${(second as Error).message}`,
           second,
         );
-        await persistNoSignal(userId, sym, conid, 'LLM response malformed', indicatorSnapshot);
+        await persistNoSignal(userId, sym, conid, 'LLM response malformed', featurePack);
         return;
       }
     }
 
-    await persistAnalysis(userId, sym, conid, indicatorSnapshot, output);
+    await persistAnalysis(userId, sym, conid, featurePack, output);
   } catch (err) {
     void notifyError('signalEngine.run', `${sym}: ${(err as Error).message}`, err);
   } finally {
@@ -238,21 +257,43 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
   }
 }
 
-// Inserts the analyses row, supersedes prior signals, inserts new signal rows.
+// Maps leg[0] (a single price + condition) onto the legacy range columns so the
+// deferred range-notifications + accuracy tracking keep working against the
+// immediate action. The band is half-ATR (falls back to 1% of price), placed
+// per the condition: at_or_above → [price, price+band]; at_or_below →
+// [price-band, price]; about → centred.
+function legToRange(
+  leg: PlaybookLeg,
+  featurePack: FeaturePack,
+): { low: number; high: number; optimal: number } {
+  const price = leg.price;
+  const atr = featurePack.volatility.atr14;
+  const band = atr != null && atr > 0 ? atr / 2 : Math.abs(price) * 0.01;
+  if (leg.condition === 'at_or_above') return { low: price, high: price + band, optimal: price };
+  if (leg.condition === 'at_or_below') return { low: price - band, high: price, optimal: price };
+  return { low: price - band, high: price + band, optimal: price };
+}
+
+// Inserts the analyses row, supersedes prior signals, inserts the one new
+// signal row (or a no_signal row when the playbook is null).
 async function persistAnalysis(
   userId: string,
   sym: string,
   conid: number | null,
-  indicatorSnapshot: Record<string, unknown>,
+  featurePack: FeaturePack,
   output: LlmAnalysisOutput,
 ): Promise<void> {
   const db = supabase();
   const analyzedAt = new Date().toISOString();
+  const sig = output.signal;
 
-  const sellDays = output.sellSignal ? timeframeDays(output.sellSignal.timeframe) : 0;
-  const buyDays = output.buySignal ? timeframeDays(output.buySignal.timeframe) : 0;
-  const maxDays = Math.max(sellDays, buyDays, output.sellSignal || output.buySignal ? 0 : DEFAULT_EXPIRY_DAYS);
-  const analysisExpiresAt = isoPlusDays(analyzedAt, maxDays || DEFAULT_EXPIRY_DAYS);
+  // Horizon-driven expiry: intraday → end of today's regular session; multiday
+  // → analyzed_at + parsed window; no_signal → default horizon.
+  const expiresAt = !sig
+    ? isoPlusDays(analyzedAt, DEFAULT_EXPIRY_DAYS)
+    : sig.horizon === 'intraday'
+      ? endOfRegularSessionEtIso(new Date(analyzedAt))
+      : isoPlusDays(analyzedAt, windowDays(sig.horizonWindow));
 
   const { data: analysisRow, error: aErr } = await db
     .from('analyses')
@@ -260,10 +301,10 @@ async function persistAnalysis(
       user_id: userId,
       symbol: sym,
       conid,
-      indicator_snapshot: { values: indicatorSnapshot, readings: output.indicatorAnalysis },
+      indicator_snapshot: { values: featurePack, readings: output.indicatorAnalysis },
       reasoning: output.reasoning,
       analyzed_at: analyzedAt,
-      expires_at: analysisExpiresAt,
+      expires_at: expiresAt,
     })
     .select('analysis_id')
     .single();
@@ -275,7 +316,7 @@ async function persistAnalysis(
 
   // Whole-analysis supersede: every prior non-superseded signal for this
   // (user, symbol) points at the new analysis. Runs before inserting the new
-  // rows so it can't supersede them.
+  // row so it can't supersede itself.
   await db
     .from('signals')
     .update({ superseded_by_analysis_id: analysisId })
@@ -283,45 +324,35 @@ async function persistAnalysis(
     .eq('symbol', sym)
     .is('superseded_by_analysis_id', null);
 
-  const rows: Record<string, unknown>[] = [];
-  if (output.sellSignal) {
-    const s = output.sellSignal;
-    rows.push({
+  let row: Record<string, unknown>;
+  if (sig && sig.legs.length > 0) {
+    const leg0 = sig.legs[0]!;
+    const range = legToRange(leg0, featurePack);
+    row = {
       user_id: userId,
       symbol: sym,
       conid,
       analysis_id: analysisId,
-      signal_type: 'sell',
-      signal_quality: Math.round(s.signalQuality),
-      price_range_low: s.priceRangeLow,
-      price_range_high: s.priceRangeHigh,
-      optimal_price: s.optimalPrice,
-      motivation: s.motivation,
-      rationale: s.rationale,
+      signal_type: sig.direction,
+      signal_quality: Math.round(sig.signalQuality),
+      price_range_low: range.low,
+      price_range_high: range.high,
+      optimal_price: range.optimal,
+      motivation: sig.motivation,
+      rationale: leg0.reasoning,
+      playbook: {
+        direction: sig.direction,
+        signalQuality: Math.round(sig.signalQuality),
+        motivation: sig.motivation,
+        horizon: sig.horizon,
+        horizonWindow: sig.horizonWindow,
+        legs: sig.legs,
+      },
       analyzed_at: analyzedAt,
-      expires_at: isoPlusDays(analyzedAt, sellDays),
-    });
-  }
-  if (output.buySignal) {
-    const b = output.buySignal;
-    rows.push({
-      user_id: userId,
-      symbol: sym,
-      conid,
-      analysis_id: analysisId,
-      signal_type: 'buy',
-      signal_quality: Math.round(b.signalQuality),
-      price_range_low: b.priceRangeLow,
-      price_range_high: b.priceRangeHigh,
-      optimal_price: b.optimalPrice,
-      motivation: b.motivation,
-      rationale: b.rationale,
-      analyzed_at: analyzedAt,
-      expires_at: isoPlusDays(analyzedAt, buyDays),
-    });
-  }
-  if (rows.length === 0) {
-    rows.push({
+      expires_at: expiresAt,
+    };
+  } else {
+    row = {
       user_id: userId,
       symbol: sym,
       conid,
@@ -329,27 +360,26 @@ async function persistAnalysis(
       signal_type: 'no_signal',
       signal_quality: 0,
       analyzed_at: analyzedAt,
-      expires_at: analysisExpiresAt,
-    });
+      expires_at: expiresAt,
+    };
   }
 
-  const { error: sErr } = await db.from('signals').insert(rows);
-  if (sErr) void notifyError('signalEngine.persist', `insert signals failed for ${sym}: ${sErr.message}`);
+  const { error: sErr } = await db.from('signals').insert(row);
+  if (sErr) void notifyError('signalEngine.persist', `insert signal failed for ${sym}: ${sErr.message}`);
 }
 
-// Writes a single no_signal row (unresolved contract / malformed LLM) so the
+// Writes a single no_signal row (unresolved contract / LLM failure) so the
 // failure is visible in history rather than silently swallowed.
 async function persistNoSignal(
   userId: string,
   sym: string,
   conid: number | null,
   reasoning: string,
-  indicatorSnapshot: Record<string, unknown>,
+  featurePack: FeaturePack | Record<string, never>,
 ): Promise<void> {
-  await persistAnalysis(userId, sym, conid, indicatorSnapshot, {
+  await persistAnalysis(userId, sym, conid, featurePack as FeaturePack, {
     indicatorAnalysis: {},
     reasoning,
-    sellSignal: null,
-    buySignal: null,
+    signal: null,
   });
 }

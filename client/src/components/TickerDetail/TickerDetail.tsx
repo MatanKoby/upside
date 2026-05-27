@@ -40,8 +40,7 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
             type={s.type}
             quality={s.quality}
             motivation={s.motivation}
-            low={s.priceRangeLow}
-            high={s.priceRangeHigh}
+            price={s.playbook?.legs[0]?.price ?? s.optimalPrice}
           />
         ))}
       </span>

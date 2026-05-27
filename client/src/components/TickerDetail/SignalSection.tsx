@@ -34,18 +34,67 @@ async function postAnalyze(symbol: string, force: boolean): Promise<PostResult> 
   return { status: res.status, reason: body.reason, lastAnalyzedAt: body.lastAnalyzedAt };
 }
 
-function DirectionBlock({ signal }: { signal: ActiveSignal }) {
+const CONDITION_LABEL: Record<string, string> = {
+  at_or_above: 'at/above',
+  at_or_below: 'at/below',
+  about: '≈',
+};
+
+const LEG_STATUS_GLYPH: Record<string, string> = { hit: '✓', missed: '✗', pending: '⋯' };
+
+function horizonLabel(signal: ActiveSignal): string | null {
+  const pb = signal.playbook;
+  if (!pb) return null;
+  if (pb.horizon === 'intraday') return 'Intraday';
+  return pb.horizonWindow ? `Multiday · ${pb.horizonWindow}` : 'Multiday';
+}
+
+// The single-direction playbook: direction + quality + horizon header, the one
+// signal pill, then the ordered legs (each: action · price/condition ·
+// confidence · why). Live per-leg status (14h) renders only when present.
+function PlaybookView({ signal }: { signal: ActiveSignal }) {
   if (signal.type === 'no_signal') return null;
+  const pb = signal.playbook;
+  const legs = pb?.legs ?? [];
+  const hz = horizonLabel(signal);
+
   return (
     <div className={`td-signal-direction td-signal-direction-${signal.type}`}>
-      <SignalPill
-        type={signal.type}
-        quality={signal.quality}
-        motivation={signal.motivation}
-        low={signal.priceRangeLow}
-        high={signal.priceRangeHigh}
-      />
-      {signal.rationale && <p className="td-signal-rationale">{signal.rationale}</p>}
+      <div className="td-playbook-head">
+        <SignalPill
+          type={signal.type}
+          quality={signal.quality}
+          motivation={signal.motivation}
+          price={legs[0]?.price ?? signal.optimalPrice}
+        />
+        {hz && <span className="td-playbook-horizon">⏱ {hz}</span>}
+      </div>
+
+      {legs.length > 0 ? (
+        <ol className="td-playbook-legs">
+          {legs.map((leg, i) => (
+            <li key={i} className="td-playbook-leg">
+              <div className="td-playbook-leg-line">
+                {leg.status && (
+                  <span className={`td-playbook-leg-status td-playbook-leg-status-${leg.status}`}>
+                    {LEG_STATUS_GLYPH[leg.status] ?? '⋯'}
+                  </span>
+                )}
+                <span className={`td-playbook-leg-action td-playbook-leg-action-${leg.action}`}>
+                  {leg.action.toUpperCase()}
+                </span>
+                <span className="td-playbook-leg-price">
+                  {CONDITION_LABEL[leg.condition] ?? ''} ${leg.price}
+                </span>
+                <span className="td-playbook-leg-conf">{Math.round(leg.confidence)}%</span>
+              </div>
+              <p className="td-playbook-leg-why">{leg.reasoning}</p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        signal.rationale && <p className="td-signal-rationale">{signal.rationale}</p>
+      )}
     </div>
   );
 }
@@ -126,12 +175,14 @@ export function SignalSection({ symbol, signalsResult }: { symbol: string; signa
 
       {signals.some((s) => s.type !== 'no_signal') ? (
         <div className="td-signal-directions">
-          {signals.map((s) => (
-            <DirectionBlock key={s.id} signal={s} />
-          ))}
+          {signals
+            .filter((s) => s.type !== 'no_signal')
+            .map((s) => (
+              <PlaybookView key={s.id} signal={s} />
+            ))}
         </div>
       ) : (
-        analysis && <p className="td-signal-empty">No actionable signal in either direction.</p>
+        analysis && <p className="td-signal-empty">No actionable signal — held position, no clear setup.</p>
       )}
 
       {dailyLimit && (
