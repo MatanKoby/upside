@@ -16,27 +16,28 @@ What's stored where, in what shape, with what semantics.
     user_id uuid,
     symbol text,
     conid bigint,
-    indicator_snapshot jsonb,
+    indicator_snapshot jsonb,            -- { values: featurePack, readings: indicatorAnalysis }
     reasoning text,
     analyzed_at timestamptz,
-    expires_at timestamptz
+    expires_at timestamptz,
+    refined_from_analysis_id uuid null   -- set by a Refine (14h); links to the analysis it revised
   }
   ```
-  Lets multiple `signals` rows from the same analysis share context without duplication.
+  Lets the analysis's `signals` row share context without duplication. (Migration `010_playbook.sql` added `refined_from_analysis_id`.)
 
-- **`signals`** — one row per *direction* of a unified analysis. Linked to its parent via `analysis_id`. A single unified analysis can produce 0, 1, or 2 signal rows (SELL, BUY, both, or one no-signal row). Each row carries:
+- **`signals`** — **one** row per analysis (single-direction playbook, Batch 14g — down from the 0-2 of the unified model). Linked to its parent via `analysis_id`. Direction is chosen by holding status (held → `sell`, not-held → `buy`). Each row carries:
   - `signal_type` (`'sell' | 'buy' | 'no_signal'`)
-  - `signal_quality` (0-100)
+  - `signal_quality` (0-100 headline conviction)
   - `motivation` (per-type enum: SELL → `'take_profit' | 'derisk' | 'avoid_downside'`; BUY → `'pullback_entry' | 'breakout_continuation' | 'value'`; null for no_signal)
-  - `price_range_low`, `price_range_high`
-  - `optimal_price`
-  - `rationale` — direction-specific reasoning bullet (the overall narrative is on `analyses.reasoning`)
+  - `price_range_low`, `price_range_high`, `optimal_price` — **leg[0]** (the immediate move) mapped onto these legacy columns (a half-ATR band around the leg price), so the deferred range-notifications + accuracy tracking keep working against the actionable price
+  - `playbook jsonb` (Batch 14g) — the full ordered legs + horizon: `{ direction, signalQuality, motivation, horizon: 'intraday'|'multiday', horizonWindow, legs: [{ action, price, condition, confidence, reasoning, status?, actual? }] }`. Per-leg `status`/`actual` are written by 14h live tracking. Null on a no_signal row.
+  - `rationale` — leg[0]'s reasoning bullet (the overall narrative is on `analyses.reasoning`)
   - Accuracy fields: `actual_max_since_analysis`, `actual_min_since_analysis`, `entered_range_at`, `exited_range_at`
   - `acted_on_at` (user marked "I acted on this")
-  - `superseded_by_analysis_id` (FK to a newer `analyses.analysis_id`, not a newer signal — superseding is whole-analysis, not per-direction)
-  
-  Mutability rules in `signal-model.md` → Mutability rules.
-  
+  - `superseded_by_analysis_id` (FK to a newer `analyses.analysis_id` — superseding is whole-analysis)
+
+  One signal per analysis makes supersede trivially clean. Mutability rules in `signal-model.md` → Mutability rules.
+
   Index: `signals(user_id, symbol, analyzed_at desc)` for the "latest non-superseded" query.
 
 - **`user_preferences`** — one row per user, keyed by Supabase user ID:
