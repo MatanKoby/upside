@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bin/upside-errors — read recent messages from the Discord error channels.
 
-Companion to bin/upside-ib. Uses the bot token in .upside-discord-token
+Companion to bin/upside-ib. Uses the bot token in .secrets/discord-token
 (Discord Developer Portal -> Bot -> Reset Token) to read channel history via
 the Discord REST API, so debugging doesn't require copy-pasting from Discord.
 
@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 API = "https://discord.com/api/v10"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOKEN_FILE = os.path.join(ROOT, ".upside-discord-token")
+TOKEN_FILE = os.path.join(ROOT, ".secrets/discord-token")
 
 _token = None
 

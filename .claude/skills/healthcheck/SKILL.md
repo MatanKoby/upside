@@ -17,7 +17,7 @@ is only reachable through the rotating Cloudflare Quick Tunnel, whose URL lives
 in `app_config.api_url` — so discover it first, then curl:
 
 ```bash
-API_URL=$(psql "$(cat .upside-readonly-db)" -tAc "select value from app_config where key='api_url';")
+API_URL=$(psql "$(cat .secrets/readonly-db)" -tAc "select value from app_config where key='api_url';")
 curl -s --max-time 10 "$API_URL/healthz" | jq .
 ```
 
@@ -52,13 +52,13 @@ only takes over then); `ib` means it's connected.
 
 ```bash
 # Pollers alive + which source is winning.
-psql "$(cat .upside-readonly-db)" -P pager=off -c \
+psql "$(cat .secrets/readonly-db)" -P pager=off -c \
   "select symbol, price_source, last_price_update_at, now() - last_price_update_at as age \
    from positions order by last_price_update_at desc nulls last limit 5;"
 
 # Recent external-API failures (IB / Finnhub), last 30 min. A burst of status-0
 # rows on iserver/marketdata/* is IB-down's signature (calls throw / time out).
-psql "$(cat .upside-readonly-db)" -P pager=off -c \
+psql "$(cat .secrets/readonly-db)" -P pager=off -c \
   "select captured_at, provider, endpoint, status from external_api_metrics \
    where succeeded = false and captured_at > now() - interval '30 minutes' \
    order by captured_at desc limit 20;"

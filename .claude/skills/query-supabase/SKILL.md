@@ -11,12 +11,12 @@ safe to run without confirmation.
 
 ## How to run a query
 
-The connection string lives in the gitignored repo-root file `.upside-readonly-db`.
-**Never print it** — it contains a password. Pass it to psql via command
+The connection string lives in the gitignored `.secrets/readonly-db` file
+(repo-root-relative). **Never print it** — it contains a password. Pass it to psql via command
 substitution so the secret never lands in the command text or output:
 
 ```bash
-psql "$(cat .upside-readonly-db)" -P pager=off -c "select symbol, current_price, price_source from positions order by symbol;"
+psql "$(cat .secrets/readonly-db)" -P pager=off -c "select symbol, current_price, price_source from positions order by symbol;"
 ```
 
 - `-P pager=off` — stops psql blocking on an interactive pager.
@@ -26,7 +26,7 @@ psql "$(cat .upside-readonly-db)" -P pager=off -c "select symbol, current_price,
 Quick sanity check that access works:
 
 ```bash
-psql "$(cat .upside-readonly-db)" -tAc "select current_user;"   # → upside_readonly
+psql "$(cat .secrets/readonly-db)" -tAc "select current_user;"   # → upside_readonly
 ```
 
 ## Connection details (reference / if the creds file is lost)
@@ -46,10 +46,11 @@ psql "$(cat .upside-readonly-db)" -tAc "select current_user;"   # → upside_rea
   provides no IPv6 — link-local only, no default route — so WSL mirrored mode can't
   help). Use the pooler, not the direct connection.
 
-## Recreating `.upside-readonly-db` if missing
+## Recreating `.secrets/readonly-db` if missing
 
 ```bash
-echo 'postgresql://upside_readonly.qkvegpfzstylyekmusnk:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' > .upside-readonly-db
+mkdir -p .secrets
+echo 'postgresql://upside_readonly.qkvegpfzstylyekmusnk:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' > .secrets/readonly-db
 ```
 
 The `upside_readonly` password is hex-only (no URL-special chars). If lost, rotate it

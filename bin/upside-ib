@@ -30,7 +30,7 @@
 #   1. Open Upside in browser (laptop Chrome), log in.
 #   2. DevTools → Application → Local Storage → https://upside-client.vercel.app
 #      → expand sb-<ref>-auth-token → copy the `access_token` value.
-#   3. echo 'paste-the-token' > .upside-token
+#   3. echo 'paste-the-token' > .secrets/supabase-jwt
 #
 # JWTs expire after ~1 hour. Re-paste when calls start returning 401.
 
@@ -40,7 +40,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ---- Token ----
-TOKEN_FILE=".upside-token"
+TOKEN_FILE=".secrets/supabase-jwt"
 if [[ ! -f "$TOKEN_FILE" ]]; then
   cat >&2 <<EOF
 Missing $TOKEN_FILE.
@@ -49,7 +49,7 @@ One-time setup:
   1. Log into Upside in your browser.
   2. DevTools → Application → Local Storage → https://upside-client.vercel.app
      → expand sb-<ref>-auth-token → copy the access_token value.
-  3. echo 'paste-the-token' > .upside-token
+  3. echo 'paste-the-token' > .secrets/supabase-jwt
 EOF
   exit 2
 fi

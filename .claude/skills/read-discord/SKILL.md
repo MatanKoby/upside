@@ -1,6 +1,6 @@
 ---
 name: read-discord
-description: Read messages from the Upside Discord server via the provisioned bot — the #errors / #errors-critical channels (API failures with their response bodies), #profit-zone (zone alerts), #general. Use to debug an error seen in the channel ("why did X at time T happen?"), triage what's erroring, or check what alerts fired. The bot token is in .upside-discord-token. Read-only (GET only); safe to run freely.
+description: Read messages from the Upside Discord server via the provisioned bot — the #errors / #errors-critical channels (API failures with their response bodies), #profit-zone (zone alerts), #general. Use to debug an error seen in the channel ("why did X at time T happen?"), triage what's erroring, or check what alerts fired. The bot token is in .secrets/discord-token. Read-only (GET only); safe to run freely.
 ---
 
 # Read the Upside Discord (bot, read-only)
@@ -12,12 +12,12 @@ debugging an error; use the DB (`query-supabase`) only to build a timeline
 around it. (Earlier mistake: don't reconstruct from the DB and assume the
 channel is uninformative — read the channel.)
 
-The bot token lives in the gitignored repo-root file `.upside-discord-token`
-(raw bot token, like `.upside-readonly-db`). **Never print it** — pass it via
+The bot token lives in the gitignored `.secrets/discord-token` file
+(raw bot token, like `.secrets/readonly-db`). **Never print it** — pass it via
 command substitution so it never lands in the command text or output:
 
 ```bash
-TOKEN=$(cat .upside-discord-token | tr -d '\r\n')
+TOKEN=$(cat .secrets/discord-token | tr -d '\r\n')
 ```
 
 Only GET is used here — reading, never posting (the app posts via webhooks).

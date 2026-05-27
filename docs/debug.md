@@ -84,7 +84,7 @@ cannot mutate account state:
 ### Usage
 
 ```bash
-# Via the helper (reads .upside-token, discovers the api URL, captures output):
+# Via the helper (reads .secrets/supabase-jwt, discovers the api URL, captures output):
 ./bin/upside-ib --post '{"acctIds":["U19950548"],"conids":[530965695],"currency":"USD","days":"90"}' \
   /v1/api/pa/transactions
 #   → captures/pa/transactions/POST/latest.json

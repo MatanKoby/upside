@@ -68,24 +68,18 @@ logs/
 # into the IBeam container at /run/secrets/. Never commit them.
 /secrets/
 
-# === Postgres connection string for the read-only inspection role ===
-# Single line: postgresql://upside_readonly:<password>@<host>:5432/postgres?sslmode=require
-# The role has SELECT-only grants on public.* (Postgres permissions are
-# positive-only — no write surface exists for it) plus BYPASSRLS so dev
-# inspection sees all rows regardless of RLS. Rotate by dropping the role
-# and re-creating with a new password.
-/.upside-readonly-db
-
-# === Supabase session JWT for IB passthrough debugging (bin/upside-ib) ===
-# Single line: the access_token copied from the PWA (Settings → Copy access
-# token, or DevTools localStorage). A bearer credential — never commit.
-# Expires ~1h; re-paste when calls start returning 401.
-/.upside-token
-
-# === Discord bot token for reading error channels (bin/upside-errors) ===
-# Single line: the bot token from the Discord Developer Portal (Bot tab →
-# Reset Token). A long-lived credential — never commit. Rotate via Reset Token.
-/.upside-discord-token
+# === Laptop dev-tooling credentials (.secrets/) ===
+# Distinct from /secrets/ above (which holds the VPS IB account/password files
+# mounted into IBeam). These are local credentials used by the bin/ helpers and
+# the read-only skills. Never commit. Each file is a single line:
+#   .secrets/readonly-db    — postgres conn string for the upside_readonly role
+#                             (SELECT-only + BYPASSRLS). Rotate: drop + recreate
+#                             the role with a new password.
+#   .secrets/supabase-jwt   — Supabase access_token for IB passthrough debugging
+#                             (bin/upside-ib). Bearer; expires ~1h; re-paste on 401.
+#   .secrets/discord-token  — Discord bot token for reading error channels
+#                             (bin/upside-errors). Long-lived; rotate via Reset Token.
+/.secrets/
 
 # === Raw IB captures (Batch 7) ===
 # May contain account identifiers from IB's responses. Never commit.
