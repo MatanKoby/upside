@@ -30,6 +30,7 @@ import { ibStatus } from '../services/ibGateway.js';
 import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
+import { upsertQuote } from '../services/quotes.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const FRESHNESS_THRESHOLD_MS = 90_000;
@@ -40,6 +41,7 @@ let timer: NodeJS.Timeout | null = null;
 
 interface PositionRow {
   symbol: string;
+  conid: number | string | null;
   shares: number | string | null;
   avg_cost: number | string | null;
   last_price_update_at: string | null;
@@ -75,7 +77,7 @@ async function tick(): Promise<void> {
 
     const { data: rows, error } = await supabase()
       .from('positions')
-      .select('symbol, shares, avg_cost, last_price_update_at, market_value, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
+      .select('symbol, conid, shares, avg_cost, last_price_update_at, market_value, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
       .eq('user_id', userId);
     if (error) {
       void notifyError('finnhubPricePoller.read', error.message);
@@ -141,6 +143,20 @@ async function tick(): Promise<void> {
           })
           .eq('user_id', userId)
           .eq('symbol', p.symbol);
+        // Mirror this Finnhub price into the canonical `quotes` table
+        // (Batch A1). IB is currently off (otherwise this poller is
+        // skipping), so Finnhub IS the canonical right now → setCanonical
+        // defaults true for source='finnhub' too in that case.
+        if (Number.isFinite(p.conid) && Number.isFinite(currentPrice)) {
+          await upsertQuote({
+            conid: Number(p.conid),
+            symbol: p.symbol,
+            source: 'finnhub',
+            price: currentPrice,
+            setCanonical: true,
+          });
+        }
+
         if (upErr) {
           void notifyError(`finnhubPricePoller.update.${p.symbol}`, upErr.message);
           continue;

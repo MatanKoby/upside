@@ -36,6 +36,7 @@ import { marketPeriodAt, tradingDaysHeld } from '../utils/marketHours.js';
 import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
+import { upsertQuote } from '../services/quotes.js';
 
 // Polling cadences, in ms. We always poll at least once when IB is connected;
 // these dictate the gap between successful cycles.
@@ -429,6 +430,14 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     .from('positions')
     .upsert(toUpsert, { onConflict: 'user_id,symbol' });
   if (error) void notifyError('ibPricePoller.positions.upsert', error.message);
+
+  // Mirror held prices into the canonical `quotes` table (Batch A1). IB is
+  // always authoritative when this poller runs, so `setCanonical` defaults true.
+  await Promise.all(
+    assembled.map((r) =>
+      upsertQuote({ conid: r.conid, symbol: r.symbol, source: 'ib', price: r.current_price }),
+    ),
+  );
 
   // Delete rows for symbols no longer held.
   const heldSymbols = new Set(assembled.map((r) => r.symbol));
