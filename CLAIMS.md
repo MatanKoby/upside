@@ -14,6 +14,23 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Batch A+ — Dynamic entry-zone engine + vitest test suite
 - Owner: claude
 - Started: 2026-05-28 21:55
+- **Implementation complete + pushed.** Arc: 5a70632 (migration 013 + engine) → d9c0285 (vitest + 8 scenario tests, all green) → 25f98df (entryZonesCron, 15-min cadence) → a3fdf65 (FE entry-zone chips on watchlist rows) → 5ade427 (Discord alerts on price crossing into a zone band). Then polish: 3ccaaa4 (migration 014 + company_name on watchlist rows).
+- **What shipped:**
+  - `services/entryZones.ts` — pure `computeEntryZones({currentPrice, daily, intraday, avgCost?})` returns `{zones: {intraday, overnight, multiday}, trendRegime, overboughtTightened}`. Reuses buildFeaturePack for levels + indicators. Simple v1 trend regime (price > SMA20 > SMA50 ⇒ up). Overbought = RSI > 70 OR price > SMA50 + 2·ATR; widens k·ATR reachability by 1.5x → entry "comes toward price." Scoring: source_weight × reachScore + confluence·0.10. Confidence = base × reach + cluster bonus (cap +25).
+  - `entryZones.test.ts` — vitest@2 (pinned for vite-5 compat), 8 scenario fixtures spanning trend regimes / overbought / downtrend / basing (BBAI case) / insufficient bars / capitulation (round-magnet fallback) / confluence. All green via `pnpm test:server`.
+  - `cron/entryZonesCron.ts` — 15-min cadence. For each active-list watchlist conid: read canonical_price from quotes, fetch daily + intraday IB bars, compute, upsert `entry_zones` row per horizon. Skips silently when IB is off (engine input gated on bars, same honesty as the playbook engine).
+  - `services/entryZoneAlerts.ts` + `notify.notifyEntryZoneHit` — on every canonical price write, check current entry_zones for crossing (prev > price AND curr ≤ price, the dip-buy direction). Fires Discord ping to `#upside-dip-buys` (same channel as user markers for first cut), with 24h cooldown per (conid, horizon) anchored on `entry_zones.last_fired_at`. `quotes.upsertQuote` now calls both `checkMarkersForConid` + `checkEntryZonesForConid` fire-and-forget after each canonical write.
+  - FE — `useWatchlistData` adds `entryZonesByConid` (Realtime sub on `entry_zones`); `Watchlist` row chips show `I:$X / O:$Y / M:$Z` with dashed borders (distinct from the filled marker chips); title shows reasoning + trend regime + overbought flag + confidence.
+- **Polish slice shipped alongside (3ccaaa4):** Migration 014 adds `watchlist_items.company_name`; the IB sync stuffs it from `instrument.name` at zero extra cost. Row layout reorganized: stacked left column (symbol + company), stacked right column (price + source pill). Today's-change-% and sparkline still deferred (need open/prev_close in quotes; bigger work for another slice).
+- **Pending before Completed** (manual + verification):
+  1. Apply migrations `012_watchlist_markers.sql`, `013_entry_zones.sql`, `014_watchlist_items_company.sql` to Supabase.
+  2. Create Discord channel `#upside-dip-buys`, set `DISCORD_WEBHOOK_DIP_BUYS` on the VPS `.env`.
+  3. `./bin/upside rebuild`.
+  4. **A2 verify:** long-press a watchlist row → add `at_or_below` marker → chip appears → wait for / synthesize a price crossing → Discord ping fires once; chip's `last_fired_at` reflects.
+  5. **A+ verify:** wait ≤ 15min after rebuild for `entryZonesCron`'s first cycle → three dashed chips (I/O/M) appear on each active-list row; tooltips show reasoning. Price crossing into a chip's band → Discord ping in same channel.
+  6. **Polish verify:** company name renders under each ticker symbol.
+
+
 
 ### Batch A2 — Manual price markers + dip-buy Discord alerts
 - Owner: claude
