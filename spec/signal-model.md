@@ -60,6 +60,17 @@ Manual only. Two-step intentional friction:
 - Skip held positions with market value < $1,000 (configurable: `user_preferences.signal_min_market_value`). Watchlist (non-held) tickers have no market-value filter.
 - Skip symbols in `user_preferences.suppressed_symbols`.
 
+## Freshness guard (fresh-or-stop)
+
+Analysis MUST run only on fresh data. Before any LLM call the engine verifies both:
+
+1. **Canonical price is fresh.** Reads `positions.current_price` + `last_price_update_at` — the poller-maintained value the header shows (see `architecture.md` → Single source of truth for current price) — and requires `last_price_update_at` within a freshness threshold (~2 min during active markets; looser when the market is closed, since price isn't moving). **No independent IB snapshot inside `signalEngine`** — the cold snapshot returned the prior close right after Connect, which is exactly the failure mode this rule closes.
+2. **Live IB feature pack is available.** Requires a successful IB history fetch (non-empty bars) for both the intraday and daily series. **Analysis is IB-gated** — the feature pack (levels/indicators) is built from IB candles, and a free candle fallback isn't available yet (Track 9, post-MVP); Batch 13.3 (always-on secondary IB user) is the upstream unblock.
+
+If either check fails, the engine **stops gracefully** — no LLM call, the lock is released, and a `signals` row with `signal_type: 'no_signal'` is persisted carrying the honest reason (`"live price stale"` / `"IB connection required for analysis"`). The FE renders the reason; the user reconnects IB and retries. **Never silently fall back to stale data.**
+
+*(Origin: BBAI live test on 2026-05-27 — three analyses captured ~$4.17 over 10h while live was $4.37 because the engine trusted a cold IB snapshot over the poller's fresh value. Fresh-or-stop closes that.)*
+
 ## Cost ceiling
 
 Env `MAX_LLM_CALLS_PER_DAY` (default 50). Per-day counter in Redis (`llm_calls:YYYY-MM-DD`), resets midnight UTC. When exceeded, `/api/signals/analyze` returns 429 `{ reason: 'daily_limit_reached' }`. **Each analyze counts as one call** — Fresh and Refine alike, regardless of how many legs the playbook has.

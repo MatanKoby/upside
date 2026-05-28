@@ -103,6 +103,16 @@ Both pollers recompute zone state on every write (see `signal-model.md` → Prof
 
 **Why this works:** matches the on-demand IBeam model. Prices update in Supabase even when the user has IB disconnected to use IBKR Mobile. Zone notifications and signal-range notifications keep firing. The user gets a working app whether or not IB is currently up; IB just makes things sharper.
 
+## Single source of truth for current price
+
+**Principle:** price is a property of an *instrument*, not a holding. There is one canonical "latest quote" per conid, written by one ingestion loop (the pollers above), read by every consumer — they do **not** re-fetch their own.
+
+**Today (MVP, held-only):** canonical = `positions.current_price` (+ `last_price_update_at`, `price_source`). Consumers that must read it instead of re-fetching: the TickerDetail header (already does, via Realtime), the chart's live-price line, the Today's-Range dot, and `signalEngine` — gated on `last_price_update_at` recency (see `signal-model.md` → Freshness guard).
+
+**Track 1 (watchlists, post-MVP):** the canonical is promoted to a dedicated **`quotes`** table keyed by `conid` (see `schema.md`). `positions` and `watchlist_items` reference it; neither carries a duplicated `price` column. The pollers' loop extends to cover every tracked conid (held + watchlisted). One writer, one price per instrument, all surfaces read the same value.
+
+**Origin (2026-05-27):** a 14g live test exposed `signalEngine` overriding the poller's fresh value with its own cold IB snapshot (returning the prior close right after Connect), producing three BBAI analyses stuck at ~$4.17 while live was $4.37. The fix is structural — one writer, all readers — not a patch on the snapshot path.
+
 ## Three Loops in the Node.js app
 
 1. **Multi-source price polling** (continuous): `ibPricePoller` (IB-only, adaptive cadence) + `finnhubPricePoller` (fallback, 60s, skips entirely while IB is connected). Both recompute zone state on each write and trigger zone/signal-range Discord notifications inline.

@@ -9,7 +9,7 @@ Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an a
 1. **Pre-check**: re-analyze soft-block (last analysis within 5 min? → 429 with confirm prompt). Daily cost ceiling exceeded? → 429. Lock acquisition (`analysis_locks` row insert).
 2. **Filter**: skip if held position with market value < threshold, or symbol suppressed.
 3. **Direction**: held position → `sell`; not held → `buy`. (MVP is held-only → SELL.)
-4. **Collect**: OHLCV bars from IB (Redis cache if fresh).
+4. **Collect (fresh-or-stop)**: read canonical price from `positions.current_price` — gated on `last_price_update_at` recency, see `signal-model.md` → Freshness guard (no independent IB snapshot inside the engine). Fetch OHLCV bars from IB for the feature pack. If price is stale OR IB history returns empty → **stop gracefully here** with a `no_signal` row carrying the honest reason; no LLM call, never proceed on stale or missing data.
 5. **Feature pack**: compute the precise level/volatility/trend/momentum/volume features locally (`technicals.ts`) — pivots, swing highs/lows, ATR, SMA/EMA, RSI, MACD, Bollinger, VWAP, relative volume. These are the LLM's grounding (it anchors legs to these levels, doesn't invent prices).
 6. **Enrich**: news headlines + sentiment + insider + earnings from Finnhub (rate-limited queue).
 7. **Context triggers**: read zone state; populate `contextualTriggers.inProfitTakingZone` if applicable (now wired into the prompt — Batch 14g).

@@ -8,6 +8,9 @@ What's stored where, in what shape, with what semantics.
   - Standard fields: `symbol`, `conid`, `shares`, `avg_cost`, `current_price`, `market_value`, `pnl`, `pnl_percent`, `vwap`, etc.
   - Zone-tracking: `zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap` (see `signal-model.md` → Profit-Taking Zone Detection).
   - Source-tracking: `price_source` enum `'ib' | 'finnhub'`, `last_price_update_at` (see `architecture.md` → Multi-source price polling).
+  - **`current_price` is the MVP canonical "latest quote"** for held symbols — see `architecture.md` → Single source of truth for current price. All consumers (header, chart price-line, Today's-Range, `signalEngine`) read it; no consumer re-fetches its own.
+
+- **`quotes`** *(Track 1, planned — not yet built)* — canonical latest quote per instrument, keyed by conid: `{conid pk, symbol, price, source 'ib'|'finnhub', updated_at}`. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table once watchlists land, so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. When this lands, `positions.current_price` becomes either a denormalized mirror the same poller writes, or is removed in favor of an FE-side join from `positions` → `quotes` — implementation choice deferred to Track-1 build time. Enforces the **price-is-an-instrument-property** principle.
 
 - **`analyses`** — one row per Analyze call. Holds the shared analysis context. Schema:
   ```
