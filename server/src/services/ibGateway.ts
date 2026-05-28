@@ -9,6 +9,8 @@ import type {
   RawIbHistory,
   RawIbContractInfo,
   RawIbSecdefResult,
+  RawIbWatchlistsResponse,
+  RawIbWatchlistContents,
 } from '../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -464,6 +466,39 @@ export async function ibSecdefSearch(symbol: string): Promise<RawIbSecdefResult[
     params: { symbol },
   });
   return Array.isArray(res.data) ? res.data : [];
+}
+
+// ---------------------------------------------------------------------------
+// Watchlists (Batch A1) — IB user_lists + system_lists catalog and per-list
+// contents. We persist user_lists only; system_lists are read-only IB-curated
+// (e.g. "US Indices and ETFs"). Payload shapes verified via Batch 13.2
+// captures under `captures/iserver/`.
+// ---------------------------------------------------------------------------
+
+export async function ibWatchlists(): Promise<RawIbWatchlistsResponse | null> {
+  await rateLimit();
+  const { data, status } = await instrumented(
+    { endpoint: '/v1/api/iserver/watchlists' },
+    async () => {
+      const res = await client().get<RawIbWatchlistsResponse>('/v1/api/iserver/watchlists');
+      return { status: res.status, data: res.data };
+    },
+  );
+  return status >= 200 && status < 300 ? data : null;
+}
+
+export async function ibWatchlist(id: string): Promise<RawIbWatchlistContents | null> {
+  await rateLimit();
+  const { data, status } = await instrumented(
+    { endpoint: '/v1/api/iserver/watchlist' },
+    async () => {
+      const res = await client().get<RawIbWatchlistContents>('/v1/api/iserver/watchlist', {
+        params: { id },
+      });
+      return { status: res.status, data: res.data };
+    },
+  );
+  return status >= 200 && status < 300 ? data : null;
 }
 
 // ---------------------------------------------------------------------------

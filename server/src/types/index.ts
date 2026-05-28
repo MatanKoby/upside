@@ -217,6 +217,44 @@ export interface RawIbHistory {
   [key: string]: unknown;
 }
 
+// `/v1/api/iserver/watchlists` — Batch A1. Captured in 13.2.
+export interface RawIbWatchlistInfo {
+  id: string;
+  name: string;
+  type?: string;        // "watchlist" | etc.
+  modified?: number;    // unix ms
+  is_open?: boolean;
+  read_only?: boolean;
+}
+
+export interface RawIbWatchlistsResponse {
+  user_lists: RawIbWatchlistInfo[];
+  system_lists: RawIbWatchlistInfo[];
+  // (other fields ignored — we only consume user_lists per spec/schema.md)
+  [key: string]: unknown;
+}
+
+// `/v1/api/iserver/watchlist?id=<id>` — single watchlist contents.
+// `name` is the COMPANY name, `fullName`/`ticker` are the symbol, `conid` is
+// the IB contract id. We persist (conid, symbol = ticker) per row.
+export interface RawIbWatchlistInstrument {
+  conid: number;
+  ticker?: string;
+  fullName?: string;
+  name?: string;          // company name (e.g. "MICRON TECHNOLOGY INC")
+  assetClass?: string;    // "STK" | "OPT" | ...
+  ST?: string;            // also assetClass mirror
+  C?: string;
+}
+
+export interface RawIbWatchlistContents {
+  id: string;
+  name: string;
+  hash?: string;
+  readOnly?: boolean;
+  instruments: RawIbWatchlistInstrument[];
+}
+
 export interface RawIbSecdefResult {
   conid: string;                  // IB returns it as string in secdef/search
   symbol: string;
