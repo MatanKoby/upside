@@ -206,22 +206,64 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
       const rows = (data ?? []) as DbPosition[];
       const total = rows.reduce((acc, r) => acc + num(r.market_value), 0);
       const target = symbol ? rows.find((r) => r.symbol.toUpperCase() === symbol.toUpperCase()) : undefined;
-      if (!target) {
-        setResult({ state: 'not-held', symbol: symbol! });
+      if (target) {
+        setResult({ state: 'loaded', detail: rowToTickerDetail(target, total) });
         return;
       }
-      setResult({ state: 'loaded', detail: rowToTickerDetail(target, total) });
+
+      // Not held — fall back to the watchlist surface (Batch A1). Find the
+      // conid via watchlist_items by symbol, then read the canonical price
+      // from `quotes`. positionStats stays null; TickerDetail hides that
+      // section when null.
+      const sym = symbol!.toUpperCase();
+      const wlItem = await supabase
+        .from('watchlist_items')
+        .select('conid, symbol')
+        .eq('symbol', sym)
+        .limit(1)
+        .maybeSingle();
+      if (!wlItem.data) {
+        setResult({ state: 'not-held', symbol: sym });
+        return;
+      }
+      const quote = await supabase
+        .from('quotes')
+        .select('canonical_price, canonical_source, canonical_updated_at')
+        .eq('conid', wlItem.data.conid)
+        .maybeSingle();
+      setResult({
+        state: 'loaded',
+        detail: {
+          symbol: sym,
+          company: sym,                   // no company name on watchlist_items yet
+          price: num(quote.data?.canonical_price as number | null | undefined),
+          todayChange: 0,
+          todayChangePercent: 0,
+          dayLow: 0,
+          dayHigh: 0,
+          currentInRange: 0,
+          marketStats: [],
+          signal: null,
+          positionStats: null,            // hides Position Stats section
+          indicators: [],
+        },
+      });
     }
 
     void load();
 
-    // Realtime: re-fetch on any change to the user's positions. Simple
-    // re-pull pattern, matching usePositions.
+    // Realtime: re-fetch on any change to the user's positions OR the quotes
+    // table (covers watchlist-only ticker price updates).
     const channel = supabase
       .channel(`ticker-detail-${symbol}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'positions' },
+        () => void load(),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quotes' },
         () => void load(),
       )
       .subscribe();
