@@ -9,8 +9,11 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ## In progress
 
 ### Active priority (2026-05-28 pivot): Watchlists + LLM-free signals
-- Owner: queued (claim per AGENTS.md when starting Batch A1)
 - The signal-engine work below (14g) is functionally closed (engine validated on BBAI re-analyze; spec'd in `signals/playbook.md`; known follow-ups parked in `roadmap.md`). The next four batches are **A1 → A2 → A+ → B** in `BUILD_QUEUE.md` — watchlist surface + LLM-free signal primitives. LLM-engine refinements (structure-feature redesign, Refine mode, accuracy cron un-defer, `fresh-or-stop` engine guard implementation) are deferred behind the pivot. See `spec/roadmap.md` → Track 1.
+
+### Batch A1 — Watchlists + IB import + quotes table + TickerDetail-for-non-held
+- Owner: claude
+- Started: 2026-05-28
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
