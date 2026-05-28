@@ -11,9 +11,24 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Active priority (2026-05-28 pivot): Watchlists + LLM-free signals
 - The signal-engine work below (14g) is functionally closed (engine validated on BBAI re-analyze; spec'd in `signals/playbook.md`; known follow-ups parked in `roadmap.md`). The next four batches are **A1 → A2 → A+ → B** in `BUILD_QUEUE.md` — watchlist surface + LLM-free signal primitives. LLM-engine refinements (structure-feature redesign, Refine mode, accuracy cron un-defer, `fresh-or-stop` engine guard implementation) are deferred behind the pivot. See `spec/roadmap.md` → Track 1.
 
+### Batch A+ — Dynamic entry-zone engine + vitest test suite
+- Owner: claude
+- Started: 2026-05-28 21:55
+
 ### Batch A2 — Manual price markers + dip-buy Discord alerts
 - Owner: claude
 - Started: 2026-05-28 21:23
+- **Implementation complete + pushed.** Commits: 7eb055e (migration 012) → 650b013 (markers service + dip-buy notifier + CRUD route + quote-write hook) → 10551e7 (FE marker chips + add/edit sheet + long-press handler). Server + client typecheck + client build all clean throughout.
+- **What shipped:** Migration 012 (`watchlist_markers` keyed by item_id with the geometric condition vocab + per-marker cooldown + last_fired_at; RLS chain via item→list→user_id; partial index on enabled=true). `services/markers.ts` `checkMarkersForConid(conid, symbol, prev, curr)` does transition-based crossing detection per condition (at_or_below / at_or_above / about), gated by cooldown. Today only `at_or_below` fires Discord (channel wired); the other conditions update last_fired_at without notifying so when their channels land they don't fire on historical crossings. `services/quotes.ts upsertQuote` reads prior canonical_price + fires the marker check fire-and-forget after each write. `routes/watchlist-markers.ts` exposes POST / PATCH / DELETE with explicit owner-chain validation (supabase() bypasses RLS server-side). FE: `useWatchlistData` adds `markersByItem` with realtime sub on `watchlist_markers`; `MarkerSheet.tsx` is add+edit+delete with the condition select tagging wire status; `Watchlist.tsx` rows are now `<ItemRow>` with 500ms pointerDown timer + onContextMenu for long-press / right-click → add-marker sheet. Marker chips render inline below the row; tap-chip → edit. CSS per-condition tints (buy-green / sell-red / event-blue).
+- **Pending before Completed** (manual + verification):
+  1. Apply `supabase/migrations/012_watchlist_markers.sql` to Supabase.
+  2. Create Discord channel `#upside-dip-buys`, set `DISCORD_WEBHOOK_DIP_BUYS` on the VPS `.env`.
+  3. `./bin/upside rebuild`.
+  4. Long-press a watchlist row → add marker (at_or_below $X) → chip appears.
+  5. Wait for price to cross $X (or set a marker just above current to test) → Discord ping fires once in `#upside-dip-buys`; chip's `last_fired_at` updates. Cooldown gate prevents re-fire for 24h.
+  6. Tap a chip → edit sheet → toggle enabled/delete works.
+
+
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
