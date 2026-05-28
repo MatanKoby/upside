@@ -43,11 +43,26 @@ export interface Marker {
   created_at: string;
 }
 
+// One row of `entry_zones` (Batch A+). Three rows per active conid (one per
+// horizon). See spec/signals/entry-zones.md.
+export type Horizon = 'intraday' | 'overnight' | 'multiday';
+export interface EntryZoneRow {
+  conid: number;
+  horizon: Horizon;
+  price: number;
+  reasoning: string;
+  confidence: number;
+  trend_regime: 'up' | 'down' | 'mixed';
+  overbought_tightened: boolean;
+  computed_at: string;
+}
+
 export interface UseWatchlistData {
   lists: WatchlistList[];
   itemsByList: Record<string, WatchlistItem[]>;
   quotesByConid: Record<number, QuoteRow>;
   markersByItem: Record<string, Marker[]>;
+  entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   isLoading: boolean;
 }
 
@@ -66,6 +81,7 @@ export function useWatchlistData(): UseWatchlistData {
   const [itemsByList, setItemsByList] = useState<Record<string, WatchlistItem[]>>({});
   const [quotesByConid, setQuotesByConid] = useState<Record<number, QuoteRow>>({});
   const [markersByItem, setMarkersByItem] = useState<Record<string, Marker[]>>({});
+  const [entryZonesByConid, setEntryZonesByConid] = useState<Record<number, Partial<Record<Horizon, EntryZoneRow>>>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -124,11 +140,27 @@ export function useWatchlistData(): UseWatchlistData {
         (markersByItemMap[m.item_id] ??= []).push(mp);
       }
 
+      // Entry zones (Batch A+). Three rows per conid (one per horizon),
+      // populated by the entryZonesCron. Indexed nested for easy lookup.
+      const zonesRes = conidSet.length
+        ? await supabase
+            .from('entry_zones')
+            .select('conid, horizon, price, reasoning, confidence, trend_regime, overbought_tightened, computed_at')
+            .in('conid', conidSet)
+        : { data: [] as EntryZoneRow[] };
+      const zMap: Record<number, Partial<Record<Horizon, EntryZoneRow>>> = {};
+      for (const r of (zonesRes.data ?? []) as EntryZoneRow[]) {
+        const c = Number(r.conid);
+        const horizon = r.horizon as Horizon;
+        (zMap[c] ??= {})[horizon] = { ...r, price: Number(r.price) };
+      }
+
       if (!alive) return;
       setLists(listRows);
       setItemsByList(itemsByListMap);
       setQuotesByConid(qMap);
       setMarkersByItem(markersByItemMap);
+      setEntryZonesByConid(zMap);
       setIsLoading(false);
     }
 
@@ -141,6 +173,7 @@ export function useWatchlistData(): UseWatchlistData {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_items' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_markers' }, () => void load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'entry_zones' }, () => void load())
       .subscribe();
 
     return () => {
@@ -149,5 +182,5 @@ export function useWatchlistData(): UseWatchlistData {
     };
   }, []);
 
-  return { lists, itemsByList, quotesByConid, markersByItem, isLoading };
+  return { lists, itemsByList, quotesByConid, markersByItem, entryZonesByConid, isLoading };
 }

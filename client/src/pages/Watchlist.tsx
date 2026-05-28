@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconSettings, IconCloudDownload } from '@tabler/icons-react';
-import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker } from '../hooks/useWatchlistData';
+import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon } from '../hooks/useWatchlistData';
 import { MarkerSheet } from '../components/Watchlist/MarkerSheet';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency } from '../utils/formatters';
@@ -47,7 +47,7 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 }
 
 export default function Watchlist() {
-  const { lists, itemsByList, quotesByConid, markersByItem, isLoading } = useWatchlistData();
+  const { lists, itemsByList, quotesByConid, markersByItem, entryZonesByConid, isLoading } = useWatchlistData();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
   const [activeListId, setActiveListId] = useState<string | null>(null);
@@ -112,6 +112,7 @@ export default function Watchlist() {
             items={itemsByList[currentList ?? ''] ?? []}
             quotes={quotesByConid}
             markersByItem={markersByItem}
+            entryZonesByConid={entryZonesByConid}
             onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, itemId: item.id })}
             onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, itemId: item.id, marker })}
           />
@@ -200,12 +201,14 @@ function ItemList({
   items,
   quotes,
   markersByItem,
+  entryZonesByConid,
   onAddMarker,
   onEditMarker,
 }: {
   items: WatchlistItem[];
   quotes: Record<number, QuoteRow>;
   markersByItem: Record<string, Marker[]>;
+  entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   onAddMarker: (item: WatchlistItem) => void;
   onEditMarker: (item: WatchlistItem, marker: Marker) => void;
 }) {
@@ -220,6 +223,7 @@ function ItemList({
         const price = q?.canonical_price ?? null;
         const source = q?.canonical_source ?? null;
         const markers = markersByItem[it.id] ?? [];
+        const zones = entryZonesByConid[Number(it.conid)] ?? {};
         return (
           <li key={it.id}>
             <ItemRow
@@ -227,6 +231,7 @@ function ItemList({
               price={price}
               source={source}
               markers={markers}
+              zones={zones}
               onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
               onLongPress={() => onAddMarker(it)}
               onEditMarker={(m) => onEditMarker(it, m)}
@@ -240,11 +245,18 @@ function ItemList({
 
 const LONG_PRESS_MS = 500;
 
+const HORIZON_SHORT: Record<Horizon, string> = {
+  intraday: 'I',
+  overnight: 'O',
+  multiday: 'M',
+};
+
 function ItemRow({
   item,
   price,
   source,
   markers,
+  zones,
   onTap,
   onLongPress,
   onEditMarker,
@@ -253,6 +265,7 @@ function ItemRow({
   price: number | null;
   source: 'ib' | 'finnhub' | null;
   markers: Marker[];
+  zones: Partial<Record<Horizon, EntryZoneRow>>;
   onTap: () => void;
   onLongPress: () => void;
   onEditMarker: (m: Marker) => void;
@@ -303,8 +316,24 @@ function ItemRow({
           {source && <span className="watchlist-item-src"> · {source}</span>}
         </span>
       </div>
-      {markers.length > 0 && (
-        <div className="watchlist-item-markers">
+      {(markers.length > 0 || Object.keys(zones).length > 0) && (
+        <div className="watchlist-item-chips">
+          {(['intraday', 'overnight', 'multiday'] as Horizon[]).map((h) => {
+            const z = zones[h];
+            if (!z) return null;
+            const tooltip = `${z.reasoning}${z.overbought_tightened ? ' · overbought-tightened' : ''} · trend: ${z.trend_regime} · confidence ${z.confidence}%`;
+            return (
+              <span
+                key={h}
+                className={`zone-chip zone-chip-${h}`}
+                title={tooltip}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span className="zone-chip-horizon">{HORIZON_SHORT[h]}</span>
+                <span className="zone-chip-price">${z.price}</span>
+              </span>
+            );
+          })}
           {markers.map((m) => (
             <button
               key={m.id}
