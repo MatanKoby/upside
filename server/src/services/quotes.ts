@@ -10,8 +10,15 @@
 // to join contracts to render rows.
 
 import { supabase } from './supabase.js';
+import { checkMarkersForConid } from './markers.js';
 
 export type QuoteSource = 'ib' | 'finnhub';
+
+function asNum(v: number | string | null | undefined): number | null {
+  if (v == null) return null;
+  const x = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(x) ? x : null;
+}
 
 interface QuoteWriteOpts {
   conid: number;
@@ -31,6 +38,22 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
   const now = opts.now ?? new Date().toISOString();
   const setCanonical = opts.setCanonical ?? (opts.source === 'ib');
 
+  // Read the prior canonical_price so the marker check (Batch A2) can detect
+  // a transition. This adds one SELECT per write — cheap, but only needed
+  // when we're updating the canonical (Finnhub writes that don't set
+  // canonical skip the check to avoid spurious fires from a non-authoritative
+  // source). null on the very first write for a conid; markers.ts skips in
+  // that case.
+  let prevCanonical: number | null = null;
+  if (setCanonical) {
+    const existing = await supabase()
+      .from('quotes')
+      .select('canonical_price')
+      .eq('conid', opts.conid)
+      .maybeSingle();
+    prevCanonical = asNum(existing.data?.canonical_price as number | string | null | undefined);
+  }
+
   const row: Record<string, unknown> = {
     conid: opts.conid,
     symbol: opts.symbol,
@@ -49,6 +72,12 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
   }
 
   await supabase().from('quotes').upsert(row, { onConflict: 'conid' });
+
+  // Marker check — runs on every canonical price transition (Batch A2). Fire
+  // and forget; the function notifies any internal failures itself.
+  if (setCanonical) {
+    void checkMarkersForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
+  }
 }
 
 /**

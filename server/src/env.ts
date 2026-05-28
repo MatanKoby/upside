@@ -76,4 +76,8 @@ export const env = {
   // so each can be muted/enabled independently in Discord. No-ops when unset.
   // Pattern: DISCORD_WEBHOOK_ZONE_<TYPE> (future: ZONE_DRAWDOWN, SIGNAL_SELL, …).
   discordZoneProfitWebhookUrl: optional('DISCORD_WEBHOOK_ZONE_PROFIT'),
+  // DISCORD_WEBHOOK_DIP_BUYS — Batch A2. User-defined at_or_below marker hits
+  // on watchlist tickers post here. (Other marker conditions / signal-range
+  // pings get their own channels in follow-up batches.)
+  discordDipBuysWebhookUrl: optional('DISCORD_WEBHOOK_DIP_BUYS'),
 };

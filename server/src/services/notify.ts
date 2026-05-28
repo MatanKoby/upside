@@ -212,6 +212,39 @@ export function notifyProfitZoneEntry(args: {
   });
 }
 
+/**
+ * Dip-buy marker hit (Batch A2). User-defined `at_or_below` price marker on a
+ * watchlist ticker just crossed. Posts to DISCORD_WEBHOOK_DIP_BUYS. Cooldown
+ * is owned by the caller (anchored on `watchlist_markers.last_fired_at` so it
+ * survives restarts), matching the zone-profit pattern. No-ops when the
+ * channel isn't configured.
+ *
+ * Other marker conditions (`at_or_above` for targets, `about` for level
+ * proximity) will get their own notifiers + channels in follow-up batches.
+ */
+export function notifyDipBuyMarkerHit(args: {
+  symbol: string;
+  markerPrice: number;
+  currentPrice: number;
+  label: string | null;
+}): Promise<void> {
+  const { symbol, markerPrice, currentPrice, label } = args;
+  const tag = label ? ` ("${label}")` : '';
+  const line = `🟢 ${symbol} hit dip-buy at $${markerPrice}${tag} — current $${currentPrice}`;
+  console.log(`[markers] ${line}`);
+  const url = env.discordDipBuysWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🟢 ${symbol} · dip-buy hit`,
+      description: line,
+      color: 0x639922,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyApiFailure(key: string, status: number, ctx: ApiFailureContext = {}): void {
   if (status < 400 || status === 401 || status === 403 || status === 429) return;
   const fields: EmbedField[] = [{ name: 'Status', value: String(status), inline: true }];
