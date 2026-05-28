@@ -18,6 +18,7 @@ export interface WatchlistItem {
   list_id: string;
   conid: number;
   symbol: string;
+  company_name: string | null;
 }
 
 // One row of the `quotes` table, keyed by conid (instrument, not user).
@@ -102,7 +103,7 @@ export function useWatchlistData(): UseWatchlistData {
 
       const itemsRes = await supabase
         .from('watchlist_items')
-        .select('id, list_id, conid, symbol')
+        .select('id, list_id, conid, symbol, company_name')
         .in('list_id', listRows.map((l) => l.id).length ? listRows.map((l) => l.id) : ['00000000-0000-0000-0000-000000000000']);
       const itemRows = (itemsRes.data ?? []) as WatchlistItem[];
 

@@ -310,11 +310,18 @@ function ItemRow({
       tabIndex={0}
     >
       <div className="watchlist-item-main">
-        <span className="watchlist-item-sym">{item.symbol}</span>
-        <span className="watchlist-item-price">
-          {price != null ? formatCurrency(price) : '—'}
-          {source && <span className="watchlist-item-src"> · {source}</span>}
-        </span>
+        <div className="watchlist-item-left">
+          <span className="watchlist-item-sym">{item.symbol}</span>
+          {item.company_name && (
+            <span className="watchlist-item-co">{item.company_name}</span>
+          )}
+        </div>
+        <div className="watchlist-item-right">
+          <span className="watchlist-item-price">
+            {price != null ? formatCurrency(price) : '—'}
+          </span>
+          {source && <span className="watchlist-item-src">{source}</span>}
+        </div>
       </div>
       {(markers.length > 0 || Object.keys(zones).length > 0) && (
         <div className="watchlist-item-chips">

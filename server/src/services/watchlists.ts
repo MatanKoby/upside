@@ -121,6 +121,10 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
         list_id: localListId,
         conid: i.conid,
         symbol: pickSymbol(i),
+        // IB's `instrument.name` is the company name (e.g. "MICRON TECHNOLOGY
+        // INC"); free to capture during sync rather than hit /contract/info
+        // per ticker later. Falls back to symbol when missing.
+        company_name: typeof i.name === 'string' && i.name.trim() ? i.name.trim() : null,
       }));
 
     const fromIbConids = new Set<number>(itemsToUpsert.map((i) => i.conid));

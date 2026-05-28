@@ -1163,3 +1163,27 @@
 .zone-chip-intraday  { border-color: var(--pill-buy-text); }
 .zone-chip-overnight { border-color: var(--pill-event-text); }
 .zone-chip-multiday  { border-color: var(--text-tertiary); }
+
+/* --- Watchlist polish (post-A+) --- */
+.watchlist-item-main {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  width: 100%; gap: 12px;
+}
+.watchlist-item-left {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.watchlist-item-co {
+  font-size: 10px; color: var(--text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 200px;
+}
+.watchlist-item-right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+}
+.watchlist-item-price {
+  font-family: var(--font-mono); font-size: var(--fs-14); font-weight: var(--fw-medium);
+}
+.watchlist-item-src {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
