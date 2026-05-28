@@ -37,19 +37,22 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
     throw new Error('ib_watchlists_fetch_failed');
   }
 
-  const userLists = Array.isArray(top.user_lists) ? top.user_lists : [];
+  // IB Client Portal currently wraps the payload in `{ data: {...}, action,
+  // MID }`. Older captures had user_lists at the top level. Accept either —
+  // unwrap `.data` when present (verified live 2026-05-28 via the
+  // watchlists.sync.empty diagnostic).
+  const payload = (top.data && typeof top.data === 'object' ? top.data : top) as {
+    user_lists?: typeof top.user_lists;
+    system_lists?: typeof top.system_lists;
+  };
+  const userLists = Array.isArray(payload.user_lists) ? payload.user_lists : [];
 
-  // Observability — if IB returned a 200 but we extracted no user_lists, that's
-  // a "silent success" the user can't distinguish from a real import. Surface
-  // it: notify with the top-level shape (key names + array lengths) so we can
-  // see at a glance whether IB's payload doesn't match the parser or whether
-  // the account genuinely has 0 user lists. Same channel as other API failures
-  // (#errors) — discoverable without a separate audit log.
+  // Observability for the silent-success class: if we got 200 but extracted
+  // no user_lists, notify #errors with the top-level shape so we can spot
+  // future format changes the same way.
   if (userLists.length === 0) {
     const topKeys = Object.keys(top ?? {});
-    const sysLen = Array.isArray((top as { system_lists?: unknown }).system_lists)
-      ? ((top as { system_lists: unknown[] }).system_lists).length
-      : 'n/a';
+    const sysLen = Array.isArray(payload.system_lists) ? payload.system_lists.length : 'n/a';
     void notifyError(
       'watchlists.sync.empty',
       `IB /iserver/watchlists returned 200 but user_lists is empty. top_keys=[${topKeys.join(',')}] system_lists_len=${sysLen}. Sample payload top: ${JSON.stringify(top).slice(0, 400)}`,

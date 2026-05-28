@@ -227,10 +227,20 @@ export interface RawIbWatchlistInfo {
   read_only?: boolean;
 }
 
-export interface RawIbWatchlistsResponse {
+// IB Client Portal currently wraps this response in
+// `{ data: { user_lists, system_lists, scanners_only, ... }, action, MID }`,
+// but older captures show the inner shape at the top level. The parser
+// accepts either by unwrapping `.data` when present.
+export interface RawIbWatchlistsPayload {
   user_lists: RawIbWatchlistInfo[];
   system_lists: RawIbWatchlistInfo[];
-  // (other fields ignored — we only consume user_lists per spec/schema.md)
+  [key: string]: unknown;
+}
+
+export interface RawIbWatchlistsResponse {
+  data?: RawIbWatchlistsPayload;       // current shape (verified live 2026-05-28)
+  user_lists?: RawIbWatchlistInfo[];   // legacy / unwrapped shape
+  system_lists?: RawIbWatchlistInfo[]; // legacy / unwrapped shape
   [key: string]: unknown;
 }
 
