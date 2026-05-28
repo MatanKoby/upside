@@ -15,7 +15,6 @@
     "typecheck:client": "pnpm --filter client typecheck",
     "typecheck:server": "pnpm --filter server typecheck",
     "verify": "pnpm -r typecheck && pnpm --filter client build",
-
     "docker:up": "docker compose up -d --build && docker compose --profile manual create ib-gateway",
     "docker:down": "docker compose down",
     "docker:ps": "docker compose ps -a",
@@ -24,6 +23,8 @@
     "docker:logs:ib": "docker compose logs -f --tail 100 ib-gateway",
     "docker:logs:cf": "docker compose logs -f --tail 100 cloudflared",
     "docker:rebuild:api": "docker compose up -d --build --force-recreate api",
-    "docker:reset": "docker compose down --remove-orphans && docker compose up -d --build && docker compose --profile manual create ib-gateway"
+    "docker:reset": "docker compose down --remove-orphans && docker compose up -d --build && docker compose --profile manual create ib-gateway",
+    "test": "pnpm -r test",
+    "test:server": "pnpm --filter server test"
   }
 }
