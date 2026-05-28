@@ -222,6 +222,36 @@ export function notifyProfitZoneEntry(args: {
  * Other marker conditions (`at_or_above` for targets, `about` for level
  * proximity) will get their own notifiers + channels in follow-up batches.
  */
+/**
+ * Entry-zone hit (Batch A+). Price has entered a computed entry zone for
+ * one of the three horizons. Posts to DISCORD_WEBHOOK_DIP_BUYS (same channel
+ * as user-defined markers for the first cut). 24h cooldown anchored on
+ * `entry_zones.last_fired_at` per (conid, horizon).
+ */
+export function notifyEntryZoneHit(args: {
+  symbol: string;
+  horizon: 'intraday' | 'overnight' | 'multiday';
+  zonePrice: number;
+  currentPrice: number;
+  reasoning: string;
+  confidence: number;
+}): Promise<void> {
+  const { symbol, horizon, zonePrice, currentPrice, reasoning, confidence } = args;
+  const line = `🟢 ${symbol} hit ${horizon} entry zone — $${zonePrice} (${reasoning}, ${confidence}%) · current $${currentPrice}`;
+  console.log(`[entry-zones] ${line}`);
+  const url = env.discordDipBuysWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🟢 ${symbol} · ${horizon} entry zone hit`,
+      description: line,
+      color: 0x639922,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyDipBuyMarkerHit(args: {
   symbol: string;
   markerPrice: number;

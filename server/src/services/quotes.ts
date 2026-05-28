@@ -11,6 +11,7 @@
 
 import { supabase } from './supabase.js';
 import { checkMarkersForConid } from './markers.js';
+import { checkEntryZonesForConid } from './entryZoneAlerts.js';
 
 export type QuoteSource = 'ib' | 'finnhub';
 
@@ -73,10 +74,12 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
 
   await supabase().from('quotes').upsert(row, { onConflict: 'conid' });
 
-  // Marker check — runs on every canonical price transition (Batch A2). Fire
-  // and forget; the function notifies any internal failures itself.
+  // Marker check + entry-zone check — both run on every canonical price
+  // transition (Batches A2 + A+). Fire-and-forget; each function handles its
+  // own internal failure notifications.
   if (setCanonical) {
     void checkMarkersForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
+    void checkEntryZonesForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
   }
 }
 
