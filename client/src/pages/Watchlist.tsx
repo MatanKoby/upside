@@ -1,9 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconSettings, IconCloudDownload } from '@tabler/icons-react';
-import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow } from '../hooks/useWatchlistData';
+import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker } from '../hooks/useWatchlistData';
+import { MarkerSheet } from '../components/Watchlist/MarkerSheet';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency } from '../utils/formatters';
+
+interface MarkerSheetState {
+  symbol: string;
+  itemId: string;
+  marker?: Marker;
+}
 
 // Watchlist screen (Batch A1). Per-list active/hidden lives in the in-screen
 // gear-icon sheet (`<SettingsSheet>` below); only active lists render as
@@ -40,8 +47,9 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 }
 
 export default function Watchlist() {
-  const { lists, itemsByList, quotesByConid, isLoading } = useWatchlistData();
+  const { lists, itemsByList, quotesByConid, markersByItem, isLoading } = useWatchlistData();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
   const [activeListId, setActiveListId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -103,8 +111,20 @@ export default function Watchlist() {
           <ItemList
             items={itemsByList[currentList ?? ''] ?? []}
             quotes={quotesByConid}
+            markersByItem={markersByItem}
+            onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, itemId: item.id })}
+            onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, itemId: item.id, marker })}
           />
         </>
+      )}
+
+      {markerSheet && (
+        <MarkerSheet
+          symbol={markerSheet.symbol}
+          itemId={markerSheet.itemId}
+          marker={markerSheet.marker}
+          onClose={() => setMarkerSheet(null)}
+        />
       )}
 
       {settingsOpen && (
@@ -170,12 +190,24 @@ function SubTabStrip({
   );
 }
 
+const CONDITION_GLYPH: Record<Marker['condition'], string> = {
+  at_or_below: '↓',
+  at_or_above: '↑',
+  about:        '≈',
+};
+
 function ItemList({
   items,
   quotes,
+  markersByItem,
+  onAddMarker,
+  onEditMarker,
 }: {
   items: WatchlistItem[];
   quotes: Record<number, QuoteRow>;
+  markersByItem: Record<string, Marker[]>;
+  onAddMarker: (item: WatchlistItem) => void;
+  onEditMarker: (item: WatchlistItem, marker: Marker) => void;
 }) {
   const navigate = useNavigate();
   if (items.length === 0) {
@@ -187,23 +219,111 @@ function ItemList({
         const q = quotes[Number(it.conid)];
         const price = q?.canonical_price ?? null;
         const source = q?.canonical_source ?? null;
+        const markers = markersByItem[it.id] ?? [];
         return (
           <li key={it.id}>
-            <button
-              type="button"
-              className="watchlist-item"
-              onClick={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
-            >
-              <span className="watchlist-item-sym">{it.symbol}</span>
-              <span className="watchlist-item-price">
-                {price != null ? formatCurrency(price) : '—'}
-                {source && <span className="watchlist-item-src"> · {source}</span>}
-              </span>
-            </button>
+            <ItemRow
+              item={it}
+              price={price}
+              source={source}
+              markers={markers}
+              onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
+              onLongPress={() => onAddMarker(it)}
+              onEditMarker={(m) => onEditMarker(it, m)}
+            />
           </li>
         );
       })}
     </ul>
+  );
+}
+
+const LONG_PRESS_MS = 500;
+
+function ItemRow({
+  item,
+  price,
+  source,
+  markers,
+  onTap,
+  onLongPress,
+  onEditMarker,
+}: {
+  item: WatchlistItem;
+  price: number | null;
+  source: 'ib' | 'finnhub' | null;
+  markers: Marker[];
+  onTap: () => void;
+  onLongPress: () => void;
+  onEditMarker: (m: Marker) => void;
+}) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
+
+  const start = () => {
+    longPressFired.current = false;
+    timer.current = setTimeout(() => {
+      longPressFired.current = true;
+      onLongPress();
+    }, LONG_PRESS_MS);
+  };
+  const cancel = () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  const onClick = (e: React.MouseEvent) => {
+    if (longPressFired.current) {
+      e.preventDefault();
+      return;
+    }
+    onTap();
+  };
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onLongPress();
+  };
+
+  return (
+    <div
+      className="watchlist-item"
+      onPointerDown={start}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onContextMenu={onContextMenu}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="watchlist-item-main">
+        <span className="watchlist-item-sym">{item.symbol}</span>
+        <span className="watchlist-item-price">
+          {price != null ? formatCurrency(price) : '—'}
+          {source && <span className="watchlist-item-src"> · {source}</span>}
+        </span>
+      </div>
+      {markers.length > 0 && (
+        <div className="watchlist-item-markers">
+          {markers.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`marker-chip ${m.enabled ? '' : 'is-disabled'} marker-chip-${m.condition}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditMarker(m);
+              }}
+              title={m.label ?? m.condition}
+            >
+              <span className="marker-chip-cond">{CONDITION_GLYPH[m.condition]}</span>
+              <span className="marker-chip-price">${m.price}</span>
+              {m.label && <span className="marker-chip-label">· {m.label}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

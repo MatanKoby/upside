@@ -29,10 +29,25 @@ export interface QuoteRow {
   canonical_updated_at: string | null;
 }
 
+// A user-defined price marker on a watchlist_items row (Batch A2). See
+// spec/signals/markers.md.
+export interface Marker {
+  id: string;
+  item_id: string;
+  label: string | null;
+  price: number;
+  condition: 'at_or_above' | 'at_or_below' | 'about';
+  enabled: boolean;
+  cooldown_hours: number;
+  last_fired_at: string | null;
+  created_at: string;
+}
+
 export interface UseWatchlistData {
   lists: WatchlistList[];
   itemsByList: Record<string, WatchlistItem[]>;
   quotesByConid: Record<number, QuoteRow>;
+  markersByItem: Record<string, Marker[]>;
   isLoading: boolean;
 }
 
@@ -50,6 +65,7 @@ export function useWatchlistData(): UseWatchlistData {
   const [lists, setLists] = useState<WatchlistList[]>([]);
   const [itemsByList, setItemsByList] = useState<Record<string, WatchlistItem[]>>({});
   const [quotesByConid, setQuotesByConid] = useState<Record<number, QuoteRow>>({});
+  const [markersByItem, setMarkersByItem] = useState<Record<string, Marker[]>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -93,10 +109,26 @@ export function useWatchlistData(): UseWatchlistData {
         qMap[Number(r.conid)] = { ...r, canonical_price: num(r.canonical_price) };
       }
 
+      // Markers: scoped to items the user owns. RLS handles this at the
+      // table level (marker → item → list → user_id).
+      const itemIds = itemRows.map((r) => r.id);
+      const markersRes = itemIds.length
+        ? await supabase
+            .from('watchlist_markers')
+            .select('id, item_id, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
+            .in('item_id', itemIds)
+        : { data: [] as Marker[] };
+      const markersByItemMap: Record<string, Marker[]> = {};
+      for (const m of (markersRes.data ?? []) as Marker[]) {
+        const mp = { ...m, price: Number(m.price) };
+        (markersByItemMap[m.item_id] ??= []).push(mp);
+      }
+
       if (!alive) return;
       setLists(listRows);
       setItemsByList(itemsByListMap);
       setQuotesByConid(qMap);
+      setMarkersByItem(markersByItemMap);
       setIsLoading(false);
     }
 
@@ -108,6 +140,7 @@ export function useWatchlistData(): UseWatchlistData {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_lists' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_items' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes' }, () => void load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_markers' }, () => void load())
       .subscribe();
 
     return () => {
@@ -116,5 +149,5 @@ export function useWatchlistData(): UseWatchlistData {
     };
   }, []);
 
-  return { lists, itemsByList, quotesByConid, isLoading };
+  return { lists, itemsByList, quotesByConid, markersByItem, isLoading };
 }

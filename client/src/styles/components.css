@@ -1107,3 +1107,42 @@
 .sheet-section h3 { margin: 0; font-size: var(--fs-11); font-weight: 500; color: var(--text-secondary); }
 .sheet-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .sheet-list label { display: flex; align-items: center; gap: var(--sp-8); font-size: var(--fs-11); cursor: pointer; }
+
+/* --- Watchlist markers (Batch A2) --- */
+.watchlist-item-main {
+  display: flex; align-items: baseline; justify-content: space-between;
+  width: 100%;
+}
+.watchlist-item-markers {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.marker-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px;
+  border: 0.5px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--bg-elevated); color: var(--text-primary);
+  font-size: 10px; line-height: 1.2;
+  cursor: pointer;
+}
+.marker-chip:hover { border-color: var(--text-secondary); }
+.marker-chip.is-disabled { opacity: 0.45; }
+.marker-chip-at_or_below { background: var(--pill-buy-bg); color: var(--pill-buy-text); border-color: transparent; }
+.marker-chip-at_or_above { background: var(--pill-sell-bg); color: var(--pill-sell-text); border-color: transparent; }
+.marker-chip-about       { background: var(--pill-event-bg); color: var(--pill-event-text); border-color: transparent; }
+.marker-chip-cond  { font-weight: var(--fw-medium); }
+.marker-chip-label { color: inherit; opacity: 0.8; }
+
+/* Sheet form fields */
+.sheet-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-11); }
+.sheet-field span { color: var(--text-secondary); }
+.sheet-field input,
+.sheet-field select {
+  padding: 6px 8px;
+  border: 0.5px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-elevated); color: var(--text-primary);
+  font: inherit;
+}
+.sheet-field-inline { display: flex; align-items: center; gap: 6px; font-size: var(--fs-11); }
+.sheet-error { color: var(--pill-sell-text); font-size: var(--fs-11); margin: 0; }
+.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.btn-danger { color: var(--pill-sell-text); border-color: var(--pill-sell-bg); }
