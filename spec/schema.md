@@ -10,7 +10,14 @@ What's stored where, in what shape, with what semantics.
   - Source-tracking: `price_source` enum `'ib' | 'finnhub'`, `last_price_update_at` (see `architecture.md` → Multi-source price polling).
   - **`current_price` is the MVP canonical "latest quote"** for held symbols — see `architecture.md` → Single source of truth for current price. All consumers (header, chart price-line, Today's-Range, `signalEngine`) read it; no consumer re-fetches its own.
 
-- **`quotes`** *(Track 1, planned — not yet built)* — canonical latest quote per instrument, keyed by conid: `{conid pk, symbol, price, source 'ib'|'finnhub', updated_at}`. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table once watchlists land, so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. When this lands, `positions.current_price` becomes either a denormalized mirror the same poller writes, or is removed in favor of an FE-side join from `positions` → `quotes` — implementation choice deferred to Track-1 build time. Enforces the **price-is-an-instrument-property** principle.
+- **`quotes`** *(Track 1, planned — not yet built)* — canonical latest quote per instrument, keyed by conid. Stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so consumers can compare them, so divergence is visible (e.g. IB live $4.28 vs Finnhub prior-close $4.18 pre-market), and so fallback decisions can be made on real provenance rather than overwriting one with the other:
+  ```
+  { conid pk, symbol,
+    ib_price       numeric, ib_updated_at       timestamptz,
+    finnhub_price  numeric, finnhub_updated_at  timestamptz,
+    canonical_price numeric, canonical_source 'ib'|'finnhub', canonical_updated_at timestamptz }
+  ```
+  Each poller writes only its own source's columns; the `canonical_*` triple is the denormalized "the price to use" (IB-when-fresh-and-connected, Finnhub otherwise), set by whichever poller is currently authoritative. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table once watchlists land, so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. When this lands, `positions.current_price` becomes either a denormalized mirror of `canonical_price` (the same poller writes both), or is removed in favor of an FE-side join from `positions` → `quotes` — implementation choice deferred to Track-1 build time. Enforces the **price-is-an-instrument-property** principle.
 
 - **`analyses`** — one row per Analyze call. Holds the shared analysis context. Schema:
   ```

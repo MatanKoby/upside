@@ -109,7 +109,7 @@ Both pollers recompute zone state on every write (see `signal-model.md` → Prof
 
 **Today (MVP, held-only):** canonical = `positions.current_price` (+ `last_price_update_at`, `price_source`). Consumers that must read it instead of re-fetching: the TickerDetail header (already does, via Realtime), the chart's live-price line, the Today's-Range dot, and `signalEngine` — gated on `last_price_update_at` recency (see `signal-model.md` → Freshness guard).
 
-**Track 1 (watchlists, post-MVP):** the canonical is promoted to a dedicated **`quotes`** table keyed by `conid` (see `schema.md`). `positions` and `watchlist_items` reference it; neither carries a duplicated `price` column. The pollers' loop extends to cover every tracked conid (held + watchlisted). One writer, one price per instrument, all surfaces read the same value.
+**Track 1 (watchlists, post-MVP):** the canonical is promoted to a dedicated **`quotes`** table keyed by `conid` (see `schema.md`). `positions` and `watchlist_items` reference it; neither carries a duplicated `price` column. The pollers' loop extends to cover every tracked conid (held + watchlisted). One writer, one price per instrument, all surfaces read the same value. The table stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so divergence is observable and fallback is made on real provenance — not by silently overwriting one source with the other.
 
 **Origin (2026-05-27):** a 14g live test exposed `signalEngine` overriding the poller's fresh value with its own cold IB snapshot (returning the prior close right after Connect), producing three BBAI analyses stuck at ~$4.17 while live was $4.37. The fix is structural — one writer, all readers — not a patch on the snapshot path.
 
