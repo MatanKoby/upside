@@ -4,12 +4,12 @@ End-to-end flows that thread across multiple components. Each one is a sequence 
 
 ## Signal Engine Flow (user-triggered, manual — single-direction playbook)
 
-Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an active signal). See `signal-model.md` → Two Analyze modes.
+Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an active signal). See `signals/playbook.md` → Two Analyze modes.
 
 1. **Pre-check**: re-analyze soft-block (last analysis within 5 min? → 429 with confirm prompt). Daily cost ceiling exceeded? → 429. Lock acquisition (`analysis_locks` row insert).
 2. **Filter**: skip if held position with market value < threshold, or symbol suppressed.
 3. **Direction**: held position → `sell`; not held → `buy`. (MVP is held-only → SELL.)
-4. **Collect (fresh-or-stop)**: read canonical price from `positions.current_price` — gated on `last_price_update_at` recency, see `signal-model.md` → Freshness guard (no independent IB snapshot inside the engine). Fetch OHLCV bars from IB for the feature pack. If price is stale OR IB history returns empty → **stop gracefully here** with a `no_signal` row carrying the honest reason; no LLM call, never proceed on stale or missing data.
+4. **Collect (fresh-or-stop)**: read canonical price from `positions.current_price` — gated on `last_price_update_at` recency, see `signals/playbook.md` → Freshness guard (no independent IB snapshot inside the engine). Fetch OHLCV bars from IB for the feature pack. If price is stale OR IB history returns empty → **stop gracefully here** with a `no_signal` row carrying the honest reason; no LLM call, never proceed on stale or missing data.
 5. **Feature pack**: compute the precise level/volatility/trend/momentum/volume features locally (`technicals.ts`) — pivots, swing highs/lows, ATR, SMA/EMA, RSI, MACD, Bollinger, VWAP, relative volume. These are the LLM's grounding (it anchors legs to these levels, doesn't invent prices).
 6. **Enrich**: news headlines + sentiment + insider + earnings from Finnhub (rate-limited queue).
 7. **Context triggers**: read zone state; populate `contextualTriggers.inProfitTakingZone` if applicable (now wired into the prompt — Batch 14g).
@@ -48,6 +48,39 @@ Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an a
    - Stamp `enteredRangeAt` if intraday price entered `[priceRangeLow, priceRangeHigh]` for the first time.
    - Stamp `exitedRangeAt` if price was in range and exited.
 2. Independent of IB connection state — runs Finnhub-only.
+
+## Watchlist Import Flow (manual, user-triggered)
+
+1. User taps "Import from IB" on the Watchlist screen empty state, or "Re-import" in the gear settings.
+2. FE POSTs `/api/watchlists/sync`.
+3. Route requires IB `connected`; if not, returns `403 { reason: 'ib_required' }`.
+4. api calls `GET /v1/api/iserver/watchlists` → list of all user_lists + system_lists.
+5. **Filter to user_lists only** (Batch 13.2 captured the discriminator). For each user_list: `GET /v1/api/iserver/watchlist?id=<list_id>` → ticker payload.
+6. Upsert `watchlist_lists` rows by `(user_id, ib_list_id)` — preserves any local `active` flag the user has already set. Newly-imported lists default to `active=false` (hidden).
+7. Upsert `watchlist_items` for each ticker (`list_id`, `conid`, `symbol`). Removed-from-IB items get soft-deleted (rows kept for FK integrity; UI hides them).
+8. Set `ib_modified_at` + `synced_at`. Realtime pushes the new state to the FE.
+9. **Active-list conids get added to the polling loop** automatically (the pollers query `watchlist_lists WHERE active=true` on each cycle). No restart required.
+
+## Marker Hit Flow (continuous, automated)
+
+1. **Both pollers** (`ibPricePoller` / `finnhubPricePoller`), on each `quotes` write, query active `watchlist_markers` for the conid.
+2. For each marker (where `enabled = true`):
+   - **Transition check** vs the prior write's price:
+     - `at_or_below`: fires when `prev > price AND curr <= price`
+     - `at_or_above`: fires when `prev < price AND curr >= price`
+     - `about`: fires on entering a ±0.5·ATR band around `price`
+   - **Cooldown gate**: if `now() − last_fired_at < cooldown_hours`, skip silently.
+   - **Fire**: set `last_fired_at = now()`; call `notifyMarkerHit(marker, ticker)`.
+3. Discord routing (first cut): `at_or_below` markers → `#upside-dip-buys` (`DISCORD_WEBHOOK_DIP_BUYS`). Other condition types accepted in schema; their alert channels queued for a follow-up.
+4. Realtime pushes the updated marker (`last_fired_at`) to FE → row reflects "last fired 2m ago" state.
+
+## Entry-Zone Update Flow (continuous, automated; Batch A+)
+
+1. **Both pollers**, on each `quotes` write for an active-list conid, call `computeEntryZones(conid, currentPrice, bars, indicators, trendRegime)` — see `signals/entry-zones.md`.
+2. Daily/intraday bars used by the function come from a per-conid cache (nightly refresh + on-demand if stale > 24h or first activation). The compute itself does NOT fetch bars per cycle.
+3. **Upsert** `entry_zones` rows for `(conid, intraday|overnight|multiday)` with the new `price`, `reasoning`, `confidence`, `trend_regime`, `overbought_tightened`, `computed_at`.
+4. **Discord alert**: if the current price crossed into a zone band that was published at the *prior* poll cycle, fire `notifyEntryZoneEnter(zone, ticker)` → `#upside-dip-buys` (first cut, shared with manual markers). Cooldown 24h anchored on `last_fired_at` per `(conid, horizon)`.
+5. Realtime pushes the updated zones → FE entry-zone chips on the watchlist row update live.
 
 ## Connect / Disconnect Flow (IB session lifecycle)
 

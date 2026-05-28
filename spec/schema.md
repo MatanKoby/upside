@@ -6,7 +6,7 @@ What's stored where, in what shape, with what semantics.
 
 - **`positions`** — current holdings per user, written by `ibPricePoller` / `finnhubPricePoller`, read via Realtime by the FE. Includes:
   - Standard fields: `symbol`, `conid`, `shares`, `avg_cost`, `current_price`, `market_value`, `pnl`, `pnl_percent`, `vwap`, etc.
-  - Zone-tracking: `zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap` (see `signal-model.md` → Profit-Taking Zone Detection).
+  - Zone-tracking: `zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap` (see `signals/playbook.md` → Profit-Taking Zone Detection).
   - Source-tracking: `price_source` enum `'ib' | 'finnhub'`, `last_price_update_at` (see `architecture.md` → Multi-source price polling).
   - **`current_price` is the MVP canonical "latest quote"** for held symbols — see `architecture.md` → Single source of truth for current price. All consumers (header, chart price-line, Today's-Range, `signalEngine`) read it; no consumer re-fetches its own.
 
@@ -46,7 +46,7 @@ What's stored where, in what shape, with what semantics.
   - `acted_on_at` (user marked "I acted on this")
   - `superseded_by_analysis_id` (FK to a newer `analyses.analysis_id` — superseding is whole-analysis)
 
-  One signal per analysis makes supersede trivially clean. Mutability rules in `signal-model.md` → Mutability rules.
+  One signal per analysis makes supersede trivially clean. Mutability rules in `signals/playbook.md` → Mutability rules.
 
   Index: `signals(user_id, symbol, analyzed_at desc)` for the "latest non-superseded" query.
 
@@ -67,13 +67,21 @@ What's stored where, in what shape, with what semantics.
 
 - **`external_api_metrics`** — per-API-call instrumentation: `provider` ('ib' | 'finnhub'), endpoint/category, `duration_ms`, `retries`, status. 30-day TTL. Foundation for empirical perf tuning of both IB and Finnhub call patterns.
 
+- **`watchlist_lists`** *(MVP via watchlist pivot 2026-05-28; batch A1)* — one row per imported IB user-list per Upside user. `{ id pk, user_id uuid, ib_list_id text, name text, active bool default false, ib_modified_at timestamptz, synced_at timestamptz }`. `active=false` by default; user un-hides via the in-screen settings sheet (see `screens/watchlist.md`). System-lists from IB (`/iserver/watchlists` `system_lists`) are NOT imported — only `user_lists` (filter captured in Batch 13.2). Pollers iterate active lists only.
+
+- **`watchlist_items`** *(MVP via watchlist pivot; batch A1)* — `{ id pk, list_id uuid FK, conid bigint, symbol text, added_at timestamptz }`. The same conid can appear on multiple lists (separate rows). The poller dedups by conid before writing to `quotes`. Held + watchlisted overlap is fine — both surfaces read the same canonical quote.
+
+- **`watchlist_markers`** *(MVP via watchlist pivot; batch A2)* — user-defined price targets. See `signals/markers.md`. `{ id pk, item_id uuid FK, label text null, price numeric, condition text check in ('at_or_above','at_or_below','about'), enabled bool default true, cooldown_hours int default 24, last_fired_at timestamptz null, created_at timestamptz }`. Same condition vocabulary as playbook legs (see `signals/playbook.md` → schema note). First cut wires only `at_or_below` markers to `#upside-dip-buys`; others accepted in schema but their alert channels are queued.
+
+- **`entry_zones`** *(MVP via watchlist pivot; batch A+)* — dynamic entry-zone engine state. See `signals/entry-zones.md`. `{ conid bigint, horizon text check in ('intraday','overnight','multiday'), price numeric, reasoning text, confidence int, trend_regime text, overbought_tightened bool, last_fired_at timestamptz null, computed_at timestamptz, primary key (conid, horizon) }`. Upserted on every poll cycle for active-list conids. Realtime enabled.
+
 - **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Generic home for app-level runtime flags. Current keys:
   - `api_url` — current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription. See `architecture.md` → Public URL Discovery.
-  - `llm_provider` / `llm_model` — active LLM selection (app-level, since API keys are global), written by `POST /api/config/llm`, read by the signal engine per analysis and by the Settings picker via Realtime. Keys themselves stay in `.env` — only the choice is here. See `signal-model.md` → LLM Provider Abstraction.
+  - `llm_provider` / `llm_model` — active LLM selection (app-level, since API keys are global), written by `POST /api/config/llm`, read by the signal engine per analysis and by the Settings picker via Realtime. Keys themselves stay in `.env` — only the choice is here. See `signals/playbook.md` → LLM Provider Abstraction.
 
 ### Realtime publications
 
-Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`.
+Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Post-watchlist-pivot adds: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`.
 
 ### Row Level Security
 

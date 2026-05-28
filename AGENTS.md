@@ -31,13 +31,23 @@ The spec lives in the `spec/` directory, split across 6 domain files plus an arc
 | File | Domain |
 |------|--------|
 | `spec/README.md` | Index + cross-references. Start here. |
-| `spec/architecture.md` | Tech stack, infrastructure, Docker containers, public URL discovery, Upside auth, IB auth (on-demand IBeam), multi-source price polling, three loops, security, project structure, MVP build order. |
-| `spec/signal-model.md` | Unified SELL+BUY analysis, Zod output schema, atomic-snapshot supersede semantics, signal pill rendering, mutability rules, held+watchlisted behavior, accuracy tracking, profit-taking zone detection, LLM provider abstraction, data sources. |
-| `spec/flows.md` | Signal engine flow, profit-taking zone flow, signal-range entry flow, accuracy cron flow, connect/disconnect flow, data flows between components. |
-| `spec/schema.md` | Supabase tables (positions, analyses, signals, etc.), Redis usage, Finnhub rate-limited queue, IB API rate limits. |
-| `spec/screens.md` | All screens (Portfolio, TickerDetail, Alerts, Settings — plus Watchlists / Single Watchlist as post-MVP forward-spec). Design system, primitives catalog, TickerCard generalization, PWA requirements, key metrics & calculations. |
-| `spec/roadmap.md` | Post-MVP tracks 1-8. Design intent for features deferred past Batch 16. Contextual settings pattern. |
-| `spec/archive.md` | Historical content not reflecting current code: abandoned IB-auth approaches, dropped features, deprecated decisions. Read when investigating "why didn't we do X?". |
+| `spec/architecture.md` | Tech stack, infra, Docker, public URL discovery, Upside auth, IB auth (on-demand IBeam), multi-source price polling, **single source of truth for current price**, three loops, security, project structure, MVP build order. |
+| `spec/flows.md` | All end-to-end flows: signal engine, profit-taking zone, signal-range entry, accuracy cron, connect/disconnect, **watchlist import**, **marker hit**, **entry-zone update**. Data-flow maps. |
+| `spec/schema.md` | Supabase tables (positions, analyses, signals, **quotes**, **watchlist_lists**, **watchlist_items**, **watchlist_markers**, **entry_zones**, ...). Redis. Finnhub rate-limited queue. IB API rate limits. |
+| `spec/signals/playbook.md` | LLM playbook engine — schema, freshness guard, supersede semantics, pill rendering, mutability, expiry, accuracy tracking, info badges, realtime. |
+| `spec/signals/zone.md` | Profit-taking zone detection (continuous, LLM-independent). |
+| `spec/signals/markers.md` | User-defined price markers + Discord alerts (watchlist pivot). |
+| `spec/signals/entry-zones.md` | Dynamic entry-zone engine (continuous, LLM-free, recomputed per poll cycle). |
+| `spec/signals/llm-provider.md` | Provider abstraction (Groq / Mistral / OpenAI / Gemini), runtime selection, failure classification. |
+| `spec/signals/data-sources.md` | IB / Finnhub / computed feature pack. |
+| `spec/screens/_design-system.md` | Typography, colors, dark mode, spacing, primitives catalog, TickerCard, PWA, metrics formulas. |
+| `spec/screens/portfolio.md` | Portfolio Home (held positions). |
+| `spec/screens/ticker-detail.md` | Ticker Detail (works for held AND watchlist tickers). |
+| `spec/screens/watchlist.md` | Watchlist tab (Track 1, moved into MVP). |
+| `spec/screens/alerts.md` | Alerts feed. |
+| `spec/screens/settings.md` | App-level Settings. |
+| `spec/roadmap.md` | Post-MVP tracks. Contextual settings pattern. Deferred work (structure-feature redesign, LLM-engine refinement). |
+| `spec/archive.md` | Historical content not reflecting current code. |
 
 **Editing convention:** when you edit the spec, edit the file matching the concern. If a change naturally crosses multiple files, that's a signal the concern might be miscarved — flag it before duplicating content. Cross-reference by file path (`see schema.md → Supabase Schema`) rather than restating.
 

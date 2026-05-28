@@ -9,7 +9,7 @@ Upside's runtime shape: where things run, how they talk, who can sign in.
 - **Broker API**: IB Client Portal API (REST), gateway runs on same Oracle VPS
 - **Market Data**: IB API (prices, OHLCV bars, fundamentals — VWAP computed BE-side, not provided by IB), Finnhub (news, sentiment, insider trades, earnings, intraday candles — free 60 calls/min, all routed through a rate-limited queue, see `schema.md`)
 - **Technical Indicators**: Computed locally from IB price data using `technicalindicators` npm library (RSI, MACD, Bollinger, SMA/EMA, Stochastic, support/resistance, volume profile)
-- **AI/LLM**: Multi-provider, provider-agnostic. **Current: Groq `llama-3.3-70b-versatile`** (free tier, proven) via an OpenAI-compatible provider; **Mistral** configured but not yet used; OpenRouter / OpenAI available the same way. **Gemini** (native REST) is implemented but parked — its free tier was too rate-limited for even a single analysis; may revisit on a paid tier. Active provider/model chosen at **runtime** via `app_config` + `/api/config/llm` (Settings dropdown) — keys live in `.env`, no restart to switch. No vendor lock-in. See `signal-model.md` → LLM Provider Abstraction.
+- **AI/LLM**: Multi-provider, provider-agnostic. **Current: Groq `llama-3.3-70b-versatile`** (free tier, proven) via an OpenAI-compatible provider; **Mistral** configured but not yet used; OpenRouter / OpenAI available the same way. **Gemini** (native REST) is implemented but parked — its free tier was too rate-limited for even a single analysis; may revisit on a paid tier. Active provider/model chosen at **runtime** via `app_config` + `/api/config/llm` (Settings dropdown) — keys live in `.env`, no restart to switch. No vendor lock-in. See `signals/playbook.md` → LLM Provider Abstraction.
 - **Caching**: Redis (self-hosted in Docker container on Oracle VPS — no external service)
 - **Hosting**: Vercel (frontend, free *.vercel.app subdomain), Oracle Cloud (backend + IB gateway + Redis, free)
 - **CI/CD**: GitHub (PUBLIC repo, proper secret isolation) + manual deploy initially, GitHub Actions later
@@ -99,7 +99,9 @@ The "real-time loop" is implemented as two cooperating pollers writing to the sa
 - **Primary (`ibPricePoller`)**: runs only when IB session is `connected`. Adaptive cadence (10s / 60s / 5min depending on market period). Writes to Supabase with `price_source: 'ib'` and stamps `last_price_update_at`. Best granularity, requires IB connected.
 - **Fallback (`finnhubPricePoller`)**: runs continuously, 60s cadence, but **skips the whole tick while the IB session is authenticated+connected** — IB is authoritative for all held positions when live, so Finnhub must not write. (The earlier per-row "older than 90s" staleness check was leaky: `ibPricePoller`'s change-detection skips the write *and* the `last_price_update_at` bump when a price holds steady, so a quiet IB price would "expire" after 90s and Finnhub would overwrite it with its delayed quote — e.g. pre-market IB 4.28 vs Finnhub prior-close 4.18 — causing a price/total flicker. Gating on IB connection status fixes that.) When IB is down, it fetches a quote via `finnhubQueue.request('quote', symbol, ...)` for each held position older than 90s and writes with `price_source: 'finnhub'`. Note Finnhub free `/quote` carries no extended-hours price, so the fallback shows the prior close pre/post-market.
 
-Both pollers recompute zone state on every write (see `signal-model.md` → Profit-Taking Zone Detection). The FE renders `current_price` agnostic to source.
+Both pollers recompute zone state on every write (see `signals/zone.md`). The FE renders `current_price` agnostic to source.
+
+**Watchlist coverage (post-watchlist-pivot, Batch A1):** the polling loop's symbol set is `held_conids ∪ active_watchlist_conids` — the union of held positions and tickers in `watchlist_lists WHERE active=true`. Same cadence, same IB-primary/Finnhub-fallback semantics. Writes land in `quotes` (canonical), and `positions` (denormalized for held). Hidden watchlists are not polled. Discord channels extend correspondingly: `#upside-zone-profit` (held), `#upside-dip-buys` (watchlist markers + entry zones — see `signals/markers.md` and `signals/entry-zones.md`).
 
 **Why this works:** matches the on-demand IBeam model. Prices update in Supabase even when the user has IB disconnected to use IBKR Mobile. Zone notifications and signal-range notifications keep firing. The user gets a working app whether or not IB is currently up; IB just makes things sharper.
 
@@ -107,7 +109,7 @@ Both pollers recompute zone state on every write (see `signal-model.md` → Prof
 
 **Principle:** price is a property of an *instrument*, not a holding. There is one canonical "latest quote" per conid, written by one ingestion loop (the pollers above), read by every consumer — they do **not** re-fetch their own.
 
-**Today (MVP, held-only):** canonical = `positions.current_price` (+ `last_price_update_at`, `price_source`). Consumers that must read it instead of re-fetching: the TickerDetail header (already does, via Realtime), the chart's live-price line, the Today's-Range dot, and `signalEngine` — gated on `last_price_update_at` recency (see `signal-model.md` → Freshness guard).
+**Today (MVP, held-only):** canonical = `positions.current_price` (+ `last_price_update_at`, `price_source`). Consumers that must read it instead of re-fetching: the TickerDetail header (already does, via Realtime), the chart's live-price line, the Today's-Range dot, and `signalEngine` — gated on `last_price_update_at` recency (see `signals/playbook.md` → Freshness guard).
 
 **Track 1 (watchlists, post-MVP):** the canonical is promoted to a dedicated **`quotes`** table keyed by `conid` (see `schema.md`). `positions` and `watchlist_items` reference it; neither carries a duplicated `price` column. The pollers' loop extends to cover every tracked conid (held + watchlisted). One writer, one price per instrument, all surfaces read the same value. The table stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so divergence is observable and fallback is made on real provenance — not by silently overwriting one source with the other.
 
@@ -209,7 +211,7 @@ upside/
 ├── client/                 # React frontend (Vite) — deploys to Vercel
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── primitives/                   # Atomic UI renderers (catalog in screens.md)
+│   │   │   ├── primitives/                   # Atomic UI renderers (catalog in screens/_design-system.md)
 │   │   │   ├── PortfolioHome/
 │   │   │   │   ├── TickerCard.tsx            # variant='held'|'watchlist'
 │   │   │   │   ├── SummaryStrip.tsx
@@ -296,4 +298,4 @@ upside/
 └── README.md
 ```
 
-The full catalog of FE primitives is in `screens.md`.
+The full catalog of FE primitives is in `screens/_design-system.md`.

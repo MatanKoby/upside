@@ -10,7 +10,7 @@ Items in approximate build order, with Watchlist track first since it's the larg
 
 A UX convention used throughout: **settings are contextual to the screen they affect, not centralized into one mega-settings-screen.**
 
-- **App-level Settings** (Settings tab in bottom nav) — only truly app-wide concerns: IB Connection, signal generation threshold, profit-zone threshold, theme, LLM provider, sign out. See `screens.md` → Screen 4.
+- **App-level Settings** (Settings tab in bottom nav) — only truly app-wide concerns: IB Connection, signal generation threshold, profit-zone threshold, theme, LLM provider, sign out. See `screens/_design-system.md` → Screen 4.
 - **Per-screen Settings** — accessed via a gear icon (ti-settings) in the top-right of the screen header. Tapping opens a sheet/modal scoped to that context, not a full screen takeover:
   - **Portfolio screen**: sort defaults, custom-sort drag order management.
   - **Watchlists tab** (the list-of-watchlists view): "Unhide watchlists," reorder visible watchlists.
@@ -22,7 +22,20 @@ The pattern keeps the app-level Settings screen clean. When adding a new screen 
 
 ---
 
-## Track 1: Watchlists + BUY Signals UI
+## Track 1: Watchlists + BUY Signals UI — MOVED INTO MVP (2026-05-28 pivot)
+
+> **Track 1 was promoted into MVP** by the watchlist pivot. The watchlist surface plus its LLM-free signal primitives ship as Batches A1 (watchlists + quotes table), A2 (manual markers + dip-buy alerts), A+ (dynamic entry-zone engine), and B (intraday-stats engine). See `screens/watchlist.md`, `signals/markers.md`, `signals/entry-zones.md`. The original Track-1 BUY-signal UI (auto-populated "Active Watchlist" driven by the LLM playbook engine) remains here as forward-spec for when LLM-signal quality is sharpened post-pivot.
+
+### Deferred behind the watchlist pivot
+
+- **Structure-feature redesign** (tasks #11–15, #18 in the planning log): ADX gate + DI direction, anchor `structure` to the prior major low (not the immediately-prior swing only), widen the label space (`basing | consolidating | strong-up/down`), RSI divergence flag (filtered), optional consolidating composite score, market-relative RS (needs SPY series). The current `structure` label uses a too-blunt last-two-swings comparison and can mislabel a coiling base as a downtrend (BBAI case from 14g testing). Queue after the watchlist surface is live.
+- **Refine mode + live per-leg tracking** (Batch 14h).
+- **Accuracy cron** (Batch 14b).
+- **`fresh-or-stop` engine guard** is *spec'd* but waits to be implemented (the watchlist work doesn't run the LLM engine).
+
+---
+
+### Original Track-1 design (forward-spec — kept for the LLM Active-Watchlist piece)
 
 **Goal:** unlock buy-side intelligence. User can see all tickers they're tracking in IB, hide noise, get BUY signals on demand for any tracked ticker, and have an auto-populated "Active Watchlist" of tickers currently showing live BUY signals.
 
@@ -46,7 +59,7 @@ Letting Upside create or edit IB-side watchlists is **explicitly deferred to a l
 
 ### Screens
 
-Watchlists screen (the tab) and Single watchlist screen are spec'd at full screen-detail in `screens.md` → Screens 5 + 6. Includes the Active Watchlist's two-collapsible-container pattern (Live + Watching).
+Watchlists screen (the tab) and Single watchlist screen are spec'd at full screen-detail in `screens/_design-system.md` → Screens 5 + 6. Includes the Active Watchlist's two-collapsible-container pattern (Live + Watching).
 
 ### The Active Watchlist (computed, not stored)
 
@@ -168,7 +181,7 @@ Each is a small additive feature on top of the existing engine. No new schema; j
 1. **Signal post-mortem with thumbs-up/down feedback** — auto-generates one-line outcome per expired/hit signal ("Sell signal on NVDA at $193-198 expired after 7 days, price peaked at $196.40 — didn't reach optimal"). User thumbs-up/down. Aggregates over time into "your accuracy on this LLM provider, this signal type, this market regime."
 2. **"What changed" digest** — morning summary delivered via Discord and PWA push: overnight moves, upcoming earnings (next 7 days), new insider activity, zone-state changes since yesterday's close. High signal-density per screen.
 3. **Position thesis** — user-editable text per position included in LLM analysis context. Forces articulation of why you hold what you hold; makes the LLM's reasoning specifically address your thesis ("you bought NVDA on AI capex tailwind; that thesis is intact but valuation has stretched...").
-4. **Additional `contextualTriggers`** — imminent earnings (<24h), recent insider transactions, unusual volume, news-event proximity. Wires into the same `contextualTriggers` field reserved in MVP Batch 14a (see `signal-model.md`).
+4. **Additional `contextualTriggers`** — imminent earnings (<24h), recent insider transactions, unusual volume, news-event proximity. Wires into the same `contextualTriggers` field reserved in MVP Batch 14a (see `signals/playbook.md`).
 5. **Partial re-analysis (directed analyze)** — when chat lands, allow "just analyze SELL for NVDA" or "just analyze BUY" without re-running the full unified analysis. New analysis would supersede only the relevant direction's signal row, leaving the other direction's signal alive. Currently disallowed in MVP because it creates mismatched-age signals; revisit when chat surface makes the user intent explicit. Requires:
    - Direction parameter on the analyze route.
    - Per-direction supersede semantics (instead of analysis-id-level).
@@ -185,7 +198,7 @@ Each is a small additive feature on top of the existing engine. No new schema; j
    - Filter / screen: "show me my positions with imminent earnings" / "list watchlist tickers near 52w low" — natural-language replacement for traditional screener UI.
    - Cross-position questions: "why is my portfolio red today?" — sourced answer pulling from positions + signals + news.
    
-   Expensive (every message = at least one LLM call) — gate behind a daily message ceiling separate from the analyze ceiling. Chat replies embed TickerCard primitives inline so ticker context is rich (see `screens.md` → Primitives catalog).
+   Expensive (every message = at least one LLM call) — gate behind a daily message ceiling separate from the analyze ceiling. Chat replies embed TickerCard primitives inline so ticker context is rich (see `screens/_design-system.md` → Primitives catalog).
 
 2. **Natural language ticker screener** — "show me tickers with RSI > 70 and earnings in the next 5 days." Standalone surface or chat capability — likely chat once chat lands.
 3. **"Why didn't this fire?" inverse query** — cheap LLM call explaining why a position has no current signal. Different from full Analyze: cheaper, faster, no commitment. Builds trust in the no-signal state.
@@ -215,7 +228,7 @@ Each is a small additive feature on top of the existing engine. No new schema; j
 
 **Current limitation.** The TickerDetail price chart (`PriceChart.tsx`, fed by `GET /api/marketdata/history/:symbol`) draws candles from **IB history only** — there is no fallback source and the history endpoint does not cache to Redis. So when the IB session is disconnected the chart has nothing to plot and renders an explicit empty state ("Chart data unavailable — Live charts need an Interactive Brokers connection"). This is the honest state after the mock-data fallback was removed; previously it silently showed synthetic candles. Finnhub does **not** fill this gap: its free tier dropped `/stock/candle`, so `finnhub.ts` has no candle fetch — we use Finnhub only for `/quote` (price fallback) and `/stock/metric` (fundamentals).
 
-> Note: `architecture.md` / `signal-model.md` / `flows.md` reference "Finnhub intraday candles" for the daily-hindsight accuracy cron. Verify whether that path is actually wired before relying on it as a chart source — it may share the same gap.
+> Note: `architecture.md` / `signals/playbook.md` / `flows.md` reference "Finnhub intraday candles" for the daily-hindsight accuracy cron. Verify whether that path is actually wired before relying on it as a chart source — it may share the same gap.
 
 **Research task.** Investigate free-tier market-data providers that could supply intraday + historical OHLCV bars so charts survive IB outages (and ideally so a Redis-cached last-good window can render instantly). Candidates to evaluate on free-tier rate limits, history depth, intraday granularity, and ToS for redistribution/caching:
 
