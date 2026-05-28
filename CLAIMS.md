@@ -14,6 +14,26 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Batch A1 — Watchlists + IB import + quotes table + TickerDetail-for-non-held
 - Owner: claude
 - Started: 2026-05-28
+- **Implementation complete + pushed.** Commits: aa345f8 (migration 011) → ab0b6ad (IB watchlist sync service + route) → 7d2940b (poller quotes mirror + new watchlistQuotePoller) → 9a6b13e (FE Watchlist tab + page + import + per-list settings) → 881cd28 (TickerDetail for non-held). Server + client typecheck + client build all clean.
+- **What shipped:**
+  - Migration 011 — `quotes` (conid pk, ib_price + finnhub_price + canonical_* triple) + `watchlist_lists` (active default false; UNIQUE user_id+ib_list_id) + `watchlist_items` (UNIQUE list_id+conid). RLS + Realtime.
+  - `services/watchlists.ts` — `syncWatchlistsFromIb(userId)`: filters to user_lists (system_lists skipped per Batch 13.2 capture), upserts lists (preserves user-owned `active` flag), upserts items, deletes IB-orphaned items. `setListActive(userId, listId, active)`.
+  - `routes/watchlists.ts` — `POST /api/watchlists/sync` (IB-gated, 403 `{reason:'ib_required'}` when off) + `PATCH /api/watchlists/:id { active }`. Mounted at `/api/watchlists`.
+  - `services/quotes.ts` — `upsertQuote({conid, symbol, source, price, setCanonical})` helper. IB writes always set canonical; Finnhub writes set canonical when called (the existing fallback poller only fires when IB is off, so it's authoritative there). `activeWatchlistOnlyConids(heldConids)` returns the gap-set.
+  - Pollers — `ibPricePoller` mirrors each held position into `quotes` (source='ib'); `finnhubPricePoller` mirrors into `quotes` (source='finnhub', canonical). New `watchlistQuotePoller` (60s) batches `ibSnapshot([conids])` when IB is up, falls back to per-symbol Finnhub `/quote` via the queue otherwise.
+  - FE — `BottomNav` adds Watchlist (Portfolio · Watchlist · Alerts · Settings); `/watchlist` route. `useWatchlistData` subscribes to watchlist_lists + watchlist_items + quotes. `pages/Watchlist.tsx`: empty state with Import button → POST /sync; horizontal sub-tab strip per active list; ticker rows showing symbol + canonical price + source; gear icon → in-screen settings sheet with per-list active checkboxes (PATCH /active) + Re-import button.
+  - `useTickerDetail` — when not in positions, falls back to a `watchlist_items` symbol lookup → `quotes` price; positionStats stays null (TickerDetail already hides that section). Realtime sub extends to `quotes`.
+- **Pending before Completed** (manual + verification):
+  1. Apply `supabase/migrations/011_watchlist_and_quotes.sql` to Supabase.
+  2. `./bin/upside rebuild` on the VPS.
+  3. FE auto-deploys via Vercel (hard-refresh PWA if cached).
+  4. Connect IB. Watchlist tab → "Import from IB". Toggle a list active in the gear settings.
+  5. Verify live prices appear on watchlist rows (IB-source).
+  6. Disconnect IB; verify Finnhub takes over for the same watchlist conids (canonical_source flips to 'finnhub' on the rows).
+  7. Tap a watchlist ticker → TickerDetail renders with chart/snapshot, Position Stats hidden.
+- **Known caveats folded in, NOT blockers:**
+  - Analyze on a non-held watchlist ticker will produce a `no_signal` with reason "live price stale" because `signalEngine` still reads `positions.current_price` (not `quotes.canonical_price`). Honest fail-soft. Updating the engine to read `quotes` is a small future PR; deliberately deferred to keep A1 focused.
+  - Spec'd `quotes` schema includes ATR-based debounce + the canonical-mirror denormalization that the migration realized exactly per `spec/schema.md`.
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
