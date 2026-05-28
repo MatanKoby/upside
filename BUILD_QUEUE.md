@@ -67,6 +67,112 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ## Un-done batches
 
+> **2026-05-28 pivot:** the next four batches (A1 → A2 → A+ → B) implement the watchlist surface + LLM-free signals. LLM-signal-engine refinements take a back seat. See `spec/roadmap.md` → Track 1 for the deferred list with rationale.
+
+## Batch A1: Watchlists + IB import + `quotes` table + TickerDetail-for-non-held
+
+**Depends on:** Batch 13 (live IB), Batch 13.2 (IB watchlist payload shapes captured).
+
+**Scope:** the watchlist foundation. Imports user_lists from IB, lets the user toggle which are active, polls prices for active-list conids (extending the existing pollers), introduces the canonical instrument-keyed `quotes` table, and makes TickerDetail render for non-held tickers. No alerts yet — A2 adds those.
+
+### Deliverables
+
+1. **Schema migration** `011_watchlist_and_quotes.sql`:
+   - `quotes` table per `spec/schema.md` (conid pk, `ib_price/ib_updated_at`, `finnhub_price/finnhub_updated_at`, `canonical_price/canonical_source/canonical_updated_at`).
+   - `watchlist_lists` table (`user_id`, `ib_list_id`, `name`, `active bool default false`, `ib_modified_at`, `synced_at`).
+   - `watchlist_items` table (`list_id` FK, `conid`, `symbol`, `added_at`).
+   - Realtime enabled on all three.
+   - `positions.current_price` stays for MVP — becomes a denormalized mirror of `quotes.canonical_price` the same poller writes.
+
+2. **Backend — IB watchlist import** (`server/src/services/watchlists.ts` + `routes/watchlists.ts`):
+   - `POST /api/watchlists/sync` — IB-gated; pulls `/v1/api/iserver/watchlists`, filters to user_lists, per-list calls `/v1/api/iserver/watchlist?id=<id>`, upserts. Default `active=false` for newly-imported lists.
+   - `PATCH /api/watchlists/:list_id { active }` — flip active/hidden.
+
+3. **Poller extension** — `ibPricePoller` / `finnhubPricePoller` symbol set becomes `held_conids ∪ active_watchlist_conids`. Writes go to `quotes` (canonical) + `positions` (denormalized, held only). See `spec/architecture.md` → Single source of truth + Multi-source price polling.
+
+4. **Frontend — Watchlist tab + screen** per `spec/screens/watchlist.md`:
+   - Add Watchlist to bottom nav (Portfolio · Watchlist · Settings).
+   - Empty state with `[Import from IB]`.
+   - Gear icon → in-screen settings sheet with per-list active/hidden toggle + Re-import.
+   - Sub-tab strip per active list. Ticker rows show: ticker · company · current price (canonical) · today's change · sparkline. No marker chips yet (A2 adds).
+   - Tap a row → TickerDetail.
+
+5. **Frontend — TickerDetail for non-held** per `spec/screens/ticker-detail.md`:
+   - `useTickerDetail` resolves price from the canonical (positions for held, quotes for watchlist-only).
+   - Position Stats section hidden when no shares; everything else renders.
+   - Replace the "coming soon" placeholder for the non-held branch with a real render.
+
+### Verification
+- Tap Import from IB → user_lists appear in the in-screen settings as hidden checkboxes.
+- Toggle one active → its tickers appear as a sub-tab + rows with live prices within a poll cycle.
+- Hold a watchlist ticker → it shows in both Portfolio and the watchlist (no double-poll: one row in `quotes`).
+- Tap a watchlist-only ticker → TickerDetail renders with header + chart + Today's Range + Market Stats; Position Stats hidden.
+- Disconnect IB → header shows disconnected, prices keep flowing via Finnhub for active conids.
+
+---
+
+## Batch A2: Manual price markers + dip-buy Discord alerts
+
+**Depends on:** Batch A1.
+
+**Scope:** user-defined price markers attached to watchlist tickers. First-cut wires only `at_or_below` (dip-buys) → `#upside-dip-buys`. See `spec/signals/markers.md`.
+
+### Deliverables
+
+1. **Schema migration** `012_watchlist_markers.sql` per `spec/schema.md`.
+2. **Backend** — CRUD endpoints (`POST/PATCH/DELETE /api/watchlist-markers/...`); poller hook checks each marker on every `quotes` write with the transition + cooldown rules in `spec/flows.md` → Marker Hit Flow.
+3. **Discord notifier** — `notifyMarkerHit(marker, ticker)` → `#upside-dip-buys` (env `DISCORD_WEBHOOK_DIP_BUYS`).
+4. **Frontend** — long-press (mobile) / right-click (desktop) on a watchlist row opens add-marker sheet. Tap-on-marker → edit sheet. Marker chips render inline on the row + on TickerDetail's Markers section.
+
+### Manual prereq
+- Create `#upside-dip-buys` Discord channel, add `DISCORD_WEBHOOK_DIP_BUYS` to VPS `.env`, `./bin/upside rebuild`.
+
+### Verification
+- Set an `at_or_below $X` marker; price drops through $X → Discord ping fires once, `last_fired_at` set. Cooldown gate prevents re-fire for 24h.
+- `at_or_above` and `about` markers accepted by schema; no alert fires for them yet (queued for follow-up batch).
+
+---
+
+## Batch A+: Dynamic entry-zone engine + vitest test suite
+
+**Depends on:** Batch A2.
+
+**Scope:** continuous LLM-free engine that recomputes per-horizon entry zones on every poll cycle, adapts to trend regime, forgives overbought tickers. Dynamic zones fire Discord alerts on entry (same `#upside-dip-buys` channel for first cut). Ships with a vitest test suite as part of its definition. See `spec/signals/entry-zones.md`.
+
+### Deliverables
+
+1. **Schema migration** `013_entry_zones.sql` per `spec/schema.md`.
+2. **Backend** — `computeEntryZones(...)` per `spec/signals/entry-zones.md`. Simple v1 trend regime (SMA20 slope + price-vs-SMA50). Bar fetch policy: nightly cron refresh per active-list conid + on-demand on first activation; compute reads cached bars. Poller hook upserts `entry_zones` rows per cycle. Alert fires on price entering the band published at the prior cycle, 24h cooldown per `(conid, horizon)`.
+3. **vitest on server** — `pnpm test:server`; 10 scenario fixtures per `spec/signals/entry-zones.md` → Test suite (trending up moderate, overbought forgiveness, consolidation, downtrend, basing/higher-low-off-bottom, gap up, low-vol, high-vol, confluence detection, edge cases). Synthetic fixtures first; IB-captured fixtures for the "real data" cases via `bin/upside-ib`.
+4. **Frontend** — three entry-zone chips per watchlist row (intraday/overnight/multiday); tap a chip → popover with reasoning, confidence, recent firings, "Promote to manual marker" action. TickerDetail gets an Entry Zones collapsible section.
+
+### Verification
+- `pnpm test:server` runs all 10 scenarios green.
+- Active-list ticker shows three chips that update live as price moves.
+- Overbought ticker: chips flag `overbought_tightened` and prices sit closer to live than SMA50 would suggest.
+- Price entering a zone fires `#upside-dip-buys` once per `(conid, horizon)` per 24h.
+
+---
+
+## Batch B: Intraday-stats engine (LLM-free signals from historical bars)
+
+**Depends on:** Batch A+.
+
+**Scope:** nightly cron computes per-symbol stats from historical 5-min IB bars — open fade, close fade, typical intraday-low %, lookback window TBD at batch start. Stats appear as a panel on TickerDetail; pollers can fire stats-driven Discord alerts (typical-low zone entry) once the picks are settled.
+
+### Pending decisions (settle when claiming)
+- Which stats first cut? (open-fade / close-fade / intraday-low — pick 1-3.)
+- Lookback window — 60 / 90 / 252 trading days?
+- Stats-driven alert path — separate channel or share `#upside-dip-buys`?
+
+### Deliverables (sketch)
+1. `014_intraday_stats.sql` — per-symbol stat rows.
+2. Nightly cron `intradayStatsCron.ts` — pulls 5-min bars for each active-list conid, computes the chosen stats, upserts.
+3. Stats endpoint + FE panel on TickerDetail.
+4. (Optional in this batch) live alerts when price enters a stats-derived zone.
+
+---
+
 ## Batch 13.2: Generic IB passthrough debug endpoint
 
 **Depends on:** Batch 13 (live IB available via IBeam).
@@ -428,7 +534,7 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 ## Batch 14b: Daily hindsight accuracy tracking cron
 
-**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework is now happening as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signal-model.md`; scope in `CLAIMS.md`.
+**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework is now happening as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signals/playbook.md`; scope in `CLAIMS.md`.
 
 **Depends on:** Batch 14a, 13.7.
 
@@ -566,7 +672,7 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 **Depends on:** Batch 13 (live IB), Batch 13.8 (Finnhub queue for fallback).
 
-**Scope:** Fill the TickerDetail data that's been hardcoded empty since the screen was built against mock data. `useTickerDetail` currently returns `dayLow/dayHigh: 0`, `currentInRange: 0`, `marketStats: []` (see comments in `client/src/hooks/useTickerDetail.ts`), so **Today's Range** shows zeros and **Market Stats** is blank. This batch builds the snapshot endpoint that feeds both. Spec: `screens.md` → Today's Range / Market Stats (data-source notes).
+**Scope:** Fill the TickerDetail data that's been hardcoded empty since the screen was built against mock data. `useTickerDetail` currently returns `dayLow/dayHigh: 0`, `currentInRange: 0`, `marketStats: []` (see comments in `client/src/hooks/useTickerDetail.ts`), so **Today's Range** shows zeros and **Market Stats** is blank. This batch builds the snapshot endpoint that feeds both. Spec: `screens/_design-system.md` → Today's Range / Market Stats (data-source notes).
 
 ### Deliverables
 1. **`GET /api/marketdata/snapshot/:symbol`** (`server/src/routes/marketdata.ts`) — auth-gated. Returns `{ dayLow, dayHigh, open, prevClose, last, week52High, week52Low, stats: { volume, peRatio, eps, marketCap, beta, avgVol30d, ... } }`.
@@ -591,7 +697,7 @@ Re-wired routing regression discovered post-Batch-13. Components from Batches 2-
 
 **Depends on:** Batch 14a (signals/pills). Independent of 14e.
 
-**Scope:** Four FE fixes where the chart/signal UI was built against mock data and doesn't behave on real data. Frontend-only (Vercel deploy). Spec: `screens.md` → Price Chart / Signal Section.
+**Scope:** Four FE fixes where the chart/signal UI was built against mock data and doesn't behave on real data. Frontend-only (Vercel deploy). Spec: `screens/_design-system.md` → Price Chart / Signal Section.
 
 ### Deliverables
 1. **RSI subchart** — `PriceChart.tsx` hardcodes `rsi: []` on the real-data path (line ~40), so the RSI line never draws while the decorative band `<div>`s still render ("bands but no data"). Compute RSI **client-side** from the fetched candles and render the line; render the bands only when RSI data is present.
