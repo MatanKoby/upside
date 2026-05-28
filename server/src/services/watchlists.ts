@@ -38,6 +38,23 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
   }
 
   const userLists = Array.isArray(top.user_lists) ? top.user_lists : [];
+
+  // Observability — if IB returned a 200 but we extracted no user_lists, that's
+  // a "silent success" the user can't distinguish from a real import. Surface
+  // it: notify with the top-level shape (key names + array lengths) so we can
+  // see at a glance whether IB's payload doesn't match the parser or whether
+  // the account genuinely has 0 user lists. Same channel as other API failures
+  // (#errors) — discoverable without a separate audit log.
+  if (userLists.length === 0) {
+    const topKeys = Object.keys(top ?? {});
+    const sysLen = Array.isArray((top as { system_lists?: unknown }).system_lists)
+      ? ((top as { system_lists: unknown[] }).system_lists).length
+      : 'n/a';
+    void notifyError(
+      'watchlists.sync.empty',
+      `IB /iserver/watchlists returned 200 but user_lists is empty. top_keys=[${topKeys.join(',')}] system_lists_len=${sysLen}. Sample payload top: ${JSON.stringify(top).slice(0, 400)}`,
+    );
+  }
   const db = supabase();
   const now = new Date().toISOString();
 

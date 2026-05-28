@@ -316,7 +316,13 @@ function finalizePortfolioMetrics(rows: AssembledPosition[]): void {
 }
 
 async function pollCycle(userId: string, accountId: string): Promise<void> {
-  const positions: RawIbPosition[] = await ibPositions(accountId);
+  const rawPositions: RawIbPosition[] = await ibPositions(accountId);
+  // IB sometimes returns recently-closed positions with shares=0 for a while
+  // after the close. They aren't holdings and they pollute downstream logic
+  // (orphan check by symbol wouldn't catch them — same symbol, just no
+  // shares). Filter at the source so they're treated as not-held, which makes
+  // the orphan delete below clear them.
+  const positions = rawPositions.filter((p) => Number(p.position ?? 0) !== 0);
   if (positions.length === 0) {
     // No positions: zero out any stale rows for this user.
     await supabase().from('positions').delete().eq('user_id', userId);

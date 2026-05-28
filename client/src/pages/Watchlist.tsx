@@ -60,7 +60,14 @@ export default function Watchlist() {
     const r = await postSync();
     setSyncing(false);
     if (r.ok && r.result) {
-      setSyncMessage(`Imported ${r.result.imported} list${r.result.imported === 1 ? '' : 's'} (${r.result.totalItems} tickers).`);
+      if (r.result.imported === 0) {
+        // Honest copy when the route succeeded but there was nothing to
+        // import — the BE also notifies #errors with the IB top-level shape
+        // (see services/watchlists.ts) so we can diagnose why.
+        setSyncMessage('IB returned 0 user lists. Check IBKR Mobile → Watchlists to confirm you have lists there.');
+      } else {
+        setSyncMessage(`Imported ${r.result.imported} list${r.result.imported === 1 ? '' : 's'} (${r.result.totalItems} tickers).`);
+      }
     } else if (r.status === 403 && r.reason === 'ib_required') {
       setSyncMessage('Connect IB to import watchlists.');
     } else {
