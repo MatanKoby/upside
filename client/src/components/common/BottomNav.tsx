@@ -1,13 +1,14 @@
 import { NavLink } from 'react-router-dom';
-import { IconChartPie, IconBell, IconSettings } from '@tabler/icons-react';
+import { IconChartPie, IconBookmark, IconBell, IconSettings } from '@tabler/icons-react';
 
-// MVP nav per spec: Portfolio, Alerts, Settings.
-// Screener / Chat / Watchlist are post-MVP (see UPSIDE_MVP_SPEC.md →
-// "Post-MVP" priority list); explicitly not surfaced from the bottom nav.
+// Bottom nav per spec/screens/portfolio.md (post-2026-05-28 watchlist pivot):
+// Portfolio · Watchlist · Settings. Alerts stays as a tab for now and migrates
+// to a header bell in Batch 15 when the Alerts feed lands.
 const TABS = [
-  { to: '/',         label: 'Portfolio', Icon: IconChartPie, end: true  },
-  { to: '/alerts',   label: 'Alerts',    Icon: IconBell,     end: false },
-  { to: '/settings', label: 'Settings',  Icon: IconSettings, end: false },
+  { to: '/',          label: 'Portfolio', Icon: IconChartPie, end: true  },
+  { to: '/watchlist', label: 'Watchlist', Icon: IconBookmark, end: false },
+  { to: '/alerts',    label: 'Alerts',    Icon: IconBell,     end: false },
+  { to: '/settings',  label: 'Settings',  Icon: IconSettings, end: false },
 ];
 
 export function BottomNav() {

@@ -4,11 +4,10 @@ import PortfolioHome from './pages/PortfolioHome';
 import ComingSoon from './pages/ComingSoon';
 import TickerDetailPage from './pages/TickerDetailPage';
 import Settings from './pages/Settings';
+import Watchlist from './pages/Watchlist';
 
-// MVP routes per spec: portfolio (index), ticker detail, alerts, settings.
-// Alerts renders a ComingSoon placeholder here; Batch 15 replaces it (and
-// expands Settings) with the full screens. Settings is live now with a
-// minimal account + developer (copy-JWT) surface.
+// Routes per spec. Post-2026-05-28 watchlist pivot adds /watchlist.
+// Alerts still renders ComingSoon — Batch 15 wires the feed.
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -16,6 +15,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true,            element: <PortfolioHome /> },
       { path: 'ticker/:symbol', element: <TickerDetailPage /> },
+      { path: 'watchlist',      element: <Watchlist /> },
       { path: 'alerts',         element: <ComingSoon label="Alerts" /> },
       { path: 'settings',       element: <Settings /> },
     ],
