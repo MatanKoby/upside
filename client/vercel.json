@@ -1,13 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "comments": [
-    "React Router is a CLIENT-SIDE SPA router — Vercel sees /watchlist, /ticker/XOM,",
-    "/settings as paths that don't map to a real file and returns 404 on hard refresh.",
-    "Rewrite every non-asset request to /index.html so the bundle loads and React",
-    "Router resolves the path on the client. Static assets (Vite emits everything",
-    "under /assets/) and the PWA service-worker/manifest are excluded so they keep",
-    "their real responses."
-  ],
   "rewrites": [
     { "source": "/((?!assets/|sw\\.js|workbox-.*\\.js|manifest\\.webmanifest|favicon\\..*|robots\\.txt).*)", "destination": "/index.html" }
   ]
