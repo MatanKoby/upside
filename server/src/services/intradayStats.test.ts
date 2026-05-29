@@ -59,7 +59,7 @@ function dayBars(shape: DayShape, bars = 78): IntradayBar[] {
   return out;
 }
 
-function range(n: number, startDateIso: string, perDay: (i: number) => DayShape): IntradayBar[] {
+function range(n: number, startDateIso: string, perDay: (i: number) => Omit<DayShape, 'date'>): IntradayBar[] {
   const startMs = new Date(startDateIso + 'T00:00:00Z').getTime();
   const out: IntradayBar[] = [];
   for (let i = 0; i < n; i++) {
