@@ -11,7 +11,12 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 ### Active priority (2026-05-28 pivot): Watchlists + LLM-free signals
 - The signal-engine work below (14g) is functionally closed (engine validated on BBAI re-analyze; spec'd in `signals/playbook.md`; known follow-ups parked in `roadmap.md`). The next four batches are **A1 → A2 → A+ → B** in `BUILD_QUEUE.md` — watchlist surface + LLM-free signal primitives. LLM-engine refinements (structure-feature redesign, Refine mode, accuracy cron un-defer, `fresh-or-stop` engine guard implementation) are deferred behind the pivot. See `spec/roadmap.md` → Track 1.
 
-### Batch A+ — Dynamic entry-zone engine + vitest test suite
+### Batch B — Intraday-stats engine (LLM-free signals from historical bars)
+- Owner: claude
+- Started: 2026-05-29 13:11
+- Awaiting user-confirmed picks on (1) which stats first cut, (2) lookback window, (3) alert channel before implementation.
+
+### Batch A+ — Dynamic entry-zone engine + vitest test suite (closed under polish)
 - Owner: claude
 - Started: 2026-05-28 21:55
 - **Implementation complete + pushed.** Arc: 5a70632 (migration 013 + engine) → d9c0285 (vitest + 8 scenario tests, all green) → 25f98df (entryZonesCron, 15-min cadence) → a3fdf65 (FE entry-zone chips on watchlist rows) → 5ade427 (Discord alerts on price crossing into a zone band). Then polish: 3ccaaa4 (migration 014 + company_name on watchlist rows).
@@ -77,6 +82,22 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch A+ — Dynamic entry-zone engine + vitest test suite + watchlist row polish (2026-05-28 → 2026-05-29)
+- Owner: claude
+- Started: 2026-05-28 21:55 · Finished: 2026-05-29 13:00
+- Commits: 5a70632 (migration 013 + engine) → d9c0285 (vitest + 8 scenario tests) → 25f98df (entryZonesCron) → a3fdf65 (FE chips) → 5ade427 (Discord alerts on zone crossing) → 3ccaaa4 (migration 014: company_name + sync writes it) → e681250 (migration 015: today_change_pct + sparkline_closes) → cc77fc3 (layout B + collapsed cluster + glossary + promote-to-marker) → 21c87e9 (price anchored top-right; company ellipsis; wider popover) → 1d6d050 (zone cluster inline in main row; left container width-set; popover opens leftward) → 37469e0 (markers + zone chip share one inline cluster) → de1b4f8 → 263a983 (Vercel SPA rewrites).
+- **Engine: end-to-end.** `services/entryZones.ts` pure function, 8 scenarios via `pnpm test:server`. `entryZonesCron` (15-min) writes per-(conid, horizon) rows for active watchlist conids and piggybacks the 7-day sparkline. `services/entryZoneAlerts.ts` fires Discord (`#upside-dip-buys`, same channel as markers) when price crosses a zone band, 24h cooldown anchored on `entry_zones.last_fired_at`.
+- **FE polish converged with the user** over five rounds: layout B (price hard-right anchor) → collapsed overnight chip with hover/tap popover + tap-to-promote-to-marker + glossary help icon → absolute-positioned price column (always same spot) + company-name ellipsis at 16ch + bigger popover → zone cluster moves into the main row + left container width-set so sparkline anchors next to symbol/company + popover anchored right opens leftward → markers + zone chip share one inline chip cluster right-floated with flex-wrap, removing the chips-below row entirely.
+- **Vercel SPA fix (263a983):** `client/vercel.json` rewrites every non-static path to `/index.html` so hard-refreshing `/watchlist`, `/ticker/:symbol`, `/settings` no longer 404s. (Strict-JSON only; the earlier `comments` field failed Vercel's schema validation — stripped.)
+- **Live-tapped by user (2026-05-29):** layout reads well; markers + zone aligned; company ellipsis works; popover opens cleanly without overlapping price. Discord-alert *behavior* (zone crossing → ping) explicitly deferred to "future verification" by user, alongside alert-tuning (which zones fire / throttling).
+
+### Batch A2 — Manual price markers + dip-buy Discord alerts (2026-05-28)
+- Owner: claude
+- Started: 2026-05-28 21:23 · Finished: 2026-05-28
+- Commits: 7eb055e (migration 012) → 650b013 (markers service + dip-buy notifier + CRUD route + quote-write hook) → 10551e7 (FE marker chips + add/edit sheet + long-press handler).
+- **What shipped:** Migration 012 (`watchlist_markers` keyed by item_id with the geometric condition vocab + per-marker cooldown + last_fired_at). `services/markers.ts` `checkMarkersForConid(conid, symbol, prev, curr)` does transition-based crossing detection per condition (at_or_below / at_or_above / about), gated by cooldown. At_or_below fires Discord; the other conditions update last_fired_at without notifying so when their channels land they don't fire on historical crossings. `quotes.upsertQuote` reads prior canonical_price + fires marker check fire-and-forget after each write. `routes/watchlist-markers.ts` POST/PATCH/DELETE with explicit owner-chain validation. FE: `MarkerSheet.tsx` add+edit+delete (with `prefill` prop added in A+ for promote-from-zone); `Watchlist.tsx` 500ms pointerDown timer + onContextMenu for long-press / right-click → add-marker sheet.
+- **Live-verified by user (2026-05-29):** marker creation works; chip renders inline alongside the zone cluster. Discord alert path itself deferred for future verification by user direction.
 
 ### Batch A1 — Watchlists + IB import + quotes table + TickerDetail-for-non-held (2026-05-28)
 - Owner: claude
