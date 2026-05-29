@@ -1253,3 +1253,68 @@
 .glossary-entry h3 { margin: 0 0 4px; font-size: var(--fs-11); font-weight: var(--fw-medium); color: var(--text-primary); }
 .glossary-short { margin: 0; font-size: var(--fs-11); color: var(--text-secondary); }
 .glossary-detail { margin: 4px 0 0; font-size: 10px; color: var(--text-tertiary); line-height: 1.4; }
+
+/* --- Watchlist polish round 3 (price anchored top-right, company ellipsis, bigger zone popover) --- */
+/* All-overriding final rules; appended last so they win via cascade order. */
+
+.watchlist-item {
+  position: relative;
+}
+
+/* Left/middle content sits inside the main flex; reserve room on the right
+   for the absolutely-positioned price column. */
+.watchlist-item-main {
+  display: flex; align-items: center; gap: 12px;
+  padding-right: 110px;
+  width: 100%;
+}
+
+/* Company name ellipses at ~16ch so long names ("INTERACTIVE BROKERS GROUP")
+   don't overflow. Hover/long-press still shows the full text via the title
+   attribute that ItemRow already passes. */
+.watchlist-item-co {
+  max-width: 16ch;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Sparkline keeps its intrinsic 44×14 size; no flex-grow. */
+.watchlist-item-spark { flex: 0 0 auto; }
+
+/* Absolute top-right price column: always in the same spot regardless of
+   left content length. Stacked: price (big) → today % change → source pill. */
+.watchlist-item-right {
+  position: absolute;
+  top: var(--sp-10);
+  right: var(--sp-12);
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  min-width: 84px;
+  pointer-events: none;  /* let taps fall through to the row's onTap */
+}
+.watchlist-item-price {
+  font-family: var(--font-mono); font-size: var(--fs-14); font-weight: var(--fw-medium);
+  color: var(--text-primary); line-height: 1.1;
+}
+.watchlist-item-change {
+  font-family: var(--font-mono); font-size: var(--fs-10);
+  line-height: 1.1; white-space: nowrap;
+}
+.watchlist-item-src {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-tertiary); line-height: 1;
+}
+
+/* Chips row gets more breathing room from price above and a bit of left
+   pad so dashed zone chip doesn't visually crash into the row edge. */
+.watchlist-item-chips {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--border);
+  gap: 6px;
+}
+
+/* Zone bubble widened so it doesn't wrap around the absolute price column.
+   Pinned right so on narrow viewports it doesn't shoot off-screen. */
+.zone-popover {
+  min-width: 300px; max-width: 380px;
+  left: auto; right: 0;
+}

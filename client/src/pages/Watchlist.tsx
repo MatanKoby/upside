@@ -347,7 +347,9 @@ function ItemRow({
         <div className="watchlist-item-left">
           <span className="watchlist-item-sym">{item.symbol}</span>
           {item.company_name && (
-            <span className="watchlist-item-co">{item.company_name}</span>
+            <span className="watchlist-item-co" title={item.company_name}>
+              {item.company_name}
+            </span>
           )}
         </div>
         {sparklineCloses && sparklineCloses.length >= 2 && (
@@ -355,17 +357,20 @@ function ItemRow({
             <MiniSparkline closes={sparklineCloses} />
           </div>
         )}
+      </div>
+      {/* Right column is absolutely positioned so price always sits in the
+          same spot regardless of left-side content length (per user direction
+          2026-05-29 — price is the anchor your eye reads first). */}
+      <div className="watchlist-item-right">
+        <span className="watchlist-item-price">
+          {price != null ? formatCurrency(price) : '—'}
+        </span>
         {todayChangePct != null && (
           <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
             {formatSignedPercent(todayChangePct)}
           </span>
         )}
-        <div className="watchlist-item-right">
-          <span className="watchlist-item-price">
-            {price != null ? formatCurrency(price) : '—'}
-          </span>
-          {source && <span className="watchlist-item-src">{source}</span>}
-        </div>
+        {source && <span className="watchlist-item-src">{source}</span>}
       </div>
       {(markers.length > 0 || Object.keys(zones).length > 0) && (
         <div className="watchlist-item-chips">
