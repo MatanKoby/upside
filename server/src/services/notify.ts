@@ -252,6 +252,43 @@ export function notifyEntryZoneHit(args: {
   });
 }
 
+/**
+ * Stats-derived intraday-low band entry (Batch B). Price has dropped into
+ * the historically-typical intraday-low zone for this ticker. Posts to
+ * DISCORD_WEBHOOK_STATS_ALERTS (distinct from dip-buys so the two mental
+ * categories can be muted independently). 24h cooldown per conid anchored on
+ * `intraday_stats.last_fired_at`.
+ */
+export function notifyIntradayStatsHit(args: {
+  symbol: string;
+  currentPrice: number;
+  todayOpen: number;
+  bandTop: number;
+  bandBottom: number;
+  typicalDipPct: number;
+  deepDipPct: number;
+}): Promise<void> {
+  const { symbol, currentPrice, todayOpen, bandTop, bandBottom, typicalDipPct, deepDipPct } = args;
+  const dropFromOpenPct = ((todayOpen - currentPrice) / todayOpen) * 100;
+  const line =
+    `📊 ${symbol} entered typical intraday-low band — $${currentPrice.toFixed(2)} ` +
+    `(${dropFromOpenPct.toFixed(2)}% below today's open $${todayOpen.toFixed(2)}) · ` +
+    `band $${bandTop.toFixed(2)}–$${bandBottom.toFixed(2)} ` +
+    `(typical -${typicalDipPct.toFixed(1)}% / deep -${deepDipPct.toFixed(1)}%)`;
+  console.log(`[intraday-stats] ${line}`);
+  const url = env.discordStatsAlertsWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `📊 ${symbol} · typical intraday-low band`,
+      description: line,
+      color: 0x4f8ef7,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyDipBuyMarkerHit(args: {
   symbol: string;
   markerPrice: number;

@@ -12,6 +12,7 @@
 import { supabase } from './supabase.js';
 import { checkMarkersForConid } from './markers.js';
 import { checkEntryZonesForConid } from './entryZoneAlerts.js';
+import { checkIntradayStatsForConid } from './intradayStatsAlerts.js';
 
 export type QuoteSource = 'ib' | 'finnhub';
 
@@ -33,6 +34,9 @@ interface QuoteWriteOpts {
   setCanonical?: boolean;
   /** Today's change in percent (open/prev-close relative). Optional. */
   todayChangePct?: number | null;
+  /** Today's open price. Used by the stats-alert engine to compute the
+   *  typical-intraday-low band. Optional. */
+  todayOpen?: number | null;
   now?: string;
 }
 
@@ -76,6 +80,9 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
   if (opts.todayChangePct != null && Number.isFinite(opts.todayChangePct)) {
     row.today_change_pct = opts.todayChangePct;
   }
+  if (opts.todayOpen != null && Number.isFinite(opts.todayOpen) && opts.todayOpen > 0) {
+    row.today_open = opts.todayOpen;
+  }
 
   await supabase().from('quotes').upsert(row, { onConflict: 'conid' });
 
@@ -85,6 +92,7 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
   if (setCanonical) {
     void checkMarkersForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
     void checkEntryZonesForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
+    void checkIntradayStatsForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
   }
 }
 

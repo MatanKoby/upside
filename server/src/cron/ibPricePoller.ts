@@ -440,15 +440,20 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   // Mirror held prices into the canonical `quotes` table (Batch A1). IB is
   // always authoritative when this poller runs, so `setCanonical` defaults true.
   await Promise.all(
-    assembled.map((r) =>
-      upsertQuote({
+    assembled.map((r) => {
+      // today_open lives only in the IB snapshot (field 7295) — not persisted
+      // to positions. Pull it here so quotes carries it for the stats-alert
+      // engine (Batch B).
+      const todayOpen = snapNum(snapByConid.get(r.conid), '7295');
+      return upsertQuote({
         conid: r.conid,
         symbol: r.symbol,
         source: 'ib',
         price: r.current_price,
         todayChangePct: r.today_change_pct,
-      }),
-    ),
+        todayOpen,
+      });
+    }),
   );
 
   // Delete rows for symbols no longer held.

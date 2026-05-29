@@ -148,6 +148,7 @@ async function tick(): Promise<void> {
         // skipping), so Finnhub IS the canonical right now → setCanonical
         // defaults true for source='finnhub' too in that case.
         if (Number.isFinite(p.conid) && Number.isFinite(currentPrice)) {
+          const todayOpen = num(quote.o);
           await upsertQuote({
             conid: Number(p.conid),
             symbol: p.symbol,
@@ -155,6 +156,7 @@ async function tick(): Promise<void> {
             price: currentPrice,
             setCanonical: true,
             todayChangePct,
+            todayOpen,
           });
         }
 
