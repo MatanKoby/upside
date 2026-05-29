@@ -80,4 +80,9 @@ export const env = {
   // on watchlist tickers post here. (Other marker conditions / signal-range
   // pings get their own channels in follow-up batches.)
   discordDipBuysWebhookUrl: optional('DISCORD_WEBHOOK_DIP_BUYS'),
+  // DISCORD_WEBHOOK_STATS_ALERTS — Batch B. Stats-derived alerts (price
+  // entering a typical-intraday-low zone, etc.) go here, distinct from
+  // dip-buys so the two mental categories (statistical-pattern vs. structural-
+  // level / user-marker) can be muted independently.
+  discordStatsAlertsWebhookUrl: optional('DISCORD_WEBHOOK_STATS_ALERTS'),
 };
