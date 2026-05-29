@@ -357,10 +357,18 @@ function ItemRow({
             <MiniSparkline closes={sparklineCloses} />
           </div>
         )}
+        {/* Engine-computed entry zones live in the main row, between the
+            sparkline and the (absolute) price column. The collapsed chip
+            uses margin-left: auto so it lands just to the left of where the
+            absolute price column begins, and its popover anchors `right: 0`
+            so it opens leftward without ever overlapping the price. */}
+        <EntryZoneCluster
+          zones={zones}
+          onPromote={(z) => onPromoteZone(z, z.horizon)}
+        />
       </div>
       {/* Right column is absolutely positioned so price always sits in the
-          same spot regardless of left-side content length (per user direction
-          2026-05-29 — price is the anchor your eye reads first). */}
+          same spot regardless of left-side content length. */}
       <div className="watchlist-item-right">
         <span className="watchlist-item-price">
           {price != null ? formatCurrency(price) : '—'}
@@ -372,10 +380,11 @@ function ItemRow({
         )}
         {source && <span className="watchlist-item-src">{source}</span>}
       </div>
-      {(markers.length > 0 || Object.keys(zones).length > 0) && (
+      {markers.length > 0 && (
         <div className="watchlist-item-chips">
-          {/* User-authored markers ALWAYS render first (per user direction —
-              they're the source of truth for what's being tracked). */}
+          {/* User-authored markers — the source of truth for what's being
+              tracked. They live BELOW the main row so the always-visible
+              metadata (symbol/company/spark/zone-chip/price) stays clean. */}
           {markers.map((m) => (
             <button
               key={m.id}
@@ -392,13 +401,6 @@ function ItemRow({
               {m.label && <span className="marker-chip-label">· {m.label}</span>}
             </button>
           ))}
-          {/* Engine-computed entry zones: collapsed to the middle (overnight)
-              chip by default; hover/tap expands to all three with a 'promote
-              to marker' action. */}
-          <EntryZoneCluster
-            zones={zones}
-            onPromote={(z) => onPromoteZone(z, z.horizon)}
-          />
         </div>
       )}
     </div>

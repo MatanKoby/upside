@@ -1318,3 +1318,60 @@
   min-width: 300px; max-width: 380px;
   left: auto; right: 0;
 }
+
+/* --- Watchlist polish round 4 (zone-chip inline; left container set width; popover opens leftward) --- */
+/* Appended last to override the round-3 rules via cascade. */
+
+/* Left container gets a percentage width so symbol/company occupies a
+   predictable share of the row regardless of length (ellipsis kicks in past
+   16ch). Sparkline anchors immediately to its right with a small gap. */
+.watchlist-item-main {
+  display: flex; align-items: center;
+  gap: 10px;
+  padding-right: 110px; /* reserve space for the absolute price column */
+  width: 100%;
+}
+.watchlist-item-left {
+  width: 35%;
+  min-width: 0; max-width: 200px;
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.watchlist-item-co {
+  max-width: 100%;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.watchlist-item-spark { flex: 0 0 auto; }
+
+/* Zone-cluster sits inline in the main row between sparkline and the absolute
+   price column; margin-left: auto pushes it to the right edge of the main
+   flex (just left of the padding-right reserved for price). */
+.zone-cluster {
+  margin-left: auto;
+  position: relative;
+  display: inline-flex;
+}
+
+/* Popover anchors to the cluster's right edge and opens LEFTWARD so it can
+   never overlap the absolute price column; raised z-index so even if its
+   bounding box brushes any sibling, it visually sits on top. */
+.zone-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0; left: auto;
+  z-index: 100;
+  min-width: 300px; max-width: 380px;
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+}
+
+/* Markers row below the main row — only renders when there are markers. */
+.watchlist-item-chips {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--border);
+  gap: 6px;
+  display: flex; flex-wrap: wrap;
+}
