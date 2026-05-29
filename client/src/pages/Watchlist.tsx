@@ -357,34 +357,12 @@ function ItemRow({
             <MiniSparkline closes={sparklineCloses} />
           </div>
         )}
-        {/* Engine-computed entry zones live in the main row, between the
-            sparkline and the (absolute) price column. The collapsed chip
-            uses margin-left: auto so it lands just to the left of where the
-            absolute price column begins, and its popover anchors `right: 0`
-            so it opens leftward without ever overlapping the price. */}
-        <EntryZoneCluster
-          zones={zones}
-          onPromote={(z) => onPromoteZone(z, z.horizon)}
-        />
-      </div>
-      {/* Right column is absolutely positioned so price always sits in the
-          same spot regardless of left-side content length. */}
-      <div className="watchlist-item-right">
-        <span className="watchlist-item-price">
-          {price != null ? formatCurrency(price) : '—'}
-        </span>
-        {todayChangePct != null && (
-          <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
-            {formatSignedPercent(todayChangePct)}
-          </span>
-        )}
-        {source && <span className="watchlist-item-src">{source}</span>}
-      </div>
-      {markers.length > 0 && (
-        <div className="watchlist-item-chips">
-          {/* User-authored markers — the source of truth for what's being
-              tracked. They live BELOW the main row so the always-visible
-              metadata (symbol/company/spark/zone-chip/price) stays clean. */}
+        {/* Chip cluster: user markers (left) + engine zone (right) on the same
+            vertical line. Uses margin-left: auto so the whole group floats to
+            the right edge of the main flex (just inside the absolute price
+            column's reserved space). flex-wrap allows graceful overflow if a
+            row has many markers. */}
+        <div className="watchlist-item-chip-cluster">
           {markers.map((m) => (
             <button
               key={m.id}
@@ -401,8 +379,25 @@ function ItemRow({
               {m.label && <span className="marker-chip-label">· {m.label}</span>}
             </button>
           ))}
+          <EntryZoneCluster
+            zones={zones}
+            onPromote={(z) => onPromoteZone(z, z.horizon)}
+          />
         </div>
-      )}
+      </div>
+      {/* Right column is absolutely positioned so price always sits in the
+          same spot regardless of left-side content length. */}
+      <div className="watchlist-item-right">
+        <span className="watchlist-item-price">
+          {price != null ? formatCurrency(price) : '—'}
+        </span>
+        {todayChangePct != null && (
+          <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
+            {formatSignedPercent(todayChangePct)}
+          </span>
+        )}
+        {source && <span className="watchlist-item-src">{source}</span>}
+      </div>
     </div>
   );
 }

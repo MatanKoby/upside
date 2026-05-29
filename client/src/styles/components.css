@@ -1375,3 +1375,14 @@
   gap: 6px;
   display: flex; flex-wrap: wrap;
 }
+
+/* --- Watchlist polish round 5 (markers + zone chip share one inline cluster) --- */
+.watchlist-item-chip-cluster {
+  margin-left: auto;
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 55%;  /* don't let many markers push past the absolute price column */
+}
+/* The zone-cluster used to own the auto-margin; now its parent does. */
+.zone-cluster { margin-left: 0; }
