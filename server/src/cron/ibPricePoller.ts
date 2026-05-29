@@ -441,7 +441,13 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   // always authoritative when this poller runs, so `setCanonical` defaults true.
   await Promise.all(
     assembled.map((r) =>
-      upsertQuote({ conid: r.conid, symbol: r.symbol, source: 'ib', price: r.current_price }),
+      upsertQuote({
+        conid: r.conid,
+        symbol: r.symbol,
+        source: 'ib',
+        price: r.current_price,
+        todayChangePct: r.today_change_pct,
+      }),
     ),
   );
 

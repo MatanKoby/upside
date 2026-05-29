@@ -28,6 +28,8 @@ export interface QuoteRow {
   canonical_price: number | null;
   canonical_source: 'ib' | 'finnhub' | null;
   canonical_updated_at: string | null;
+  today_change_pct: number | null;
+  sparkline_closes: number[] | null;
 }
 
 // A user-defined price marker on a watchlist_items row (Batch A2). See
@@ -118,12 +120,19 @@ export function useWatchlistData(): UseWatchlistData {
       const quotesRes = conidSet.length
         ? await supabase
             .from('quotes')
-            .select('conid, symbol, canonical_price, canonical_source, canonical_updated_at')
+            .select('conid, symbol, canonical_price, canonical_source, canonical_updated_at, today_change_pct, sparkline_closes')
             .in('conid', conidSet)
         : { data: [] as QuoteRow[] };
       const qMap: Record<number, QuoteRow> = {};
       for (const r of (quotesRes.data ?? []) as QuoteRow[]) {
-        qMap[Number(r.conid)] = { ...r, canonical_price: num(r.canonical_price) };
+        qMap[Number(r.conid)] = {
+          ...r,
+          canonical_price: num(r.canonical_price),
+          today_change_pct: num(r.today_change_pct as number | null),
+          sparkline_closes: Array.isArray(r.sparkline_closes)
+            ? r.sparkline_closes.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+            : null,
+        };
       }
 
       // Markers: scoped to items the user owns. RLS handles this at the

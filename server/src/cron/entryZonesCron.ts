@@ -95,13 +95,25 @@ async function tick(): Promise<void> {
     try {
       const daily = await ibHistory(conid, '1y', '1d');
       const intraday = await ibHistory(conid, '1d', '5min');
+      const dailyBars = toBars(daily);
       const out = computeEntryZones({
         currentPrice,
-        daily: toBars(daily),
+        daily: dailyBars,
         intraday: intraday ? toBars(intraday) : null,
       });
       for (const h of HORIZONS) {
         await upsertZone(conid, h, out.zones[h], out.trendRegime, out.overboughtTightened);
+      }
+      // Piggyback: write the last 7 daily closes as the sparkline payload. The
+      // cron is the natural owner since it already pulled the full year of
+      // bars; writing here avoids a per-cycle IB call from the pollers.
+      const closes = dailyBars.c;
+      if (closes.length >= 1) {
+        const last7 = closes.slice(-7);
+        await supabase()
+          .from('quotes')
+          .update({ sparkline_closes: last7 })
+          .eq('conid', conid);
       }
     } catch (e) {
       void notifyError(`entryZonesCron.${symbol}`, (e as Error).message, e);

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { IconSettings, IconCloudDownload } from '@tabler/icons-react';
 import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon } from '../hooks/useWatchlistData';
 import { MarkerSheet } from '../components/Watchlist/MarkerSheet';
+import { MiniSparkline } from '../components/Watchlist/MiniSparkline';
 import { apiFetch } from '../services/supabase';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatSignedPercent } from '../utils/formatters';
 
 interface MarkerSheetState {
   symbol: string;
@@ -230,6 +231,8 @@ function ItemList({
               item={it}
               price={price}
               source={source}
+              todayChangePct={q?.today_change_pct ?? null}
+              sparklineCloses={q?.sparkline_closes ?? null}
               markers={markers}
               zones={zones}
               onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
@@ -255,6 +258,8 @@ function ItemRow({
   item,
   price,
   source,
+  todayChangePct,
+  sparklineCloses,
   markers,
   zones,
   onTap,
@@ -264,6 +269,8 @@ function ItemRow({
   item: WatchlistItem;
   price: number | null;
   source: 'ib' | 'finnhub' | null;
+  todayChangePct: number | null;
+  sparklineCloses: number[] | null;
   markers: Marker[];
   zones: Partial<Record<Horizon, EntryZoneRow>>;
   onTap: () => void;
@@ -316,10 +323,20 @@ function ItemRow({
             <span className="watchlist-item-co">{item.company_name}</span>
           )}
         </div>
+        {sparklineCloses && sparklineCloses.length >= 2 && (
+          <div className="watchlist-item-spark">
+            <MiniSparkline closes={sparklineCloses} />
+          </div>
+        )}
         <div className="watchlist-item-right">
           <span className="watchlist-item-price">
             {price != null ? formatCurrency(price) : '—'}
           </span>
+          {todayChangePct != null && (
+            <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
+              {formatSignedPercent(todayChangePct)}
+            </span>
+          )}
           {source && <span className="watchlist-item-src">{source}</span>}
         </div>
       </div>

@@ -49,9 +49,12 @@ async function tick(): Promise<void> {
     for (const row of snap) {
       const conid = Number(row.conid);
       const price = num(row['31']);
+      // IB snapshot field 82 = today change percent (string with sign + suffix
+      // sometimes; parseFloat is tolerant). Falls through to null if missing.
+      const todayChangePct = num(row['82']);
       const symbol = symByConid.get(conid);
       if (!Number.isFinite(conid) || price == null || !symbol) continue;
-      await upsertQuote({ conid, symbol, source: 'ib', price });
+      await upsertQuote({ conid, symbol, source: 'ib', price, todayChangePct });
     }
     return;
   }
@@ -63,7 +66,9 @@ async function tick(): Promise<void> {
     const q = await getQuote(symbol).catch(() => null);
     const price = num(q?.c);
     if (price == null || price === 0) continue;
-    await upsertQuote({ conid, symbol, source: 'finnhub', price, setCanonical: true });
+    // Finnhub /quote returns `dp` = today change percent.
+    const todayChangePct = num(q?.dp);
+    await upsertQuote({ conid, symbol, source: 'finnhub', price, setCanonical: true, todayChangePct });
   }
 }
 

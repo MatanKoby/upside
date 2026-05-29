@@ -104,12 +104,14 @@ export async function insiderTransactions(symbol: string): Promise<unknown> {
 //   pc = previous close
 //   t  = unix-seconds timestamp
 export interface FinnhubQuote {
-  c: number | null;
-  h: number | null;
-  l: number | null;
-  o: number | null;
-  pc: number | null;
-  t: number | null;
+  c: number | null;   // current
+  h: number | null;   // today high
+  l: number | null;   // today low
+  o: number | null;   // today open
+  pc: number | null;  // prior close
+  t: number | null;   // unix-seconds
+  d: number | null;   // today change ($)
+  dp: number | null;  // today change (%)
 }
 
 export async function getQuote(symbol: string): Promise<FinnhubQuote | null> {

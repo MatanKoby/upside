@@ -31,6 +31,8 @@ interface QuoteWriteOpts {
    * disconnected), this write also stamps the canonical_* triple.
    */
   setCanonical?: boolean;
+  /** Today's change in percent (open/prev-close relative). Optional. */
+  todayChangePct?: number | null;
   now?: string;
 }
 
@@ -70,6 +72,9 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
     row.canonical_price = opts.price;
     row.canonical_source = opts.source;
     row.canonical_updated_at = now;
+  }
+  if (opts.todayChangePct != null && Number.isFinite(opts.todayChangePct)) {
+    row.today_change_pct = opts.todayChangePct;
   }
 
   await supabase().from('quotes').upsert(row, { onConflict: 'conid' });

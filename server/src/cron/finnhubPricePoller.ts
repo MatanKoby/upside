@@ -154,6 +154,7 @@ async function tick(): Promise<void> {
             source: 'finnhub',
             price: currentPrice,
             setCanonical: true,
+            todayChangePct,
           });
         }
 

@@ -1187,3 +1187,13 @@
   font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--text-tertiary);
 }
+
+/* --- Watchlist polish (today change + sparkline) --- */
+.watchlist-item-spark {
+  display: flex; align-items: center;
+  flex: 0 0 auto;
+}
+.mini-sparkline { display: block; }
+.watchlist-item-change {
+  font-family: var(--font-mono); font-size: var(--fs-10);
+}
