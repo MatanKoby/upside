@@ -12,7 +12,8 @@ import { notifyDipBuyMarkerHit, notifyError } from './notify.js';
 
 interface MarkerRow {
   id: string;
-  item_id: string;
+  user_id: string;
+  conid: number | string;
   label: string | null;
   price: number | string;
   condition: 'at_or_above' | 'at_or_below' | 'about';
@@ -71,21 +72,14 @@ export async function checkMarkersForConid(
   if (prev == null || !Number.isFinite(curr)) return;
   if (prev === curr) return; // no transition possible
 
-  // Find markers attached to any watchlist_items row with this conid. RLS
-  // would scope to a user, but the poller runs with service_role and reads
-  // across users. (Single-user MVP — sufficient for now; revisit when the
-  // multi-user `ib-gateway` pattern lands.)
-  const { data: items } = await supabase()
-    .from('watchlist_items')
-    .select('id')
-    .eq('conid', conid);
-  const itemIds = (items ?? []).map((r) => r.id as string);
-  if (itemIds.length === 0) return;
-
+  // Markers are now keyed directly by (user_id, conid) — see migration 016.
+  // One query, no item-chain join. Service role bypasses RLS, so the poller
+  // reads all users' markers in one pass (single-user MVP — revisit when
+  // multi-user lands).
   const { data, error } = await supabase()
     .from('watchlist_markers')
-    .select('id, item_id, label, price, condition, enabled, cooldown_hours, last_fired_at')
-    .in('item_id', itemIds)
+    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at')
+    .eq('conid', conid)
     .eq('enabled', true);
   if (error) {
     void notifyError('markers.check', `query failed for conid ${conid}: ${error.message}`);

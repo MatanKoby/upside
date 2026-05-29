@@ -11,7 +11,7 @@ import { formatCurrency, formatSignedPercent } from '../utils/formatters';
 
 interface MarkerSheetState {
   symbol: string;
-  itemId: string;
+  conid: number;
   marker?: Marker;
   prefill?: MarkerPrefill;
 }
@@ -51,7 +51,7 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 }
 
 export default function Watchlist() {
-  const { lists, itemsByList, quotesByConid, markersByItem, entryZonesByConid, isLoading } = useWatchlistData();
+  const { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, isLoading } = useWatchlistData();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
@@ -126,14 +126,14 @@ export default function Watchlist() {
           <ItemList
             items={itemsByList[currentList ?? ''] ?? []}
             quotes={quotesByConid}
-            markersByItem={markersByItem}
+            markersByConid={markersByConid}
             entryZonesByConid={entryZonesByConid}
-            onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, itemId: item.id })}
-            onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, itemId: item.id, marker })}
+            onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid) })}
+            onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid), marker })}
             onPromoteZone={(item, zone) =>
               setMarkerSheet({
                 symbol: item.symbol,
-                itemId: item.id,
+                conid: Number(item.conid),
                 prefill: {
                   price: zone.price,
                   condition: 'at_or_below',
@@ -148,7 +148,7 @@ export default function Watchlist() {
       {markerSheet && (
         <MarkerSheet
           symbol={markerSheet.symbol}
-          itemId={markerSheet.itemId}
+          conid={markerSheet.conid}
           marker={markerSheet.marker}
           prefill={markerSheet.prefill}
           onClose={() => setMarkerSheet(null)}
@@ -229,7 +229,7 @@ const CONDITION_GLYPH: Record<Marker['condition'], string> = {
 function ItemList({
   items,
   quotes,
-  markersByItem,
+  markersByConid,
   entryZonesByConid,
   onAddMarker,
   onEditMarker,
@@ -237,7 +237,7 @@ function ItemList({
 }: {
   items: WatchlistItem[];
   quotes: Record<number, QuoteRow>;
-  markersByItem: Record<string, Marker[]>;
+  markersByConid: Record<number, Marker[]>;
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   onAddMarker: (item: WatchlistItem) => void;
   onEditMarker: (item: WatchlistItem, marker: Marker) => void;
@@ -253,7 +253,7 @@ function ItemList({
         const q = quotes[Number(it.conid)];
         const price = q?.canonical_price ?? null;
         const source = q?.canonical_source ?? null;
-        const markers = markersByItem[it.id] ?? [];
+        const markers = markersByConid[Number(it.conid)] ?? [];
         const zones = entryZonesByConid[Number(it.conid)] ?? {};
         return (
           <li key={it.id}>

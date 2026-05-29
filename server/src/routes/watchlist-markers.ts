@@ -1,8 +1,9 @@
-// /api/watchlist-markers (Batch A2) — CRUD for user-defined price markers
-// attached to a watchlist_items row. Reads go via Supabase Realtime + RLS;
-// no GET endpoint here. The server-side supabase() client uses service_role
-// (bypasses RLS), so we explicitly validate ownership via the item → list →
-// user_id chain before any insert/update/delete.
+// /api/watchlist-markers (Batch A2, re-keyed in migration 016).
+//
+// Markers are now per (user_id, conid) — see migration 016. The same ticker
+// across multiple lists shares one set of markers; CRUD operates by conid.
+// Reads go through Supabase Realtime + RLS (auth.uid() = user_id).
+// supabase() bypasses RLS, so writes explicitly stamp user_id from the JWT.
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
@@ -15,7 +16,7 @@ const CONDITIONS = ['at_or_above', 'at_or_below', 'about'] as const;
 type Condition = (typeof CONDITIONS)[number];
 
 interface CreatePayload {
-  item_id?: unknown;
+  conid?: unknown;
   label?: unknown;
   price?: unknown;
   condition?: unknown;
@@ -24,9 +25,9 @@ interface CreatePayload {
 
 function parseCreate(body: CreatePayload): {
   ok: true;
-  row: { item_id: string; label: string | null; price: number; condition: Condition; cooldown_hours: number };
+  row: { conid: number; label: string | null; price: number; condition: Condition; cooldown_hours: number };
 } | { ok: false; error: string } {
-  const item_id = typeof body.item_id === 'string' ? body.item_id : null;
+  const conid = typeof body.conid === 'number' ? body.conid : Number(body.conid);
   const priceRaw = typeof body.price === 'number' ? body.price : Number(body.price);
   const condition = typeof body.condition === 'string' && (CONDITIONS as readonly string[]).includes(body.condition)
     ? (body.condition as Condition)
@@ -37,46 +38,31 @@ function parseCreate(body: CreatePayload): {
     : 24;
   const label = typeof body.label === 'string' && body.label.trim().length > 0 ? body.label.trim() : null;
 
-  if (!item_id) return { ok: false, error: 'item_id required' };
+  if (!Number.isFinite(conid) || conid <= 0) return { ok: false, error: 'conid required' };
   if (!Number.isFinite(priceRaw) || priceRaw <= 0) return { ok: false, error: 'price must be > 0' };
   if (!condition) return { ok: false, error: `condition must be one of ${CONDITIONS.join('|')}` };
-  return { ok: true, row: { item_id, label, price: priceRaw, condition, cooldown_hours } };
-}
-
-async function ownsItem(userId: string, itemId: string): Promise<boolean> {
-  const { data } = await supabase()
-    .from('watchlist_items')
-    .select('id, watchlist_lists!inner(user_id)')
-    .eq('id', itemId)
-    .maybeSingle();
-  if (!data) return false;
-  const lists = (data as { watchlist_lists?: { user_id?: string } | { user_id?: string }[] }).watchlist_lists;
-  const owner = Array.isArray(lists) ? lists[0]?.user_id : lists?.user_id;
-  return owner === userId;
+  return { ok: true, row: { conid, label, price: priceRaw, condition, cooldown_hours } };
 }
 
 async function ownsMarker(userId: string, markerId: string): Promise<boolean> {
   const { data } = await supabase()
     .from('watchlist_markers')
-    .select('item_id')
+    .select('user_id')
     .eq('id', markerId)
     .maybeSingle();
-  if (!data?.item_id) return false;
-  return ownsItem(userId, data.item_id as string);
+  return data?.user_id === userId;
 }
 
 router.post('/', async (req: Request, res: Response) => {
   if (!req.user) { res.status(401).json({ error: 'unauthorized' }); return; }
   const parsed = parseCreate(req.body ?? {});
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
-  if (!(await ownsItem(req.user.id, parsed.row.item_id))) {
-    res.status(403).json({ error: 'forbidden' });
-    return;
-  }
+  // We trust the JWT's user.id and stamp user_id ourselves — supabase()
+  // bypasses RLS, so we don't get the policy's user_id check for free.
   const ins = await supabase()
     .from('watchlist_markers')
-    .insert(parsed.row)
-    .select('id, item_id, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
+    .insert({ ...parsed.row, user_id: req.user.id })
+    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
     .single();
   if (ins.error || !ins.data) {
     res.status(500).json({ error: ins.error?.message ?? 'insert failed' });
@@ -109,7 +95,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     .from('watchlist_markers')
     .update(update)
     .eq('id', id)
-    .select('id, item_id, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
+    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
     .single();
   if (upd.error || !upd.data) {
     res.status(500).json({ error: upd.error?.message ?? 'update failed' });

@@ -22,13 +22,13 @@ export interface MarkerPrefill {
 
 export function MarkerSheet({
   symbol,
-  itemId,
+  conid,
   marker,
   prefill,
   onClose,
 }: {
   symbol: string;
-  itemId: string;
+  conid: number;
   marker?: Marker;
   // When in create mode (`marker` undefined), seeds the form. Used by the
   // entry-zone "promote to marker" flow so a one-tap converts a computed
@@ -61,7 +61,7 @@ export function MarkerSheet({
     }
     const cdNum = Number(cooldown);
     const body = {
-      ...(editing ? {} : { item_id: itemId }),
+      ...(editing ? {} : { conid }),
       label: label.trim() || null,
       price: priceNum,
       condition,

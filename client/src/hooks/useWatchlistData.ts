@@ -32,11 +32,13 @@ export interface QuoteRow {
   sparkline_closes: number[] | null;
 }
 
-// A user-defined price marker on a watchlist_items row (Batch A2). See
+// A user-defined price marker — keyed by (user_id, conid) since
+// migration 016 so it's shared across every list a ticker appears on. See
 // spec/signals/markers.md.
 export interface Marker {
   id: string;
-  item_id: string;
+  user_id: string;
+  conid: number;
   label: string | null;
   price: number;
   condition: 'at_or_above' | 'at_or_below' | 'about';
@@ -64,7 +66,7 @@ export interface UseWatchlistData {
   lists: WatchlistList[];
   itemsByList: Record<string, WatchlistItem[]>;
   quotesByConid: Record<number, QuoteRow>;
-  markersByItem: Record<string, Marker[]>;
+  markersByConid: Record<number, Marker[]>;
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   isLoading: boolean;
 }
@@ -83,7 +85,7 @@ export function useWatchlistData(): UseWatchlistData {
   const [lists, setLists] = useState<WatchlistList[]>([]);
   const [itemsByList, setItemsByList] = useState<Record<string, WatchlistItem[]>>({});
   const [quotesByConid, setQuotesByConid] = useState<Record<number, QuoteRow>>({});
-  const [markersByItem, setMarkersByItem] = useState<Record<string, Marker[]>>({});
+  const [markersByConid, setMarkersByConid] = useState<Record<number, Marker[]>>({});
   const [entryZonesByConid, setEntryZonesByConid] = useState<Record<number, Partial<Record<Horizon, EntryZoneRow>>>>({});
   const [isLoading, setIsLoading] = useState(true);
 
@@ -135,19 +137,17 @@ export function useWatchlistData(): UseWatchlistData {
         };
       }
 
-      // Markers: scoped to items the user owns. RLS handles this at the
-      // table level (marker → item → list → user_id).
-      const itemIds = itemRows.map((r) => r.id);
-      const markersRes = itemIds.length
-        ? await supabase
-            .from('watchlist_markers')
-            .select('id, item_id, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
-            .in('item_id', itemIds)
-        : { data: [] as Marker[] };
-      const markersByItemMap: Record<string, Marker[]> = {};
+      // Markers are now keyed by (user_id, conid) (migration 016) — one set of
+      // markers per ticker, shared across every list it appears on. RLS scopes
+      // to auth.uid() = user_id, so a plain select returns just our rows.
+      const markersRes = await supabase
+        .from('watchlist_markers')
+        .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at');
+      const markersByConidMap: Record<number, Marker[]> = {};
       for (const m of (markersRes.data ?? []) as Marker[]) {
-        const mp = { ...m, price: Number(m.price) };
-        (markersByItemMap[m.item_id] ??= []).push(mp);
+        const c = Number(m.conid);
+        const mp = { ...m, conid: c, price: Number(m.price) };
+        (markersByConidMap[c] ??= []).push(mp);
       }
 
       // Entry zones (Batch A+). Three rows per conid (one per horizon),
@@ -169,7 +169,7 @@ export function useWatchlistData(): UseWatchlistData {
       setLists(listRows);
       setItemsByList(itemsByListMap);
       setQuotesByConid(qMap);
-      setMarkersByItem(markersByItemMap);
+      setMarkersByConid(markersByConidMap);
       setEntryZonesByConid(zMap);
       setIsLoading(false);
     }
@@ -192,5 +192,5 @@ export function useWatchlistData(): UseWatchlistData {
     };
   }, []);
 
-  return { lists, itemsByList, quotesByConid, markersByItem, entryZonesByConid, isLoading };
+  return { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, isLoading };
 }
