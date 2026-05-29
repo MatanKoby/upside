@@ -1197,3 +1197,59 @@
 .watchlist-item-change {
   font-family: var(--font-mono); font-size: var(--fs-10);
 }
+
+/* --- Watchlist polish round 2 (layout B + entry-zone popover + glossary) --- */
+.watchlist-header-actions { display: flex; gap: 4px; }
+.watchlist-item-main {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; gap: 10px;
+}
+.watchlist-item-change {
+  font-family: var(--font-mono); font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.watchlist-item-right { text-align: right; }
+
+/* Entry-zone cluster: collapsed default + popover */
+.zone-cluster { position: relative; display: inline-flex; }
+.zone-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px; max-width: 320px;
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: var(--sp-8);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.zone-popover-title {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-tertiary); margin-bottom: 4px;
+}
+.zone-popover-row {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-elevated); color: var(--text-primary);
+  text-align: left; cursor: pointer; font: inherit;
+}
+.zone-popover-row:hover { border-color: var(--text-secondary); }
+.zone-popover-row-head {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: var(--fs-11);
+}
+.zone-popover-row-tag { font-weight: var(--fw-medium); }
+.zone-popover-row-price { font-family: var(--font-mono); }
+.zone-popover-row-conf { color: var(--text-tertiary); margin-left: auto; font-size: 10px; }
+.zone-popover-row-reason { font-size: 10px; color: var(--text-secondary); line-height: 1.3; }
+
+/* Glossary sheet */
+.glossary { max-height: 80vh; overflow-y: auto; }
+.glossary-entry { padding: var(--sp-8) 0; border-bottom: 0.5px solid var(--border); }
+.glossary-entry:last-child { border-bottom: none; }
+.glossary-entry h3 { margin: 0 0 4px; font-size: var(--fs-11); font-weight: var(--fw-medium); color: var(--text-primary); }
+.glossary-short { margin: 0; font-size: var(--fs-11); color: var(--text-secondary); }
+.glossary-detail { margin: 4px 0 0; font-size: 10px; color: var(--text-tertiary); line-height: 1.4; }

@@ -1,9 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { IconSettings, IconCloudDownload } from '@tabler/icons-react';
+import { IconSettings, IconCloudDownload, IconHelpCircle } from '@tabler/icons-react';
 import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon } from '../hooks/useWatchlistData';
-import { MarkerSheet } from '../components/Watchlist/MarkerSheet';
+import { MarkerSheet, type MarkerPrefill } from '../components/Watchlist/MarkerSheet';
 import { MiniSparkline } from '../components/Watchlist/MiniSparkline';
+import { EntryZoneCluster } from '../components/Watchlist/EntryZoneCluster';
+import { Glossary } from '../components/Watchlist/Glossary';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency, formatSignedPercent } from '../utils/formatters';
 
@@ -11,6 +13,7 @@ interface MarkerSheetState {
   symbol: string;
   itemId: string;
   marker?: Marker;
+  prefill?: MarkerPrefill;
 }
 
 // Watchlist screen (Batch A1). Per-list active/hidden lives in the in-screen
@@ -50,6 +53,7 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 export default function Watchlist() {
   const { lists, itemsByList, quotesByConid, markersByItem, entryZonesByConid, isLoading } = useWatchlistData();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
   const [activeListId, setActiveListId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -92,14 +96,24 @@ export default function Watchlist() {
     <div className="watchlist-page">
       <header className="watchlist-header">
         <h1>Watchlist</h1>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label="Watchlist settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <IconSettings size={20} stroke={1.5} />
-        </button>
+        <div className="watchlist-header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Glossary"
+            onClick={() => setGlossaryOpen(true)}
+          >
+            <IconHelpCircle size={20} stroke={1.5} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Watchlist settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <IconSettings size={20} stroke={1.5} />
+          </button>
+        </div>
       </header>
 
       {lists.length === 0 ? (
@@ -116,6 +130,17 @@ export default function Watchlist() {
             entryZonesByConid={entryZonesByConid}
             onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, itemId: item.id })}
             onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, itemId: item.id, marker })}
+            onPromoteZone={(item, zone) =>
+              setMarkerSheet({
+                symbol: item.symbol,
+                itemId: item.id,
+                prefill: {
+                  price: zone.price,
+                  condition: 'at_or_below',
+                  label: `from ${zone.horizon} entry zone`,
+                },
+              })
+            }
           />
         </>
       )}
@@ -125,9 +150,12 @@ export default function Watchlist() {
           symbol={markerSheet.symbol}
           itemId={markerSheet.itemId}
           marker={markerSheet.marker}
+          prefill={markerSheet.prefill}
           onClose={() => setMarkerSheet(null)}
         />
       )}
+
+      {glossaryOpen && <Glossary onClose={() => setGlossaryOpen(false)} />}
 
       {settingsOpen && (
         <SettingsSheet
@@ -205,6 +233,7 @@ function ItemList({
   entryZonesByConid,
   onAddMarker,
   onEditMarker,
+  onPromoteZone,
 }: {
   items: WatchlistItem[];
   quotes: Record<number, QuoteRow>;
@@ -212,6 +241,7 @@ function ItemList({
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   onAddMarker: (item: WatchlistItem) => void;
   onEditMarker: (item: WatchlistItem, marker: Marker) => void;
+  onPromoteZone: (item: WatchlistItem, zone: EntryZoneRow & { horizon: Horizon }) => void;
 }) {
   const navigate = useNavigate();
   if (items.length === 0) {
@@ -238,6 +268,7 @@ function ItemList({
               onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
               onLongPress={() => onAddMarker(it)}
               onEditMarker={(m) => onEditMarker(it, m)}
+              onPromoteZone={(zoneRow, horizon) => onPromoteZone(it, { ...zoneRow, horizon })}
             />
           </li>
         );
@@ -247,12 +278,6 @@ function ItemList({
 }
 
 const LONG_PRESS_MS = 500;
-
-const HORIZON_SHORT: Record<Horizon, string> = {
-  intraday: 'I',
-  overnight: 'O',
-  multiday: 'M',
-};
 
 function ItemRow({
   item,
@@ -265,6 +290,7 @@ function ItemRow({
   onTap,
   onLongPress,
   onEditMarker,
+  onPromoteZone,
 }: {
   item: WatchlistItem;
   price: number | null;
@@ -276,6 +302,7 @@ function ItemRow({
   onTap: () => void;
   onLongPress: () => void;
   onEditMarker: (m: Marker) => void;
+  onPromoteZone: (zone: EntryZoneRow, horizon: Horizon) => void;
 }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
@@ -328,36 +355,22 @@ function ItemRow({
             <MiniSparkline closes={sparklineCloses} />
           </div>
         )}
+        {todayChangePct != null && (
+          <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
+            {formatSignedPercent(todayChangePct)}
+          </span>
+        )}
         <div className="watchlist-item-right">
           <span className="watchlist-item-price">
             {price != null ? formatCurrency(price) : '—'}
           </span>
-          {todayChangePct != null && (
-            <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
-              {formatSignedPercent(todayChangePct)}
-            </span>
-          )}
           {source && <span className="watchlist-item-src">{source}</span>}
         </div>
       </div>
       {(markers.length > 0 || Object.keys(zones).length > 0) && (
         <div className="watchlist-item-chips">
-          {(['intraday', 'overnight', 'multiday'] as Horizon[]).map((h) => {
-            const z = zones[h];
-            if (!z) return null;
-            const tooltip = `${z.reasoning}${z.overbought_tightened ? ' · overbought-tightened' : ''} · trend: ${z.trend_regime} · confidence ${z.confidence}%`;
-            return (
-              <span
-                key={h}
-                className={`zone-chip zone-chip-${h}`}
-                title={tooltip}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span className="zone-chip-horizon">{HORIZON_SHORT[h]}</span>
-                <span className="zone-chip-price">${z.price}</span>
-              </span>
-            );
-          })}
+          {/* User-authored markers ALWAYS render first (per user direction —
+              they're the source of truth for what's being tracked). */}
           {markers.map((m) => (
             <button
               key={m.id}
@@ -374,6 +387,13 @@ function ItemRow({
               {m.label && <span className="marker-chip-label">· {m.label}</span>}
             </button>
           ))}
+          {/* Engine-computed entry zones: collapsed to the middle (overnight)
+              chip by default; hover/tap expands to all three with a 'promote
+              to marker' action. */}
+          <EntryZoneCluster
+            zones={zones}
+            onPromote={(z) => onPromoteZone(z, z.horizon)}
+          />
         </div>
       )}
     </div>

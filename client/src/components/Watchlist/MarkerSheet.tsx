@@ -14,21 +14,36 @@ const CONDITIONS: Array<{ value: Marker['condition']; label: string }> = [
   { value: 'about',       label: 'about (level proximity — Discord channel pending)' },
 ];
 
+export interface MarkerPrefill {
+  price?: number;
+  condition?: Marker['condition'];
+  label?: string;
+}
+
 export function MarkerSheet({
   symbol,
   itemId,
   marker,
+  prefill,
   onClose,
 }: {
   symbol: string;
   itemId: string;
   marker?: Marker;
+  // When in create mode (`marker` undefined), seeds the form. Used by the
+  // entry-zone "promote to marker" flow so a one-tap converts a computed
+  // zone into a user-owned marker.
+  prefill?: MarkerPrefill;
   onClose: () => void;
 }) {
   const editing = marker != null;
-  const [label, setLabel] = useState(marker?.label ?? '');
-  const [price, setPrice] = useState(marker ? String(marker.price) : '');
-  const [condition, setCondition] = useState<Marker['condition']>(marker?.condition ?? 'at_or_below');
+  const [label, setLabel] = useState(marker?.label ?? prefill?.label ?? '');
+  const [price, setPrice] = useState(
+    marker ? String(marker.price) : prefill?.price != null ? String(prefill.price) : '',
+  );
+  const [condition, setCondition] = useState<Marker['condition']>(
+    marker?.condition ?? prefill?.condition ?? 'at_or_below',
+  );
   const [cooldown, setCooldown] = useState(String(marker?.cooldown_hours ?? 24));
   const [enabled, setEnabled] = useState(marker?.enabled ?? true);
   const [busy, setBusy] = useState(false);
