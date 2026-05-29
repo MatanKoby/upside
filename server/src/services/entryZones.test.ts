@@ -144,23 +144,19 @@ describe('computeEntryZones — insufficient bars', () => {
 });
 
 describe('computeEntryZones — current price below every structural level (capitulation)', () => {
-  it('falls back to a round-number magnet below price (legitimate engine output, not a bug)', () => {
+  it('returns no zones when no structural support sits below price (round magnets removed 2026-05-29)', () => {
     const daily = clamp(series({ start: 50, drift: -0.2, noise: 0.002, n: 252 }), 1, 200);
     const minLow = Math.min(...daily.l);
     const currentPrice = Math.max(0.5, minLow * 0.7);
     const out = computeEntryZones({ currentPrice, daily, intraday: null });
 
-    // All structural supports (SMAs, pivots, swings, Bollinger, N-day lows)
-    // sit ABOVE the synthesised capitulation price, so they're filtered out.
-    // The engine should still surface SOMETHING — a round-number magnet
-    // below price — at LOW confidence. That's better than returning nothing
-    // for a watchlist row.
-    const picked = out.zones.intraday ?? out.zones.overnight ?? out.zones.multiday;
-    if (picked) {
-      expect(picked.price).toBeLessThan(currentPrice);
-      expect(picked.sources.some((s) => s === 'round_number')).toBe(true);
-      expect(picked.confidence).toBeLessThan(50);
-    }
+    // Round-magnet fallback removed — they caused 'buy market' alerts when the
+    // 15-min cron staleness left the magnet above current price. With every
+    // real structural support sitting above the synthesised capitulation
+    // price, the engine surfaces nothing on this row, which is honest.
+    expect(out.zones.intraday).toBeNull();
+    expect(out.zones.overnight).toBeNull();
+    expect(out.zones.multiday).toBeNull();
   });
 });
 

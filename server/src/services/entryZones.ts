@@ -128,7 +128,11 @@ function collectCandidates(pack: FeaturePack, currentPrice: number): Candidate[]
   push('low20', pack.levels.low20);
   push('low52w', pack.levels.low52w);
 
-  for (const r of pack.levels.roundNumbers) push('round_number', r);
+  // Round-number magnets removed (user direction 2026-05-29). They produce
+  // alerts like "buy at $X" where $X was below price at compute time but the
+  // 15-min cron staleness leaves the zone above current price — practically a
+  // "buy market" recommendation that's dangerous. Stick to real structural
+  // levels (pivots, swings, MAs, Bollinger, N-day lows).
 
   return out;
 }

@@ -1386,3 +1386,8 @@
 }
 /* The zone-cluster used to own the auto-margin; now its parent does. */
 .zone-cluster { margin-left: 0; }
+
+/* --- Marker chip stays 1 row even with long $1234.56 prices (2026-05-29) --- */
+.marker-chip { white-space: nowrap; }
+.zone-chip   { white-space: nowrap; }
+.watchlist-item-chip-cluster { align-items: center; }

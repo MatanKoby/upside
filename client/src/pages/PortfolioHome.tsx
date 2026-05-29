@@ -6,7 +6,6 @@ import { SortBar } from '../components/PortfolioHome/SortBar';
 import { PositionList } from '../components/PortfolioHome/PositionList';
 import { usePositions } from '../hooks/usePositions';
 import { useAllSignals } from '../hooks/useSignals';
-import { usePortfolioSummary } from '../hooks/usePortfolioSummary';
 import type { MarketSessionState } from '../hooks/useMarketSession';
 import type { SortKey } from '../types';
 
@@ -15,11 +14,11 @@ export default function PortfolioHome() {
   const session = useOutletContext<MarketSessionState>();
   const { positions, isLoading } = usePositions();
   const { signalsBySymbol } = useAllSignals();
-  const { mtdReturn, mtdReturnPercent } = usePortfolioSummary();
 
   // Portfolio value is computed FE-side from the live `positions` rows so it
-  // ticks instantly on Realtime updates. MTD comes from /api/portfolio/summary
-  // because it needs the BE-cached month-start anchor to compute against.
+  // ticks instantly on Realtime updates. MTD card was removed 2026-05-29
+  // (user direction) — the BE summary endpoint stays available if we want it
+  // back, but no consumer reads it now.
   const portfolioValue = positions.reduce((acc, p) => acc + p.marketValue, 0);
 
   return (
@@ -29,11 +28,7 @@ export default function PortfolioHome() {
         sessionStatus={session.session}
         onIbChange={session.refresh}
       />
-      <SummaryStrip
-        portfolioValue={portfolioValue}
-        mtdReturn={mtdReturn}
-        mtdReturnPercent={mtdReturnPercent}
-      />
+      <SummaryStrip portfolioValue={portfolioValue} />
       <SortBar value={sort} onChange={setSort} />
       {isLoading ? (
         <div className="positions-loading">Loading positions…</div>
