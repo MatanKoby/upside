@@ -14,7 +14,9 @@ import { IndicatorsSection } from './IndicatorsSection';
 import { CollapsibleSection } from '../common/CollapsibleSection';
 import { PriceChart } from './PriceChart';
 import { useSignals } from '../../hooks/useSignals';
+import { useIntradayStats } from '../../hooks/useIntradayStats';
 import { SignalPill } from '../primitives/SignalPill';
+import { IntradayStatsPanel } from './IntradayStatsPanel';
 
 export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   const navigate = useNavigate();
@@ -30,6 +32,7 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   // Lifted here (rather than inside SignalSection) so the same subscription
   // feeds both the section body and the collapsed-header pill row.
   const signalsResult = useSignals(detail.symbol);
+  const statsResult = useIntradayStats(detail.symbol);
   const actionableSignals = signalsResult.signals.filter((s) => s.type !== 'no_signal');
   const signalAccessory =
     actionableSignals.length > 0 ? (
@@ -99,6 +102,10 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
 
       <CollapsibleSection title="Indicators">
         <IndicatorsSection indicators={detail.indicators} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Intraday stats">
+        <IntradayStatsPanel stats={statsResult.stats} />
       </CollapsibleSection>
     </div>
   );

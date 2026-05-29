@@ -29,7 +29,27 @@ export interface QuoteRow {
   canonical_source: 'ib' | 'finnhub' | null;
   canonical_updated_at: string | null;
   today_change_pct: number | null;
+  today_open: number | null;
   sparkline_closes: number[] | null;
+}
+
+// One row of `intraday_stats` (Batch B). Per-instrument historical character
+// — typical open/close fade and typical intraday-low dip from open. Computed
+// nightly by `intradayStatsCron`. See spec/signals/stats.md.
+export interface IntradayStatsRow {
+  conid: number;
+  open_fade_pct_mean: number | null;
+  open_fade_pct_p50: number | null;
+  open_fade_pct_p25: number | null;
+  close_fade_pct_mean: number | null;
+  close_fade_pct_p50: number | null;
+  close_fade_pct_p25: number | null;
+  intraday_low_pct_mean: number | null;
+  intraday_low_pct_p50: number | null;
+  intraday_low_pct_p75: number | null;
+  sample_size: number;
+  lookback_days: number;
+  computed_at: string;
 }
 
 // A user-defined price marker — keyed by (user_id, conid) since
@@ -68,6 +88,7 @@ export interface UseWatchlistData {
   quotesByConid: Record<number, QuoteRow>;
   markersByConid: Record<number, Marker[]>;
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
+  statsByConid: Record<number, IntradayStatsRow>;
   isLoading: boolean;
 }
 
@@ -87,6 +108,7 @@ export function useWatchlistData(): UseWatchlistData {
   const [quotesByConid, setQuotesByConid] = useState<Record<number, QuoteRow>>({});
   const [markersByConid, setMarkersByConid] = useState<Record<number, Marker[]>>({});
   const [entryZonesByConid, setEntryZonesByConid] = useState<Record<number, Partial<Record<Horizon, EntryZoneRow>>>>({});
+  const [statsByConid, setStatsByConid] = useState<Record<number, IntradayStatsRow>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -122,7 +144,7 @@ export function useWatchlistData(): UseWatchlistData {
       const quotesRes = conidSet.length
         ? await supabase
             .from('quotes')
-            .select('conid, symbol, canonical_price, canonical_source, canonical_updated_at, today_change_pct, sparkline_closes')
+            .select('conid, symbol, canonical_price, canonical_source, canonical_updated_at, today_change_pct, today_open, sparkline_closes')
             .in('conid', conidSet)
         : { data: [] as QuoteRow[] };
       const qMap: Record<number, QuoteRow> = {};
@@ -131,6 +153,7 @@ export function useWatchlistData(): UseWatchlistData {
           ...r,
           canonical_price: num(r.canonical_price),
           today_change_pct: num(r.today_change_pct as number | null),
+          today_open: num(r.today_open as number | null),
           sparkline_closes: Array.isArray(r.sparkline_closes)
             ? r.sparkline_closes.map((v) => Number(v)).filter((v) => Number.isFinite(v))
             : null,
@@ -165,12 +188,44 @@ export function useWatchlistData(): UseWatchlistData {
         (zMap[c] ??= {})[horizon] = { ...r, price: Number(r.price) };
       }
 
+      // Intraday stats (Batch B). One row per conid; only present for conids
+      // the nightly cron has covered. `last_fired_at` lives only on the BE
+      // side (the alert-cooldown anchor) — FE doesn't need it.
+      const statsRes = conidSet.length
+        ? await supabase
+            .from('intraday_stats')
+            .select(
+              'conid, open_fade_pct_mean, open_fade_pct_p50, open_fade_pct_p25, ' +
+              'close_fade_pct_mean, close_fade_pct_p50, close_fade_pct_p25, ' +
+              'intraday_low_pct_mean, intraday_low_pct_p50, intraday_low_pct_p75, ' +
+              'sample_size, lookback_days, computed_at',
+            )
+            .in('conid', conidSet)
+        : { data: [] as IntradayStatsRow[] };
+      const sMap: Record<number, IntradayStatsRow> = {};
+      for (const r of (statsRes.data ?? []) as IntradayStatsRow[]) {
+        const c = Number(r.conid);
+        sMap[c] = {
+          ...r,
+          open_fade_pct_mean: num(r.open_fade_pct_mean),
+          open_fade_pct_p50: num(r.open_fade_pct_p50),
+          open_fade_pct_p25: num(r.open_fade_pct_p25),
+          close_fade_pct_mean: num(r.close_fade_pct_mean),
+          close_fade_pct_p50: num(r.close_fade_pct_p50),
+          close_fade_pct_p25: num(r.close_fade_pct_p25),
+          intraday_low_pct_mean: num(r.intraday_low_pct_mean),
+          intraday_low_pct_p50: num(r.intraday_low_pct_p50),
+          intraday_low_pct_p75: num(r.intraday_low_pct_p75),
+        };
+      }
+
       if (!alive) return;
       setLists(listRows);
       setItemsByList(itemsByListMap);
       setQuotesByConid(qMap);
       setMarkersByConid(markersByConidMap);
       setEntryZonesByConid(zMap);
+      setStatsByConid(sMap);
       setIsLoading(false);
     }
 
@@ -184,6 +239,7 @@ export function useWatchlistData(): UseWatchlistData {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlist_markers' }, () => void load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'entry_zones' }, () => void load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'intraday_stats' }, () => void load())
       .subscribe();
 
     return () => {
@@ -192,5 +248,5 @@ export function useWatchlistData(): UseWatchlistData {
     };
   }, []);
 
-  return { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, isLoading };
+  return { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, statsByConid, isLoading };
 }

@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconSettings, IconCloudDownload, IconHelpCircle } from '@tabler/icons-react';
-import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon } from '../hooks/useWatchlistData';
+import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon, type IntradayStatsRow } from '../hooks/useWatchlistData';
 import { MarkerSheet, type MarkerPrefill } from '../components/Watchlist/MarkerSheet';
 import { MiniSparkline } from '../components/Watchlist/MiniSparkline';
 import { EntryZoneCluster } from '../components/Watchlist/EntryZoneCluster';
+import { IntradayStatsChip } from '../components/Watchlist/IntradayStatsChip';
 import { Glossary } from '../components/Watchlist/Glossary';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency, formatSignedPercent } from '../utils/formatters';
@@ -51,7 +52,7 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 }
 
 export default function Watchlist() {
-  const { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, isLoading } = useWatchlistData();
+  const { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, statsByConid, isLoading } = useWatchlistData();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
@@ -128,6 +129,7 @@ export default function Watchlist() {
             quotes={quotesByConid}
             markersByConid={markersByConid}
             entryZonesByConid={entryZonesByConid}
+            statsByConid={statsByConid}
             onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid) })}
             onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid), marker })}
             onPromoteZone={(item, zone) =>
@@ -231,6 +233,7 @@ function ItemList({
   quotes,
   markersByConid,
   entryZonesByConid,
+  statsByConid,
   onAddMarker,
   onEditMarker,
   onPromoteZone,
@@ -239,6 +242,7 @@ function ItemList({
   quotes: Record<number, QuoteRow>;
   markersByConid: Record<number, Marker[]>;
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
+  statsByConid: Record<number, IntradayStatsRow>;
   onAddMarker: (item: WatchlistItem) => void;
   onEditMarker: (item: WatchlistItem, marker: Marker) => void;
   onPromoteZone: (item: WatchlistItem, zone: EntryZoneRow & { horizon: Horizon }) => void;
@@ -255,6 +259,7 @@ function ItemList({
         const source = q?.canonical_source ?? null;
         const markers = markersByConid[Number(it.conid)] ?? [];
         const zones = entryZonesByConid[Number(it.conid)] ?? {};
+        const stats = statsByConid[Number(it.conid)];
         return (
           <li key={it.id}>
             <ItemRow
@@ -262,9 +267,11 @@ function ItemList({
               price={price}
               source={source}
               todayChangePct={q?.today_change_pct ?? null}
+              todayOpen={q?.today_open ?? null}
               sparklineCloses={q?.sparkline_closes ?? null}
               markers={markers}
               zones={zones}
+              stats={stats}
               onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
               onLongPress={() => onAddMarker(it)}
               onEditMarker={(m) => onEditMarker(it, m)}
@@ -284,9 +291,11 @@ function ItemRow({
   price,
   source,
   todayChangePct,
+  todayOpen,
   sparklineCloses,
   markers,
   zones,
+  stats,
   onTap,
   onLongPress,
   onEditMarker,
@@ -296,9 +305,11 @@ function ItemRow({
   price: number | null;
   source: 'ib' | 'finnhub' | null;
   todayChangePct: number | null;
+  todayOpen: number | null;
   sparklineCloses: number[] | null;
   markers: Marker[];
   zones: Partial<Record<Horizon, EntryZoneRow>>;
+  stats: IntradayStatsRow | undefined;
   onTap: () => void;
   onLongPress: () => void;
   onEditMarker: (m: Marker) => void;
@@ -383,6 +394,7 @@ function ItemRow({
             zones={zones}
             onPromote={(z) => onPromoteZone(z, z.horizon)}
           />
+          <IntradayStatsChip stats={stats} price={price} todayOpen={todayOpen} />
         </div>
       </div>
       {/* Right column is absolutely positioned so price always sits in the
