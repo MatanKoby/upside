@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Read-only psql wrapper for the Upside Supabase DB.
+#
+# Forwards all args (and stdin) to psql, with the connection string sourced
+# from .secrets/readonly-db so no creds land on the command line or in
+# permission prompts. Role is upside_readonly — SELECT only, so writes are
+# rejected by Postgres regardless of how the script is invoked.
+#
+# Examples:
+#   bin/upside-psql -c "select count(*) from intraday_stats;"
+#   bin/upside-psql -f /tmp/report.sql
+#   bin/upside-psql <<'SQL'
+#     select symbol, canonical_price, today_open from quotes order by symbol;
+#   SQL
+
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CREDS_FILE="$REPO_ROOT/.secrets/readonly-db"
+if [[ ! -f "$CREDS_FILE" ]]; then
+  echo "upside-psql: missing $CREDS_FILE — see .claude/skills/query-supabase/SKILL.md to recreate" >&2
+  exit 1
+fi
+exec psql "$(cat "$CREDS_FILE")" -P pager=off "$@"

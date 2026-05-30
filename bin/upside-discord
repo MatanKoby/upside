@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Read-only Discord wrapper for the Upside guild.
+# Lists channels or reads messages; token sourced from .secrets/discord-token.
+#
+# Usage:
+#   bin/upside-discord channels                       # list text channels
+#   bin/upside-discord <name|id> [N]                  # read last N (default 50)
+#   bin/upside-discord <name|id> [N] --before <id>    # paginate older
+#   bin/upside-discord <name|id> [N] --after  <id>    # paginate newer
+#   bin/upside-discord <name|id> [N] --raw            # raw JSON (pipe to jq)
+#
+# Examples:
+#   bin/upside-discord channels
+#   bin/upside-discord dip-buys
+#   bin/upside-discord errors 20
+#   bin/upside-discord stats-alerts 100 --raw | jq .
+
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOKEN_FILE="$REPO_ROOT/.secrets/discord-token"
+GUILD="1505264574037753896"
+
+if [[ ! -f "$TOKEN_FILE" ]]; then
+  echo "upside-discord: missing $TOKEN_FILE" >&2
+  exit 1
+fi
+TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE")"
+api() { curl -sS -H "Authorization: Bot $TOKEN" "https://discord.com/api/v10$1"; }
+
+case "${1:-}" in
+  ""|-h|--help)
+    sed -n '2,16p' "$0"; exit 0 ;;
+  channels)
+    api "/guilds/$GUILD/channels" \
+      | jq -r '.[] | select(.type==0) | "\(.id)\t#\(.name)"'
+    exit 0 ;;
+esac
+
+# Resolve channel: bare digits = id, otherwise name lookup (strip leading '#').
+sel="${1#\#}"; shift || true
+if [[ "$sel" =~ ^[0-9]+$ ]]; then
+  CHID="$sel"
+else
+  CHID="$(api "/guilds/$GUILD/channels" | jq -r --arg n "$sel" '.[] | select(.type==0 and .name==$n) | .id' | head -n1)"
+  if [[ -z "$CHID" ]]; then
+    echo "upside-discord: no channel named #$sel (try: bin/upside-discord channels)" >&2
+    exit 1
+  fi
+fi
+
+LIMIT="50"; BEFORE=""; AFTER=""; RAW=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --before) BEFORE="$2"; shift 2 ;;
+    --after)  AFTER="$2";  shift 2 ;;
+    --raw)    RAW="1";     shift   ;;
+    *)        LIMIT="$1";  shift   ;;
+  esac
+done
+
+Q="limit=$LIMIT"
+[[ -n "$BEFORE" ]] && Q="$Q&before=$BEFORE"
+[[ -n "$AFTER"  ]] && Q="$Q&after=$AFTER"
+RESP="$(api "/channels/$CHID/messages?$Q")"
+
+if [[ -n "$RAW" ]]; then
+  echo "$RESP"
+else
+  echo "$RESP" | jq -r '
+    .[] |
+    "── \(.timestamp) [\(.id)] ──\n" +
+    ((.embeds[0].title // .content // "") | tostring) + "\n" +
+    ((.embeds[0].description // "") | tostring) +
+    (if ((.embeds[0].fields // []) | length) > 0
+     then "\nFIELDS: " + ((.embeds[0].fields | map("\(.name)=\(.value)") | join(" | ")))
+     else "" end)'
+fi
