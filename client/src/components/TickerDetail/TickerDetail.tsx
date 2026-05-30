@@ -12,6 +12,7 @@ import { SignalSection } from './SignalSection';
 import { PositionStats } from './PositionStats';
 import { IndicatorsSection } from './IndicatorsSection';
 import { CollapsibleSection } from '../common/CollapsibleSection';
+import { PriceFlicker } from '../common/PriceFlicker';
 import { PriceChart } from './PriceChart';
 import { useSignals } from '../../hooks/useSignals';
 import { useIntradayStats } from '../../hooks/useIntradayStats';
@@ -60,7 +61,13 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
           <p>{detail.company}</p>
         </div>
         <div className="td-price-wrap">
-          <strong>{formatCurrency(detail.price)}</strong>
+          <strong>
+            <PriceFlicker
+              price={detail.price}
+              todayChangePct={detail.todayChangePercent}
+              format={formatCurrency}
+            />
+          </strong>
           <span className={`pnl-${tone}`}>
             {formatSignedCurrency(detail.todayChange)} ({formatSignedPercent(detail.todayChangePercent)})
           </span>

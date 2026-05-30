@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { IconChevronRight, IconArrowUp, IconArrowDown, IconArrowBarToUp } from '@tabler/icons-react';
 import { Sparkline } from '../common/Sparkline';
 import { Tooltip } from '../common/Tooltip';
+import { PriceFlicker } from '../common/PriceFlicker';
 import { SignalPill } from '../primitives/SignalPill';
 import { useSparkline } from '../../hooks/useSparkline';
 import type { ActiveSignal } from '../../hooks/useSignals';
@@ -79,7 +80,12 @@ export function PositionCard({
             <Sparkline data={sparklineData} />
           </div>
           <div className="position-card-right">
-            <div className="price">{formatCurrency(position.currentPrice)}</div>
+            <PriceFlicker
+              price={position.currentPrice}
+              todayChangePct={position.todayChangePercent}
+              format={formatCurrency}
+              className="price"
+            />
             <div className={`today pnl-${todayTone}`}>
               {formatSignedCurrency(position.todayChange)} ({formatSignedPercent(position.todayChangePercent)})
             </div>

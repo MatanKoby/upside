@@ -1427,3 +1427,39 @@
 .td-stats-extreme-tag { font-size: 10px; color: var(--text-tertiary); }
 .td-stats-foot  { font-size: 11px; color: var(--text-tertiary); margin: 0; }
 .td-empty-note  { font-size: 13px; color: var(--text-secondary); margin: 0; }
+
+/* --- PriceFlicker: animate price-number changes everywhere a ticker price renders --- */
+/* Single 200ms color flash on any change; double flash on bigger moves (scaled to */
+/* today's realized vol). Never hides the number — the arrow sits absolutely.       */
+.price-flicker {
+  position: relative;
+  display: inline-block;
+}
+.price-flicker-text {
+  display: inline-block;
+  transition: color 200ms ease-out;
+}
+.price-flicker-up   { animation: priceFlashUp   200ms ease-out 1; }
+.price-flicker-down { animation: priceFlashDown 200ms ease-out 1; }
+.price-flicker-up.price-flicker-big   { animation: priceFlashUp   500ms ease-out 2; }
+.price-flicker-down.price-flicker-big { animation: priceFlashDown 500ms ease-out 2; }
+@keyframes priceFlashUp   { 0% { color: rgb(var(--gain-rgb)); } 100% { color: inherit; } }
+@keyframes priceFlashDown { 0% { color: rgb(var(--loss-rgb)); } 100% { color: inherit; } }
+.price-flicker-arrow {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translate(4px, -50%);
+  font-size: 0.65em;
+  line-height: 1;
+  pointer-events: none;
+  animation: priceArrowFade 300ms ease-out forwards;
+}
+.price-flicker-arrow-up   { color: rgb(var(--gain-rgb)); }
+.price-flicker-arrow-down { color: rgb(var(--loss-rgb)); }
+.price-flicker-arrow-big  { animation-duration: 500ms; font-size: 0.8em; }
+@keyframes priceArrowFade {
+  0%   { opacity: 0; transform: translate(4px, -50%) scale(0.7); }
+  20%  { opacity: 1; transform: translate(4px, -50%) scale(1);   }
+  100% { opacity: 0; transform: translate(8px, -50%) scale(1);   }
+}

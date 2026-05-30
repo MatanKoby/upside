@@ -7,6 +7,7 @@ import { MiniSparkline } from '../components/Watchlist/MiniSparkline';
 import { EntryZoneCluster } from '../components/Watchlist/EntryZoneCluster';
 import { IntradayStatsChip } from '../components/Watchlist/IntradayStatsChip';
 import { Glossary } from '../components/Watchlist/Glossary';
+import { PriceFlicker } from '../components/common/PriceFlicker';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency, formatSignedPercent } from '../utils/formatters';
 
@@ -400,9 +401,13 @@ function ItemRow({
       {/* Right column is absolutely positioned so price always sits in the
           same spot regardless of left-side content length. */}
       <div className="watchlist-item-right">
-        <span className="watchlist-item-price">
-          {price != null ? formatCurrency(price) : '—'}
-        </span>
+        <PriceFlicker
+          price={price}
+          todayChangePct={todayChangePct}
+          format={formatCurrency}
+          className="watchlist-item-price"
+        />
+
         {todayChangePct != null && (
           <span className={`watchlist-item-change pnl-${todayChangePct > 0.1 ? 'gain' : todayChangePct < -0.1 ? 'loss' : 'neutral'}`}>
             {formatSignedPercent(todayChangePct)}
