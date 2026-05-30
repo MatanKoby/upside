@@ -1463,3 +1463,13 @@
   20%  { opacity: 1; transform: translate(4px, -50%) scale(1);   }
   100% { opacity: 0; transform: translate(8px, -50%) scale(1);   }
 }
+
+/* --- TickerDetail loading / error / not-held state body --- */
+/* Header still renders; only the body area carries the message. */
+.td-state-body {
+  padding: 24px 16px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+.td-state-body p { margin: 0; }
+.td-state-error p { color: rgb(var(--loss-rgb)); }

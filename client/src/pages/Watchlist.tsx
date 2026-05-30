@@ -90,10 +90,6 @@ export default function Watchlist() {
     }
   }
 
-  if (isLoading) {
-    return <div className="watchlist-page"><p className="watchlist-empty">Loading…</p></div>;
-  }
-
   return (
     <div className="watchlist-page">
       <header className="watchlist-header">
@@ -118,7 +114,9 @@ export default function Watchlist() {
         </div>
       </header>
 
-      {lists.length === 0 ? (
+      {isLoading ? (
+        <p className="watchlist-empty">Loading…</p>
+      ) : lists.length === 0 ? (
         <EmptyState syncing={syncing} message={syncMessage} onSync={runSync} />
       ) : activeLists.length === 0 ? (
         <NoActiveLists onOpenSettings={() => setSettingsOpen(true)} />
