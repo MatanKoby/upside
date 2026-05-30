@@ -238,3 +238,67 @@ Each is a small additive feature on top of the existing engine. No new schema; j
 - **yfinance / Yahoo** (unofficial, no key, ToS-gray).
 
 Deliverable of the research: pick one, define the timeframe→provider-param mapping (mirroring `TIMEFRAME_MAP` in `marketdata.ts`), and decide the caching/persistence model (per-symbol Redis window vs. DB-backed history) so charts no longer go blank when IB drops.
+
+---
+
+## Track 10: Screener — deferred items
+
+Forward-spec for the intraday-scalping screener (`signals/screener-universe.md` + `signals/band-engine.md` + `screens/screener.md`). Items here are deliberately NOT in slice 1; each carries an **empirical trigger condition** for revisit so we don't add them prematurely.
+
+### RSS catalyst-news firehose
+
+SEC EDGAR 8-K stream + FDA Drug Approvals RSS + PR Newswire / BusinessWire / GlobeNewswire + Nasdaq Trader corporate actions. Ticker extraction by regex + universe-table lookup. Polarity scoring by keyword (approval / beats / raises = +1; downgrade / investigation / halt = −1). **No LLM in the pipeline** — keyword scoring is enough for "should I bother looking?"
+
+Writes to a new `news_events` table: `(conid, source, headline, url, polarity, captured_at)`. Tagged conids surface in the Screener tab with a "news_event" annotation; the dynamic universe inclusion (Pre-Market Refresh Flow in `flows.md`) consumes the tag to auto-promote tickers earlier than volume-gap detection alone catches them.
+
+**Revisit when** (both must hold):
+1. The `catalyst_reversal` volume-gap trait has shipped and produced 1–2 weeks of live output.
+2. We can point to ≥1 instance where the engine missed a tradeable move *and* RSS would have surfaced the catalyst first.
+
+If volume-gap-only catches everything we care about, RSS is dead weight. The trigger is empirical, not calendar-based.
+
+### Mid-day broad-pool discovery sweep
+
+Currently dynamic universe inclusion runs only at 15:30 IDT (pre-market). A mid-day broad-pool sweep would scan the ~10k Ring-0 pool every 30 min during regular session for tickers reacting to mid-day news / surprise halts / lifted halts.
+
+Cost: heavy — ~10k × every 30 min × 2 Finnhub calls = ~40k calls/day, blows the free-tier budget. Either gate behind a paid Finnhub tier or restrict to a Ring-0.5 narrower pool (~3k names with some loose pre-filter).
+
+**Revisit when** we observe ≥3 mid-day moves the engine missed because the ticker wasn't in the curated list at the time. Until then nightly + pre-market sweep + dynamic inclusion is enough.
+
+### Sell-side mirror engine (`typical_intraday_high`)
+
+The `intraday_stats` engine currently produces `intraday_low_pct` (buy side). The mirror trait — typical intraday HIGH (open → session high) — completes the sell side for held positions. Small extension to `computeIntradayStats` (mirror tail, same fixtures, no new schema).
+
+Once the trait exists, the Layer-3 walking band-state machine's `p50_high_fade_pct` term has a real value (currently it would have to estimate from the `open_fade_pct` field).
+
+**Revisit when** the band engine ships and the buy-side bands prove out. Sell-side bands are mostly useful for held-position exit timing; buy-side first makes sense because "buying the lowest low" is the user-stated higher-conviction half ("safer, more margin of error").
+
+### AH-calibrated bands (pre-market + after-hours separate engine)
+
+The band engine today applies regular-session-calibrated bands to AH price action with a `ah_low_confidence` flag — informational only. A separate engine using AH-only bar history would calibrate bands for AH/PM behavior natively.
+
+Trade-off: AH data is much sparser (1 hour AH × 60 sessions ≪ 6.5 hours regular × 60), so the bands would have lower statistical power.
+
+**Revisit when** the user reports actual AH/PM scalping activity. If pre-market is the planning window and regular session is the trading window (matches the user's current pattern), the informational-only treatment is enough indefinitely.
+
+### IBKR-side push of curated lists (Slice 4)
+
+Push the screener's virtual lists into IBKR's native watchlist surface so the user sees the curated picks in IB Mobile without switching apps. Requires Batch 13.3 (secondary IBKR username) to unblock first — current API surface is GET-only by deliberate security policy, and POST to `/iserver/watchlist` shares auth context with order operations.
+
+**Revisit when**:
+1. Batch 13.3 ships (IBKR confirms secondary-user market-data cost).
+2. User has used the screener tab for ≥1 week and identified at least one curated list worth elevating to IB Mobile.
+
+Default until then: keep all screener output Upside-side only. The user picks one list to push manually.
+
+### Auto-marker creation from band engine
+
+Currently, band-touches notify (Discord) but don't write `watchlist_markers` rows. An auto-marker path would let the engine *propose* markers at high-confidence bands, the user accepts / dismisses / edits via the same `MarkerSheet`. Manual markers become a subset of "user-confirmed levels" alongside engine-proposed ones.
+
+**Revisit when** the band engine has 2+ weeks of live data AND the user reports wanting to "save" specific bands as durable levels. The current promote-to-marker affordance (long-press on screener row) is the manual workaround; auto-creation only makes sense if the workaround feels too clicky.
+
+### Auto-truncating lookback under vol_regime_shift
+
+`vol_regime_shift` currently sets a flag + annotation. v2: when the flag fires, dynamically truncate the lookback window to post-shift sessions only when computing `intraday_stats`. The trick is detecting the regime break point cleanly (5-session ATR jump is noisy; need better edge detection).
+
+**Revisit when** we have ≥5 observed `vol_regime_shift` cases logged, so the truncation rule can be calibrated against real data rather than a synthetic estimate.

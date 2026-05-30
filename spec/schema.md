@@ -81,13 +81,19 @@ What's stored where, in what shape, with what semantics.
 
 - **`intraday_stats`** *(MVP via watchlist pivot; batch B)* — nightly per-symbol stats from historical 5-min bars. See `signals/stats.md`. `{ conid bigint pk, symbol text, open_fade_pct_{mean,p50,p25}, close_fade_pct_{mean,p50,p25}, intraday_low_pct_{mean,p50,p75}, sample_size int, lookback_days int, last_fired_at timestamptz null, computed_at timestamptz }`. `last_fired_at` is the 24h cooldown anchor for the typical-intraday-low band alert. `symbol` mirrored on the row + indexed so TickerDetail can query by symbol without joining contracts. Realtime enabled.
 
+- **`universe`** *(post-MVP screener track; see `signals/screener-universe.md` → Ring 1)* — one row per ticker that has ever entered the screener universe. Nightly Ring 1 filter pass writes/refreshes. `{ conid bigint pk, symbol text, type text, mic text, last_filter_pass timestamptz, filter_result text check in ('in','out_price','out_cap','out_volume','no_data'), last_price numeric, last_market_cap_m numeric, last_avg_volume integer, computed_at timestamptz }`. The `last_*` fields are cached for diagnosis ("why did this drop out"). Stale rows (no `last_filter_pass` for 30 days) retention-cron'd.
+
+- **`trait_scores`** *(post-MVP screener track; see `signals/screener-universe.md` → Traits)* — per `(conid, trait, asof_date)`. Rewritten each daily/intraday sweep; stale rows beyond shelf-life dropped. `{ conid bigint, trait text check in ('intraday_range_trader','catalyst_reversal','post_earnings_drift'), asof_date date, score numeric, payload jsonb, computed_at timestamptz, primary key (conid, trait, asof_date) }`. `payload` carries trait-specific FE-ready details (e.g. for `intraday_range_trader`: `{ p25, p50, p75, sample_size, today_open_band_low }`). Realtime enabled — the Screener tab subscribes to refresh row chips live.
+
+- **`band_state`** *(post-MVP screener track; see `signals/band-engine.md`)* — per `(conid, session_date)`. The walking band-state machine's persistence. `{ conid bigint, session_date date, anchors jsonb, current_low_band numeric, current_high_band numeric, session_regime text check in ('mean_reversion','bullish_trend','bearish_trend','mixed','ah_low_confidence'), vol_scalar numeric, vol_regime_shift bool, updated_at timestamptz, primary key (conid, session_date) }`. `anchors` is a chronological array of `{kind:'low'|'high', price, ts}` for replay/debug. Cleanly reset at 16:30 IDT next session — no AH carryover. Realtime enabled (band chips update live as the engine ticks).
+
 - **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Generic home for app-level runtime flags. Current keys:
   - `api_url` — current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription. See `architecture.md` → Public URL Discovery.
   - `llm_provider` / `llm_model` — active LLM selection (app-level, since API keys are global), written by `POST /api/config/llm`, read by the signal engine per analysis and by the Settings picker via Realtime. Keys themselves stay in `.env` — only the choice is here. See `signals/playbook.md` → LLM Provider Abstraction.
 
 ### Realtime publications
 
-Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pivot tables also: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`, `intraday_stats`.
+Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pivot tables also: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`, `intraday_stats`. Screener-track tables also: `trait_scores`, `band_state` (the Screener tab + Watchlist band chips subscribe to both).
 
 ### Row Level Security
 

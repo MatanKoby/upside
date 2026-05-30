@@ -92,6 +92,64 @@ See `signals/stats.md` for the engine + Discord channel + math.
 4. **Cooldown** 24h anchored on `intraday_stats.last_fired_at`. Outside cooldown → `notifyIntradayStatsHit(...)` → `#upside-stats-alerts` (env `DISCORD_WEBHOOK_STATS_ALERTS`). Stamps `last_fired_at = now()`.
 5. Realtime pushes updated `intraday_stats` + `quotes` → FE `IntradayStatsChip` on the watchlist row + `IntradayStatsPanel` on TickerDetail update live.
 
+## Screener Universe Sweep Flow (nightly, automated)
+
+See `signals/screener-universe.md` for the filter + traits. Runs at **09:00 IDT**.
+
+1. **Pull symbol pool**: Finnhub `/stock/symbol?exchange=US` (single call; cached for the day). ~30.5k symbols.
+2. **Ring 0 type+MIC filter** in-process: type ∈ {Common Stock, ADR}, mic ∈ {XNAS, XNYS, XASE}. → ~5.3k pool.
+3. **Ring 1 hard filter**: for each pool member call Finnhub `/quote` + `/stock/profile2` through `finnhubQueue` (category `quote` / `profile`). Apply `$1 ≤ price ≤ $100` + `marketCap ≥ $150M`. Volume filter deferred (no candle fetch yet). Rate limit ≈ 60/min → ~3 hours full sweep at free tier.
+4. **Upsert `universe`** with `filter_result` (`'in' | 'out_price' | 'out_cap' | 'out_volume' | 'no_data'`) + cached price/cap/avg-volume + `last_filter_pass = now()`.
+5. **Trait scoring pass** over surviving conids:
+   - `intraday_range_trader`: read existing `intraday_stats` row, apply rule (see `signals/screener-universe.md`).
+   - `catalyst_reversal`: pull last 30d daily bars (cached), apply A∧B rule.
+   - `post_earnings_drift`: Finnhub `/calendar/earnings` (range = today-3 to today), join, apply rule.
+6. **Upsert `trait_scores`** with `asof_date = today`. Old rows beyond shelf-life (5 days for `post_earnings_drift`, 3 days for `catalyst_reversal`, 1 day for `intraday_range_trader`) dropped.
+7. **Realtime publishes** `universe` + `trait_scores` → FE Screener tab populates for the user's morning.
+
+## Pre-Market Refresh + Dynamic Universe Inclusion Flow (daily, automated)
+
+Runs at **15:30 IDT**. Two concerns combined since both touch the universe.
+
+1. **Pre-market quote refresh** on current curated-list conids (~100 names) — refresh `quotes.canonical_price` and `today_open` proxies (pre-mkt prints).
+2. **Dynamic universe inclusion** sweep against the broader pool:
+   - For each conid currently OUT of Ring 1 with `filter_result IN ('out_volume','no_data')`: pull pre-mkt-so-far volume + last regular-session volume from cached candles.
+   - If `pre_mkt_volume > 3 × median(volume, 30d)` AND `|pre_mkt_gap| > 5%` → flip `filter_result = 'in'` for the day (`auto_promoted = true`).
+   - Trait-score the promoted ticker immediately (mostly `catalyst_reversal` will fire).
+3. Refresh trait scores on the (now larger) curated list — re-running rule checks against updated bars.
+4. Discord first-fires (see `signals/screener-universe.md` Discord policy):
+   - `catalyst_reversal` first-fire on a ticker today → `#upside-catalyst-alerts`.
+   - `post_earnings_drift` first-fire → same channel.
+5. Realtime push updates Screener tab.
+
+## Band Walk Flow (continuous during session, automated)
+
+See `signals/band-engine.md` for the three layers. Runs **16:30–03:00 IDT** on the curated list only (~100 conids).
+
+1. **15:45 IDT**: `session_regime` classifier fires once per curated ticker (gap + first-15-min direction + pre-mkt volume → label written to `band_state.session_regime`).
+2. **Every 5 minutes during 16:30–23:00 IDT** (regular session):
+   - For each curated conid, read recent 5-min bars from `quotes` + IB cache.
+   - Update **Layer 2 (`vol_scalar`)**: ATR(12 last bars) / 30d-baseline → `band_state.vol_scalar` + annotation.
+   - Update **Layer 3 (walking state)**:
+     - Update running_max / running_min since last opposite-direction anchor.
+     - If reversal threshold exceeded (`reversal_threshold = 0.5 × intraday_ATR`), re-anchor: append `{kind, price, ts}` to `band_state.anchors`, recompute both `current_low_band` and `current_high_band` from new anchor + p50 fade × vol_scalar.
+   - **Persist** updated `band_state` row.
+3. **23:00–03:00 IDT** (after-hours): same loop, but `band_state.session_regime = 'ah_low_confidence'`. Re-anchors still fire; FE chip dims.
+4. **16:30 IDT next session**: clean reset — `anchor_low = anchor_high = today_open`, `anchors = []`, `session_regime = null` (Layer 1 re-fires at 15:45).
+
+## Band-Touch Notification Flow (continuous, automated)
+
+Sister to Marker Hit Flow — pings only on band touches, not engine state changes.
+
+1. On every `quotes.canonical_price` write for a curated conid, check the latest `band_state` for that conid:
+   - **Low-band touch**: `prev_price > current_low_band AND curr_price ≤ current_low_band` → fire.
+   - **High-band touch on held position**: `prev_price < current_high_band AND curr_price ≥ current_high_band` AND `positions` row exists for `(user, conid)` → fire.
+2. **Cooldown gate**: 4h per `(conid, band_kind)`, anchored on a `band_touch_last_fired_at` column on `band_state` (sibling fields per kind).
+3. **Routing**:
+   - Low-band touch (non-held curated ticker) → `#upside-dip-buys` (existing channel; same audience as marker + entry-zone touches).
+   - High-band touch (held position) → `#upside-sell-zones` (new channel, env `DISCORD_WEBHOOK_SELL_ZONES`).
+4. Re-anchor events themselves are SILENT (no notification).
+
 ## Connect / Disconnect Flow (IB session lifecycle)
 
 **Connect** (when status is `stopped`):
