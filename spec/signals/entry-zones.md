@@ -85,6 +85,18 @@ On the watchlist ticker row: three small horizon chips (`I: $4.10 · O: $4.05 ·
 
 When multiple level methods (e.g. SMA20 + Pivot S1 + recent swing low) cluster within 0.5·ATR, the engine flags `confluence: ['sma20', 'pivot_s1', 'swing_low_recent']` on that zone and bumps confidence. Confluence is the strongest signal — surface it prominently.
 
+## Candidate levels — what's NOT in the pool
+
+Round-number magnets (e.g. "the next round dollar / half-dollar below") are
+**excluded** from the candidate set. The first live test (2026-05-29) showed
+them generating zones *above* current price for some tickers — i.e. "buy
+below $X" where current was already below $X, which reads as "buy market
+right now." That's a real money-on-the-table risk and the round-number prior
+isn't worth it. Removed from `computeEntryZones`'s candidate collector;
+fixtures updated. If round magnets come back, they need a guard that drops
+any candidate above current price *before* horizon adjustment, plus a test
+fixture that asserts the guard.
+
 ## Test suite (mandatory)
 
 The engine has unit tests as part of its definition. See `roadmap.md` → "Entry-engine test suite" for the 10 scenario fixtures (trending up, overbought-forgiveness, consolidation, downtrend, basing/higher-low-off-bottom, gap-up, low-vol, high-vol, confluence, edge cases). Lands with vitest on the server package — `pnpm test:server`.

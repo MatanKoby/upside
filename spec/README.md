@@ -8,12 +8,13 @@ The spec is split across concern-focused folders. Each file is small and edited 
 
 - **`architecture.md`** — Tech stack, Oracle VPS, Docker, public URL discovery (Cloudflare Quick Tunnel), Upside auth (Google OAuth + whitelist), IB auth (on-demand IBeam), connection status, multi-source price polling, **single source of truth for current price**, three loops, security, project structure, MVP build order.
 - **`flows.md`** — End-to-end flows: signal engine, profit-taking zone, signal-range entry, accuracy cron, connect/disconnect, **watchlist import**, **marker hit**, **entry-zone update**. Data-flow maps.
-- **`schema.md`** — Supabase tables (positions, analyses, signals, **quotes**, **watchlist_lists**, **watchlist_items**, **watchlist_markers**, **entry_zones**, user_preferences, analysis_locks, contracts, external_api_metrics, app_config). Redis. Finnhub rate-limited queue. IB API rate limits.
+- **`schema.md`** — Supabase tables (positions, analyses, signals, **quotes**, **watchlist_lists**, **watchlist_items**, **watchlist_markers**, **entry_zones**, **intraday_stats**, user_preferences, analysis_locks, contracts, external_api_metrics, app_config). Redis. Finnhub rate-limited queue. IB API rate limits.
 - **`signals/`** — Signal-generation domain, one file per concern:
   - `playbook.md` — LLM playbook engine: schema, freshness guard, supersede semantics, signal pill, mutability, expiry, accuracy tracking, info badges, realtime, contextual triggers.
   - `zone.md` — Profit-taking zone detection (continuous, LLM-independent).
   - `markers.md` — User-defined price markers + Discord alerts (watchlist pivot, Batch A2).
   - `entry-zones.md` — Dynamic entry-zone engine (continuous, LLM-free, recomputed per poll cycle; Batch A+).
+  - `stats.md` — Intraday-stats engine (nightly cron over 5-min bars; typical-intraday-low band alerts; Batch B).
   - `llm-provider.md` — Provider abstraction (Groq / Mistral / OpenAI / Gemini), runtime selection, failure classification.
   - `data-sources.md` — IB / Finnhub / computed feature pack.
 - **`screens/`** — UI surfaces, one file per screen + shared design system:

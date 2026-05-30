@@ -38,7 +38,9 @@ Tap → `POST /api/watchlists/import` syncs the user's IB watchlists (user_lists
 
 Vertical scroll of TickerCards (`variant='watchlist'` — see `_design-system.md`).
 
-Each row shows: ticker · company · current price (canonical quote) · today's change · sparkline · **marker chips** (user-defined `../signals/markers.md`) · **entry-zone chips** (Batch A+; `../signals/entry-zones.md`) · optional signal pill if an active analysis exists.
+Each row shows: ticker · company · current price (canonical quote) · today's change · sparkline · **marker chips** (user-defined `../signals/markers.md`) · **entry-zone chip** (Batch A+; `../signals/entry-zones.md` — collapsed overnight chip with hover/tap popover for all three horizons) · **intraday-stats chip** (Batch B; `../signals/stats.md` — today's drop vs. typical-intraday-low band, color-coded `above` / `typical` / `deep`) · optional signal pill if an active analysis exists.
+
+Layout: left container (symbol + company, max 200px / 35%) → sparkline → chip cluster (`margin-left: auto`, max 55%, flex-wrap) → absolutely-positioned right column (price + %-change + source pill). Chip cluster keeps all chips on one row (`white-space: nowrap`) even with long `$1234.56` prices.
 
 ## Gestures
 
@@ -67,6 +69,14 @@ Marker schema + alert flow: see `../signals/markers.md`. First-cut alerts wire o
 ## Pull-to-refresh
 
 Pulling down triggers `POST /api/watchlists/sync` against IB (assuming IB is `connected`). If IB is `stopped`/`disconnected`, the pull shows a hint: "Connect IB to refresh lists." Marker alerts and price polling do NOT require IB on (Finnhub keeps prices flowing).
+
+## Glossary (?-icon in header)
+
+Help icon (`ti-help-circle`) in the header opens a glossary sheet defining the
+indicators and chip semantics used on the screen — ATR, RSI, SMAs, pivots,
+Bollinger, VWAP, swing lows, confluence, horizons, overbought-tightened,
+marker conditions, intraday-stats band. Lives in
+`components/Watchlist/Glossary.tsx`.
 
 ## Gear icon — contextual settings sheet (Watchlist-tab-scoped)
 

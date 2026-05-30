@@ -63,7 +63,7 @@ Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an a
 
 ## Marker Hit Flow (continuous, automated)
 
-1. **Both pollers** (`ibPricePoller` / `finnhubPricePoller`), on each `quotes` write, query active `watchlist_markers` for the conid.
+1. **`upsertQuote`** fires `checkMarkersForConid(conid, symbol, prevCanonical, currentPrice)` on every canonical price write. Markers are keyed by `(user_id, conid)` (migration 016) — one set per ticker, shared across every list it appears on.
 2. For each marker (where `enabled = true`):
    - **Transition check** vs the prior write's price:
      - `at_or_below`: fires when `prev > price AND curr <= price`
@@ -81,6 +81,16 @@ Two modes share this flow: **Fresh Analyze** and **Refine** (a follow-up on an a
 3. **Upsert** `entry_zones` rows for `(conid, intraday|overnight|multiday)` with the new `price`, `reasoning`, `confidence`, `trend_regime`, `overbought_tightened`, `computed_at`.
 4. **Discord alert**: if the current price crossed into a zone band that was published at the *prior* poll cycle, fire `notifyEntryZoneEnter(zone, ticker)` → `#upside-dip-buys` (first cut, shared with manual markers). Cooldown 24h anchored on `last_fired_at` per `(conid, horizon)`.
 5. Realtime pushes the updated zones → FE entry-zone chips on the watchlist row update live.
+
+## Intraday-Stats Update + Hit Flow (continuous-alert; nightly-compute; Batch B)
+
+See `signals/stats.md` for the engine + Discord channel + math.
+
+1. **Nightly cron** (`intradayStatsCron`, 24h cadence, IB-gated) iterates distinct active-list conids. Per conid: `ibHistory(conid, '2m', '5mins')` → `computeIntradayStats` → upsert `intraday_stats` row.
+2. **`upsertQuote`** fires `checkIntradayStatsForConid(conid, symbol, prevCanonical, currentPrice)` on every canonical price write (alongside marker + entry-zone checks). The check is a no-op when `intraday_stats` has no row for the conid OR `quotes.today_open` is unset.
+3. **Band** in price space: `band_top = today_open × (1 − p50/100)`, `band_bottom = today_open × (1 − p75/100)`. Fire condition: `prev > band_top AND curr ≤ band_top` (cross-into-band). Subsequent moves deeper do NOT re-fire.
+4. **Cooldown** 24h anchored on `intraday_stats.last_fired_at`. Outside cooldown → `notifyIntradayStatsHit(...)` → `#upside-stats-alerts` (env `DISCORD_WEBHOOK_STATS_ALERTS`). Stamps `last_fired_at = now()`.
+5. Realtime pushes updated `intraday_stats` + `quotes` → FE `IntradayStatsChip` on the watchlist row + `IntradayStatsPanel` on TickerDetail update live.
 
 ## Connect / Disconnect Flow (IB session lifecycle)
 

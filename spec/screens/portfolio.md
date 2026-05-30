@@ -13,9 +13,10 @@ The main MVP screen. Mobile-first, phone-sized (375-390px viewport).
 - IB Connection status indicator (small status dot next to market period badge) — see `../architecture.md` → Connection Status Header.
 
 ## Summary Strip
-Two metric cards side by side:
-- Left: "Portfolio value" label (11px, muted) + value (18px, weight 500)
-- Right: "MTD return" label + value with percent in parentheses, colored green/red.
+Single card (was two; the MTD card was removed 2026-05-29 — Redis-cached month-start fallback was unreliable in practice and the user's primary mental anchor is current value, not MTD):
+- "Portfolio value" label (11px, muted) + value (18px, weight 500).
+
+> If MTD comes back, the prior design was a right-side card with "MTD return" + percent in parentheses, colored green/red. Source: IB account summary's MTD field with Redis-cached month-start fallback (see `../schema.md` → Redis usage).
 
 ## Sort Bar
 Three pill-shaped toggles:

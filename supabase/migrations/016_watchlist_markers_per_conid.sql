@@ -27,6 +27,12 @@ alter table public.watchlist_markers
   alter column user_id set not null,
   alter column conid   set not null;
 
+-- RLS policies: drop the old item-chain ones, install simple user_id-scoped.
+drop policy if exists "watchlist_markers: owner read"   on public.watchlist_markers;
+drop policy if exists "watchlist_markers: owner write"  on public.watchlist_markers;
+drop policy if exists "watchlist_markers: owner update" on public.watchlist_markers;
+drop policy if exists "watchlist_markers: owner delete" on public.watchlist_markers;
+
 -- Drop the old item_id linkage (and its FK + NOT NULL).
 alter table public.watchlist_markers drop column if exists item_id;
 
@@ -39,11 +45,7 @@ create index if not exists watchlist_markers_user_conid_idx
 create index if not exists watchlist_markers_conid_enabled_idx
   on public.watchlist_markers(conid) where enabled = true;
 
--- RLS policies: drop the old item-chain ones, install simple user_id-scoped.
-drop policy if exists "watchlist_markers: owner read"   on public.watchlist_markers;
-drop policy if exists "watchlist_markers: owner write"  on public.watchlist_markers;
-drop policy if exists "watchlist_markers: owner update" on public.watchlist_markers;
-drop policy if exists "watchlist_markers: owner delete" on public.watchlist_markers;
+
 
 create policy "watchlist_markers: owner read"   on public.watchlist_markers
   for select using (auth.uid() = user_id);

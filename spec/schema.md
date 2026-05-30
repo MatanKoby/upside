@@ -10,14 +10,18 @@ What's stored where, in what shape, with what semantics.
   - Source-tracking: `price_source` enum `'ib' | 'finnhub'`, `last_price_update_at` (see `architecture.md` → Multi-source price polling).
   - **`current_price` is the MVP canonical "latest quote"** for held symbols — see `architecture.md` → Single source of truth for current price. All consumers (header, chart price-line, Today's-Range, `signalEngine`) read it; no consumer re-fetches its own.
 
-- **`quotes`** *(Track 1, planned — not yet built)* — canonical latest quote per instrument, keyed by conid. Stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so consumers can compare them, so divergence is visible (e.g. IB live $4.28 vs Finnhub prior-close $4.18 pre-market), and so fallback decisions can be made on real provenance rather than overwriting one with the other:
+- **`quotes`** *(MVP via watchlist pivot; batch A1, extended A1-polish + B)* — canonical latest quote per instrument, keyed by conid. Stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so consumers can compare them, so divergence is visible (e.g. IB live $4.28 vs Finnhub prior-close $4.18 pre-market), and so fallback decisions can be made on real provenance rather than overwriting one with the other:
   ```
   { conid pk, symbol,
     ib_price       numeric, ib_updated_at       timestamptz,
     finnhub_price  numeric, finnhub_updated_at  timestamptz,
-    canonical_price numeric, canonical_source 'ib'|'finnhub', canonical_updated_at timestamptz }
+    canonical_price numeric, canonical_source 'ib'|'finnhub', canonical_updated_at timestamptz,
+    today_change_pct numeric,                  -- (migration 015) for FE row %-change
+    sparkline_closes numeric[],                -- (migration 015) trailing closes for the row sparkline
+    today_open       numeric                   -- (migration 018) required by stats.md alert band
+  }
   ```
-  Each poller writes only its own source's columns; the `canonical_*` triple is the denormalized "the price to use" (IB-when-fresh-and-connected, Finnhub otherwise), set by whichever poller is currently authoritative. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table once watchlists land, so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. When this lands, `positions.current_price` becomes either a denormalized mirror of `canonical_price` (the same poller writes both), or is removed in favor of an FE-side join from `positions` → `quotes` — implementation choice deferred to Track-1 build time. Enforces the **price-is-an-instrument-property** principle.
+  Each poller writes only its own source's columns; the `canonical_*` triple is the denormalized "the price to use" (IB-when-fresh-and-connected, Finnhub otherwise), set by whichever poller is currently authoritative. All three pollers also thread `today_open` (IB snapshot field `7295` / Finnhub `quote.o`) — see `signals/stats.md` for why. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. `positions.current_price` is preserved as a denormalized mirror of `canonical_price` (the same poller writes both) for MVP backward compatibility. Enforces the **price-is-an-instrument-property** principle.
 
 - **`analyses`** — one row per Analyze call. Holds the shared analysis context. Schema:
   ```
@@ -71,9 +75,11 @@ What's stored where, in what shape, with what semantics.
 
 - **`watchlist_items`** *(MVP via watchlist pivot; batch A1)* — `{ id pk, list_id uuid FK, conid bigint, symbol text, added_at timestamptz }`. The same conid can appear on multiple lists (separate rows). The poller dedups by conid before writing to `quotes`. Held + watchlisted overlap is fine — both surfaces read the same canonical quote.
 
-- **`watchlist_markers`** *(MVP via watchlist pivot; batch A2)* — user-defined price targets. See `signals/markers.md`. `{ id pk, item_id uuid FK, label text null, price numeric, condition text check in ('at_or_above','at_or_below','about'), enabled bool default true, cooldown_hours int default 24, last_fired_at timestamptz null, created_at timestamptz }`. Same condition vocabulary as playbook legs (see `signals/playbook.md` → schema note). First cut wires only `at_or_below` markers to `#upside-dip-buys`; others accepted in schema but their alert channels are queued.
+- **`watchlist_markers`** *(MVP via watchlist pivot; batch A2; re-keyed by migration 016)* — user-defined price targets. See `signals/markers.md`. `{ id pk, user_id uuid, conid bigint, label text null, price numeric, condition text check in ('at_or_above','at_or_below','about'), enabled bool default true, cooldown_hours int default 24, last_fired_at timestamptz null, created_at timestamptz, unique (user_id, conid, label, price, condition) }`. **Keyed by `(user_id, conid)` rather than `item_id`** — the original A2 schema attached markers to a specific `watchlist_items` row, but the same conid on two lists then had separate markers, which contradicts the user's mental model ("I'm tracking the stock, not the list-row"). Migration 016 re-keyed. Same condition vocabulary as playbook legs (see `signals/playbook.md` → schema note). First cut wires only `at_or_below` markers to `#upside-dip-buys`; others accepted in schema but their alert channels are queued.
 
 - **`entry_zones`** *(MVP via watchlist pivot; batch A+)* — dynamic entry-zone engine state. See `signals/entry-zones.md`. `{ conid bigint, horizon text check in ('intraday','overnight','multiday'), price numeric, reasoning text, confidence int, trend_regime text, overbought_tightened bool, last_fired_at timestamptz null, computed_at timestamptz, primary key (conid, horizon) }`. Upserted on every poll cycle for active-list conids. Realtime enabled.
+
+- **`intraday_stats`** *(MVP via watchlist pivot; batch B)* — nightly per-symbol stats from historical 5-min bars. See `signals/stats.md`. `{ conid bigint pk, symbol text, open_fade_pct_{mean,p50,p25}, close_fade_pct_{mean,p50,p25}, intraday_low_pct_{mean,p50,p75}, sample_size int, lookback_days int, last_fired_at timestamptz null, computed_at timestamptz }`. `last_fired_at` is the 24h cooldown anchor for the typical-intraday-low band alert. `symbol` mirrored on the row + indexed so TickerDetail can query by symbol without joining contracts. Realtime enabled.
 
 - **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Generic home for app-level runtime flags. Current keys:
   - `api_url` — current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription. See `architecture.md` → Public URL Discovery.
@@ -81,7 +87,7 @@ What's stored where, in what shape, with what semantics.
 
 ### Realtime publications
 
-Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Post-watchlist-pivot adds: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`.
+Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pivot tables also: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`, `intraday_stats`.
 
 ### Row Level Security
 

@@ -8,49 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Active priority (2026-05-28 pivot): Watchlists + LLM-free signals
-- The signal-engine work below (14g) is functionally closed (engine validated on BBAI re-analyze; spec'd in `signals/playbook.md`; known follow-ups parked in `roadmap.md`). The next four batches are **A1 → A2 → A+ → B** in `BUILD_QUEUE.md` — watchlist surface + LLM-free signal primitives. LLM-engine refinements (structure-feature redesign, Refine mode, accuracy cron un-defer, `fresh-or-stop` engine guard implementation) are deferred behind the pivot. See `spec/roadmap.md` → Track 1.
-
-### Batch B — Intraday-stats engine (LLM-free signals from historical bars)
-- Owner: claude
-- Started: 2026-05-29 13:11
-- Awaiting user-confirmed picks on (1) which stats first cut, (2) lookback window, (3) alert channel before implementation.
-
-### Batch A+ — Dynamic entry-zone engine + vitest test suite (closed under polish)
-- Owner: claude
-- Started: 2026-05-28 21:55
-- **Implementation complete + pushed.** Arc: 5a70632 (migration 013 + engine) → d9c0285 (vitest + 8 scenario tests, all green) → 25f98df (entryZonesCron, 15-min cadence) → a3fdf65 (FE entry-zone chips on watchlist rows) → 5ade427 (Discord alerts on price crossing into a zone band). Then polish: 3ccaaa4 (migration 014 + company_name on watchlist rows).
-- **What shipped:**
-  - `services/entryZones.ts` — pure `computeEntryZones({currentPrice, daily, intraday, avgCost?})` returns `{zones: {intraday, overnight, multiday}, trendRegime, overboughtTightened}`. Reuses buildFeaturePack for levels + indicators. Simple v1 trend regime (price > SMA20 > SMA50 ⇒ up). Overbought = RSI > 70 OR price > SMA50 + 2·ATR; widens k·ATR reachability by 1.5x → entry "comes toward price." Scoring: source_weight × reachScore + confluence·0.10. Confidence = base × reach + cluster bonus (cap +25).
-  - `entryZones.test.ts` — vitest@2 (pinned for vite-5 compat), 8 scenario fixtures spanning trend regimes / overbought / downtrend / basing (BBAI case) / insufficient bars / capitulation (round-magnet fallback) / confluence. All green via `pnpm test:server`.
-  - `cron/entryZonesCron.ts` — 15-min cadence. For each active-list watchlist conid: read canonical_price from quotes, fetch daily + intraday IB bars, compute, upsert `entry_zones` row per horizon. Skips silently when IB is off (engine input gated on bars, same honesty as the playbook engine).
-  - `services/entryZoneAlerts.ts` + `notify.notifyEntryZoneHit` — on every canonical price write, check current entry_zones for crossing (prev > price AND curr ≤ price, the dip-buy direction). Fires Discord ping to `#upside-dip-buys` (same channel as user markers for first cut), with 24h cooldown per (conid, horizon) anchored on `entry_zones.last_fired_at`. `quotes.upsertQuote` now calls both `checkMarkersForConid` + `checkEntryZonesForConid` fire-and-forget after each canonical write.
-  - FE — `useWatchlistData` adds `entryZonesByConid` (Realtime sub on `entry_zones`); `Watchlist` row chips show `I:$X / O:$Y / M:$Z` with dashed borders (distinct from the filled marker chips); title shows reasoning + trend regime + overbought flag + confidence.
-- **Polish slice shipped alongside (3ccaaa4):** Migration 014 adds `watchlist_items.company_name`; the IB sync stuffs it from `instrument.name` at zero extra cost. Row layout reorganized: stacked left column (symbol + company), stacked right column (price + source pill). Today's-change-% and sparkline still deferred (need open/prev_close in quotes; bigger work for another slice).
-- **Pending before Completed** (manual + verification):
-  1. Apply migrations `012_watchlist_markers.sql`, `013_entry_zones.sql`, `014_watchlist_items_company.sql` to Supabase.
-  2. Create Discord channel `#upside-dip-buys`, set `DISCORD_WEBHOOK_DIP_BUYS` on the VPS `.env`.
-  3. `./bin/upside rebuild`.
-  4. **A2 verify:** long-press a watchlist row → add `at_or_below` marker → chip appears → wait for / synthesize a price crossing → Discord ping fires once; chip's `last_fired_at` reflects.
-  5. **A+ verify:** wait ≤ 15min after rebuild for `entryZonesCron`'s first cycle → three dashed chips (I/O/M) appear on each active-list row; tooltips show reasoning. Price crossing into a chip's band → Discord ping in same channel.
-  6. **Polish verify:** company name renders under each ticker symbol.
-
-
-
-### Batch A2 — Manual price markers + dip-buy Discord alerts
-- Owner: claude
-- Started: 2026-05-28 21:23
-- **Implementation complete + pushed.** Commits: 7eb055e (migration 012) → 650b013 (markers service + dip-buy notifier + CRUD route + quote-write hook) → 10551e7 (FE marker chips + add/edit sheet + long-press handler). Server + client typecheck + client build all clean throughout.
-- **What shipped:** Migration 012 (`watchlist_markers` keyed by item_id with the geometric condition vocab + per-marker cooldown + last_fired_at; RLS chain via item→list→user_id; partial index on enabled=true). `services/markers.ts` `checkMarkersForConid(conid, symbol, prev, curr)` does transition-based crossing detection per condition (at_or_below / at_or_above / about), gated by cooldown. Today only `at_or_below` fires Discord (channel wired); the other conditions update last_fired_at without notifying so when their channels land they don't fire on historical crossings. `services/quotes.ts upsertQuote` reads prior canonical_price + fires the marker check fire-and-forget after each write. `routes/watchlist-markers.ts` exposes POST / PATCH / DELETE with explicit owner-chain validation (supabase() bypasses RLS server-side). FE: `useWatchlistData` adds `markersByItem` with realtime sub on `watchlist_markers`; `MarkerSheet.tsx` is add+edit+delete with the condition select tagging wire status; `Watchlist.tsx` rows are now `<ItemRow>` with 500ms pointerDown timer + onContextMenu for long-press / right-click → add-marker sheet. Marker chips render inline below the row; tap-chip → edit. CSS per-condition tints (buy-green / sell-red / event-blue).
-- **Pending before Completed** (manual + verification):
-  1. Apply `supabase/migrations/012_watchlist_markers.sql` to Supabase.
-  2. Create Discord channel `#upside-dip-buys`, set `DISCORD_WEBHOOK_DIP_BUYS` on the VPS `.env`.
-  3. `./bin/upside rebuild`.
-  4. Long-press a watchlist row → add marker (at_or_below $X) → chip appears.
-  5. Wait for price to cross $X (or set a marker just above current to test) → Discord ping fires once in `#upside-dip-buys`; chip's `last_fired_at` updates. Cooldown gate prevents re-fire for 24h.
-  6. Tap a chip → edit sheet → toggle enabled/delete works.
-
-
+*(empty — the 2026-05-28 watchlist-pivot block A1→A2→A+→B + the two polish slices are all complete + pushed to `dev`. Pick-order pointer for "continue" lives in `BUILD_QUEUE.md` → Un-done batches intro.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -82,6 +40,35 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch B — Intraday-stats engine + typical-intraday-low band Discord alerts (2026-05-29)
+- Owner: claude
+- Started: 2026-05-29 13:11 · Finished: 2026-05-29 (server) → 2026-05-30 (FE + spec sweep)
+- Commits: 11d2534 (migration 017 + `computeIntradayStats` pure function + 5 vitest scenarios) → 7a6bbb4 (`intradayStatsCron`, 24h cadence, IB-gated, first run 5min after boot) → 62bd5a5 (migration 018 `quotes.today_open` + `checkIntradayStatsForConid` from `upsertQuote` + `notifyIntradayStatsHit` → `#upside-stats-alerts`) → a3a072a (FE: `IntradayStatsChip` on watchlist rows + `IntradayStatsPanel` collapsible on TickerDetail + `useIntradayStats(symbol)` hook + `today_open`/`statsByConid` in `useWatchlistData`). Two parallel fixes folded in just before B (df193d3 markers per `(user_id, conid)` not per item — migration 016; ff2e803 round-magnet removal + MTD card removed + marker-chip nowrap CSS).
+- **User-confirmed picks (2026-05-29):** all 3 stats (open-fade / close-fade / intraday-low), 60-day lookback (user reasoned "I want both intraday and multi-day deals" — 60d is the intersection of "recent enough to reflect now" and "deep enough that outliers don't dominate"), **separate** Discord channel `#upside-stats-alerts` (env `DISCORD_WEBHOOK_STATS_ALERTS`, blue embed) so the user can tune attention per source.
+- **Engine: end-to-end.** `services/intradayStats.ts` pure `computeIntradayStats({bars, lookbackDays?, fadeBars?})` groups 5-min bars by ET session, computes 3 stats per session, summarizes across sessions as mean/p50/p25-or-p75; 5 vitest scenarios (typical fade, no-fade, lookback respect, empty input, p75-deeper-than-p50) green. `cron/intradayStatsCron.ts` 24h-cadence; per active-list conid: `ibHistory(conid, '2m', '5mins')` → compute → upsert. IB-off = no-op (honest staleness; `computed_at` surfaced on FE). `services/intradayStatsAlerts.ts checkIntradayStatsForConid(conid, symbol, prev, curr)` fires from `upsertQuote` on every canonical price write (alongside markers + entry-zones). Band: `band_top = today_open × (1 − p50/100)`; fire on `prev > band_top AND curr ≤ band_top`; 24h cooldown anchored on `intraday_stats.last_fired_at`. All three pollers (ibPricePoller / finnhubPricePoller / watchlistQuotePoller) thread `today_open` (IB snapshot field `7295` / Finnhub `quote.o`) into `upsertQuote`.
+- **FE surfaces:** `components/Watchlist/IntradayStatsChip.tsx` — compact `▼ X.X% / p50–p75` chip in the right-side cluster, three color states `above` (dim) / `typical` (event accent) / `deep` (buy accent, bold) based on today's drop vs. the band; hidden when no stats row or no `today_open` (em-dashes would be noise). `components/TickerDetail/IntradayStatsPanel.tsx` — 3 stats × 3 percentiles table in a new collapsible section with lookback+sample+computed_at footnote, explicit nightly-cron empty-state copy. `useWatchlistData` adds `statsByConid` + intraday_stats Realtime sub + `today_open` on `QuoteRow`. `useIntradayStats(symbol)` is the single-symbol hook for TickerDetail (keys by symbol — `intraday_stats.symbol` is indexed in migration 017 for exactly this).
+- **Spec sweep (2026-05-30):** new `spec/signals/stats.md`; cross-links in `spec/README.md`, `spec/schema.md` (intraday_stats row + `quotes.today_open` + `quotes.today_change_pct` + `quotes.sparkline_closes` + watchlist_markers re-keying note), `spec/flows.md` (Intraday-Stats Update + Hit Flow + Marker-Hit-Flow keying note), `spec/screens/watchlist.md` (chip + layout + glossary), `spec/screens/ticker-detail.md` (Intraday-stats collapsible), `spec/screens/portfolio.md` (MTD card removed, prior design preserved as a forward-pointer), `spec/signals/markers.md` (per-conid keying), `spec/signals/entry-zones.md` (round-magnet exclusion). `BUILD_QUEUE.md` Completed section now carries A1/A2/A+/B + the two polish slices; Un-done block introduces the post-pivot pick-order pointer (next un-done is Batch C sketch or Batch 13.2 — user decides on "continue").
+- **Pending before user-verified live** (the only steps left, hands-off-VPS per `feedback_infra_handson`):
+  1. Apply migrations `017_intraday_stats.sql` + `018_quotes_today_open.sql` to Supabase. (016 already applied with the marker re-keying.)
+  2. Create Discord channel `#upside-stats-alerts`, set `DISCORD_WEBHOOK_STATS_ALERTS` in VPS `.env`.
+  3. `./bin/upside rebuild` on the VPS. First `intradayStatsCron` run is 5min after boot; chips/panel populate as conids get covered.
+- **Live verification by user** (after the rebuild): row chips appear with sensible color states on active-list tickers; Intraday-stats collapsible on TickerDetail renders the 3×3 table; a price crossing the typical-low band fires once in `#upside-stats-alerts`. Alert-cadence tuning ("does this fire too often / too rarely?") deferred to the Batch C sketch alongside A2/A+ tuning.
+
+### Polish slice — Markers re-keyed to (user_id, conid), round magnets removed, MTD card removed, marker chip nowrap (2026-05-29)
+- Owner: claude
+- Finished: 2026-05-29
+- Commits: ff2e803 (round-magnet removal + MTD-card removal + marker-chip nowrap CSS) → df193d3 (migration 016 markers re-keyed to `(user_id, conid)`, markers.ts query rewrite, watchlist-markers route rewrite, FE `markersByItem` → `markersByConid`).
+- **User direction (2026-05-29):** "ticker that appears in both lists Next and Splitting, has a price marker in Splitting and shows, but the price marker doesn't show in list Next, price marking is per ticker per watchlist and not per ticker and global for watchlists which is a bug. Also the round number magnets — they're not very useful, see channel dip-buys in discord… it set a price higher than the current price and tells me to buy below it, aka buy market, that's dangerous. Small css issue — when the stock price is high like over 1k, the manual marker becomes 2 vertical rows which is bad. Remove MTD, we don't need it anymore."
+- **What shipped:** Migration 016 unique-key `(user_id, conid, label, price, condition)`; backend reads markers by conid directly (no item join); FE adds `markersByConid` from a single conid-scoped query. `computeEntryZones` candidate collector no longer pushes round-number levels (no half-dollar / dollar magnets) — they generated "buy below $X" zones above current price, reading as "buy market." `SummaryStrip` MTD card stripped; only Portfolio value remains. `.marker-chip { white-space: nowrap }` so a $1234.56 chip stays one row.
+- **Live-verified by user (2026-05-29):** markers on a conid now appear in every list it's in; no round-magnet zones in `#upside-dip-buys` after the rebuild; portfolio screen single-card; high-price marker chip stays one row.
+
+### Polish slice — Vercel SPA rewrites for hard-refresh (2026-05-29)
+- Owner: claude
+- Finished: 2026-05-29
+- Commits: de1b4f8 (initial vercel.json with rewrites + `comments` field) → 263a983 (strip `comments` — failed Vercel schema validation).
+- **What shipped:** `client/vercel.json` rewrites every non-static path (excluding `/assets/`, `/sw.js`, workbox-*.js, manifest, favicon, robots) → `/index.html`, so hard-refreshing `/watchlist`, `/ticker/:symbol`, `/settings` no longer 404s on Vercel.
+- **Live-verified by user (2026-05-29):** hard refresh on inner routes now reloads the SPA cleanly.
 
 ### Batch A+ — Dynamic entry-zone engine + vitest test suite + watchlist row polish (2026-05-28 → 2026-05-29)
 - Owner: claude

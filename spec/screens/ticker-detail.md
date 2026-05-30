@@ -84,6 +84,13 @@ While TickerDetail is open, the FE polls `/api/marketdata/history` and `/api/mar
 - Header: current intraday entry chip.
 - Body: three horizon rows (intraday / overnight / multiday) — price · reasoning · confidence · live-fire history.
 
+**Intraday stats** (any ticker with a populated `intraday_stats` row, B) — see `../signals/stats.md`:
+- Icon: ti-chart-bar.
+- Header: collapsed (no accessory).
+- Body: 3×3 table — three stats (open fade / close fade / intraday low) × three columns (Mean / Typical p50 / Extreme p25-for-fades or p75-for-low). Footnote shows `<lookback>d lookback · n=<sample_size> sessions · computed <ts>`.
+- Empty state: explicit nightly-cron explanation rather than em-dashes per cell.
+- Data wiring: `useIntradayStats(symbol)` — queries `intraday_stats` by the `symbol` index (single-row maybeSingle + a Realtime sub for nightly updates).
+
 **Position Stats** (held positions only):
 - Icon: ti-wallet.
 - Header: total unrealized P&L (right-side, colored).

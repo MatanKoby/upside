@@ -4,11 +4,13 @@ Manual, LLM-free alert primitive for the watchlist pivot (Batch A2). User picks 
 
 ## Concept
 
-A **marker** is a user-authored price target attached to a `watchlist_items` row. Multiple markers per ticker. Each is a tuple:
+A **marker** is a user-authored price target on an instrument (conid), scoped to a user. Multiple markers per ticker. Each is a tuple:
 
 ```
-{ id, item_id (FK), label, price, condition, enabled, cooldown_hours, last_fired_at }
+{ id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at }
 ```
+
+> **Keying:** markers are `(user_id, conid)` — not `item_id`. The original A2 schema attached a marker to a `watchlist_items` row; that meant the same conid on two different lists had two independent marker sets, which contradicts the user mental model ("I'm tracking the stock, not the list-row"). Migration 016 re-keyed. Cross-list visibility falls out for free: a marker set from list "Next" is visible on the same ticker in list "Splitting."
 
 - `condition`: one of `at_or_above` | `at_or_below` | `about` — **same vocabulary as playbook legs** (see `playbook.md` → schema note: condition is geometric).
 - `cooldown_hours`: default `24`. Once a marker fires, it goes silent for this many hours before it can fire again (rearm-after-cooldown, anchored on `last_fired_at`). Same pattern as `zone.md`.
@@ -53,4 +55,4 @@ The 24h cooldown is a global default. Per-marker `cooldown_hours` override is su
 
 ## Persistence
 
-`watchlist_markers` table — see `../schema.md`. Owned by the user (FK chain via `watchlist_items` → `watchlist_lists` → `user_id`).
+`watchlist_markers` table — see `../schema.md`. Owned directly by the user (`user_id` on the row, scoped by RLS).

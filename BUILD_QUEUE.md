@@ -63,113 +63,56 @@ Vercel FE live at `upside-client.vercel.app`. PWA installed on phone. Full live 
 ### Batch 13.1: Restore navigation + deeper /healthz — COMPLETE
 Re-wired routing regression discovered post-Batch-13. Components from Batches 2-3 (Ticker Detail screen, slide-in, chart, collapsible sections) existed but nothing routed to them. PositionCard tap → `/ticker/:symbol`. Bottom nav routes to `/alerts` and `/settings` ComingSoon placeholders. `/healthz` extended to report component statuses (ib, supabase, redis, lastPricePoll) with per-check 1s timeouts.
 
+### Batch A1: Watchlists + IB import + `quotes` table + TickerDetail-for-non-held — COMPLETE
+First slice of the 2026-05-28 watchlist pivot. Migration `011_watchlist_and_quotes.sql` (quotes + watchlist_lists + watchlist_items, RLS + Realtime). `POST /api/watchlists/sync` (IB-gated, filters to `user_lists`). `PATCH /api/watchlists/:list_id` for active/hidden toggle. New `watchlistQuotePoller` covers watchlist-only conids; `ibPricePoller` + `finnhubPricePoller` mirror held prices into `quotes` via `upsertQuote`. FE Watchlist tab (`pages/Watchlist.tsx`) with empty state, sub-tab strip per active list, in-screen settings sheet, sparklines (migration 015 added `today_change_pct` + `sparkline_closes`), company names (migration 014). TickerDetail unchanged — works for non-held via the canonical-quote read. See `spec/screens/watchlist.md` + `spec/schema.md` → quotes / watchlist_lists / watchlist_items.
+
+### Batch A2: Manual price markers + dip-buy Discord alerts — COMPLETE
+Migration `012_watchlist_markers.sql` + later **`016_markers_rekey.sql`** which re-keyed markers from `item_id` to `(user_id, conid)` (one set per ticker, shared across every list it appears on — bug surfaced when the same conid in two lists showed markers in only one). CRUD routes (`POST/PATCH/DELETE /api/watchlist-markers/...`). `checkMarkersForConid` fires from `upsertQuote` with transition + 24h cooldown rules per `spec/flows.md`. `notifyMarkerHit` → `#upside-dip-buys` (env `DISCORD_WEBHOOK_DIP_BUYS`); first cut wires only `at_or_below`. FE: long-press / right-click opens `MarkerSheet`; marker chips inline on the watchlist row, tap-to-edit. See `spec/signals/markers.md`.
+
+### Batch A+: Dynamic entry-zone engine + vitest test suite — COMPLETE
+Migration `013_entry_zones.sql`. Pure `computeEntryZones` in `server/src/services/entryZones.ts` with simple v1 trend regime (SMA20 slope + price-vs-SMA50), overbought-forgiveness, confluence detection. **Round-number magnets removed** post-test (2026-05-29) — they generated zones above current price, reading as "buy market" (see `spec/signals/entry-zones.md` → Candidate levels). Vitest pinned at v2 (vite-5 compat); test fixtures cover trending up, overbought, capitulation, edge cases. `checkEntryZonesForConid` fires from `upsertQuote` with 24h cooldown per `(conid, horizon)` → `#upside-dip-buys` (shared channel for first cut). FE: `EntryZoneCluster` (collapsed overnight chip + hover/tap popover for all three horizons with reasoning + confidence + "promote to manual marker" action), `Glossary` help icon in Watchlist header. See `spec/signals/entry-zones.md`.
+
+### Batch B: Intraday-stats engine + typical-low band alerts — COMPLETE
+Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles + sample_size + lookback_days + last_fired_at) and `018_quotes_today_open.sql` (the band needs today's open in price space). Pure `computeIntradayStats` in `server/src/services/intradayStats.ts` (60-day default lookback, 6 fade bars, vitest fixtures green). 24h-cadence `intradayStatsCron` (IB-gated, first run 5min after boot). All three pollers thread `today_open` through `upsertQuote` (IB snapshot field `7295` / Finnhub `quote.o`). `checkIntradayStatsForConid` fires from `upsertQuote` on cross-into-band → `#upside-stats-alerts` (env `DISCORD_WEBHOOK_STATS_ALERTS`, blue embed). FE: `IntradayStatsChip` (3-state color-coded chip on the watchlist row), `IntradayStatsPanel` (collapsible on TickerDetail), `useIntradayStats(symbol)` hook for the single-symbol read. See `spec/signals/stats.md`.
+
+### Slice: Portfolio MTD card removed — COMPLETE
+`SummaryStrip` MTD card stripped 2026-05-29 (Redis-cached month-start fallback unreliable, user's primary anchor is current value). Portfolio screen now shows just Portfolio Value. `spec/screens/portfolio.md` records the prior design for future restoration if needed.
+
+### Slice: Vercel SPA hard-refresh fix — COMPLETE
+`client/vercel.json` adds a rewrites rule (everything except `/assets/`, `/sw.js`, workbox, manifest, favicon, robots → `/index.html`) so hard-refresh on `/watchlist`, `/ticker/:symbol`, etc. doesn't 404. Schema validation in Vercel rejected the `comments` field — stripped to just `$schema` + `rewrites`.
+
 ---
 
 ## Un-done batches
 
-> **2026-05-28 pivot:** the next four batches (A1 → A2 → A+ → B) implement the watchlist surface + LLM-free signals. LLM-signal-engine refinements take a back seat. See `spec/roadmap.md` → Track 1 for the deferred list with rationale.
+> **Pick-order pointer for "continue".** The watchlist-pivot block (A1 → A2 → A+ → B) and the two polish slices are done and live on `dev`. The user has not yet picked the next batch — when the user types "continue" after a context clear, **ask** which un-done batch to claim rather than guessing. Best-fit candidates in rough priority order: **Batch C** (post-B alert tuning + watchlist-row polish — sketch below) · **Batch 13.2** (generic IB passthrough debug endpoint) · **Batch 14b** (accuracy cron) · **Batch 15** (alerts feed + settings). Everything else (13.3, 13.5, 13.7-9, 14c-f, 14.5, 16) is below those.
 
-## Batch A1: Watchlists + IB import + `quotes` table + TickerDetail-for-non-held
-
-**Depends on:** Batch 13 (live IB), Batch 13.2 (IB watchlist payload shapes captured).
-
-**Scope:** the watchlist foundation. Imports user_lists from IB, lets the user toggle which are active, polls prices for active-list conids (extending the existing pollers), introduces the canonical instrument-keyed `quotes` table, and makes TickerDetail render for non-held tickers. No alerts yet — A2 adds those.
-
-### Deliverables
-
-1. **Schema migration** `011_watchlist_and_quotes.sql`:
-   - `quotes` table per `spec/schema.md` (conid pk, `ib_price/ib_updated_at`, `finnhub_price/finnhub_updated_at`, `canonical_price/canonical_source/canonical_updated_at`).
-   - `watchlist_lists` table (`user_id`, `ib_list_id`, `name`, `active bool default false`, `ib_modified_at`, `synced_at`).
-   - `watchlist_items` table (`list_id` FK, `conid`, `symbol`, `added_at`).
-   - Realtime enabled on all three.
-   - `positions.current_price` stays for MVP — becomes a denormalized mirror of `quotes.canonical_price` the same poller writes.
-
-2. **Backend — IB watchlist import** (`server/src/services/watchlists.ts` + `routes/watchlists.ts`):
-   - `POST /api/watchlists/sync` — IB-gated; pulls `/v1/api/iserver/watchlists`, filters to user_lists, per-list calls `/v1/api/iserver/watchlist?id=<id>`, upserts. Default `active=false` for newly-imported lists.
-   - `PATCH /api/watchlists/:list_id { active }` — flip active/hidden.
-
-3. **Poller extension** — `ibPricePoller` / `finnhubPricePoller` symbol set becomes `held_conids ∪ active_watchlist_conids`. Writes go to `quotes` (canonical) + `positions` (denormalized, held only). See `spec/architecture.md` → Single source of truth + Multi-source price polling.
-
-4. **Frontend — Watchlist tab + screen** per `spec/screens/watchlist.md`:
-   - Add Watchlist to bottom nav (Portfolio · Watchlist · Settings).
-   - Empty state with `[Import from IB]`.
-   - Gear icon → in-screen settings sheet with per-list active/hidden toggle + Re-import.
-   - Sub-tab strip per active list. Ticker rows show: ticker · company · current price (canonical) · today's change · sparkline. No marker chips yet (A2 adds).
-   - Tap a row → TickerDetail.
-
-5. **Frontend — TickerDetail for non-held** per `spec/screens/ticker-detail.md`:
-   - `useTickerDetail` resolves price from the canonical (positions for held, quotes for watchlist-only).
-   - Position Stats section hidden when no shares; everything else renders.
-   - Replace the "coming soon" placeholder for the non-held branch with a real render.
-
-### Verification
-- Tap Import from IB → user_lists appear in the in-screen settings as hidden checkboxes.
-- Toggle one active → its tickers appear as a sub-tab + rows with live prices within a poll cycle.
-- Hold a watchlist ticker → it shows in both Portfolio and the watchlist (no double-poll: one row in `quotes`).
-- Tap a watchlist-only ticker → TickerDetail renders with header + chart + Today's Range + Market Stats; Position Stats hidden.
-- Disconnect IB → header shows disconnected, prices keep flowing via Finnhub for active conids.
+> **Outstanding live-flip steps** (the user has to do these on the VPS — don't try to do them remotely; see `feedback_infra_handson` memory):
+> 1. Apply migrations `017_intraday_stats.sql` + `018_quotes_today_open.sql` in Supabase. (Migrations 011–016 are already applied.)
+> 2. Create `#upside-stats-alerts` Discord channel; add `DISCORD_WEBHOOK_STATS_ALERTS=<url>` to VPS `.env`.
+> 3. `./bin/upside rebuild` on the VPS.
+> The first `intradayStatsCron` run is 5 minutes after boot; stats chips/panel populate as conids get covered.
 
 ---
 
-## Batch A2: Manual price markers + dip-buy Discord alerts
+## Batch C (sketch): post-Batch-B alert tuning + cross-source feedback
 
-**Depends on:** Batch A1.
+**Depends on:** A few live days of A2 + A+ + B alerts firing.
 
-**Scope:** user-defined price markers attached to watchlist tickers. First-cut wires only `at_or_below` (dip-buys) → `#upside-dip-buys`. See `spec/signals/markers.md`.
-
-### Deliverables
-
-1. **Schema migration** `012_watchlist_markers.sql` per `spec/schema.md`.
-2. **Backend** — CRUD endpoints (`POST/PATCH/DELETE /api/watchlist-markers/...`); poller hook checks each marker on every `quotes` write with the transition + cooldown rules in `spec/flows.md` → Marker Hit Flow.
-3. **Discord notifier** — `notifyMarkerHit(marker, ticker)` → `#upside-dip-buys` (env `DISCORD_WEBHOOK_DIP_BUYS`).
-4. **Frontend** — long-press (mobile) / right-click (desktop) on a watchlist row opens add-marker sheet. Tap-on-marker → edit sheet. Marker chips render inline on the row + on TickerDetail's Markers section.
-
-### Manual prereq
-- Create `#upside-dip-buys` Discord channel, add `DISCORD_WEBHOOK_DIP_BUYS` to VPS `.env`, `./bin/upside rebuild`.
-
-### Verification
-- Set an `at_or_below $X` marker; price drops through $X → Discord ping fires once, `last_fired_at` set. Cooldown gate prevents re-fire for 24h.
-- `at_or_above` and `about` markers accepted by schema; no alert fires for them yet (queued for follow-up batch).
-
----
-
-## Batch A+: Dynamic entry-zone engine + vitest test suite
-
-**Depends on:** Batch A2.
-
-**Scope:** continuous LLM-free engine that recomputes per-horizon entry zones on every poll cycle, adapts to trend regime, forgives overbought tickers. Dynamic zones fire Discord alerts on entry (same `#upside-dip-buys` channel for first cut). Ships with a vitest test suite as part of its definition. See `spec/signals/entry-zones.md`.
-
-### Deliverables
-
-1. **Schema migration** `013_entry_zones.sql` per `spec/schema.md`.
-2. **Backend** — `computeEntryZones(...)` per `spec/signals/entry-zones.md`. Simple v1 trend regime (SMA20 slope + price-vs-SMA50). Bar fetch policy: nightly cron refresh per active-list conid + on-demand on first activation; compute reads cached bars. Poller hook upserts `entry_zones` rows per cycle. Alert fires on price entering the band published at the prior cycle, 24h cooldown per `(conid, horizon)`.
-3. **vitest on server** — `pnpm test:server`; 10 scenario fixtures per `spec/signals/entry-zones.md` → Test suite (trending up moderate, overbought forgiveness, consolidation, downtrend, basing/higher-low-off-bottom, gap up, low-vol, high-vol, confluence detection, edge cases). Synthetic fixtures first; IB-captured fixtures for the "real data" cases via `bin/upside-ib`.
-4. **Frontend** — three entry-zone chips per watchlist row (intraday/overnight/multiday); tap a chip → popover with reasoning, confidence, recent firings, "Promote to manual marker" action. TickerDetail gets an Entry Zones collapsible section.
-
-### Verification
-- `pnpm test:server` runs all 10 scenarios green.
-- Active-list ticker shows three chips that update live as price moves.
-- Overbought ticker: chips flag `overbought_tightened` and prices sit closer to live than SMA50 would suggest.
-- Price entering a zone fires `#upside-dip-buys` once per `(conid, horizon)` per 24h.
-
----
-
-## Batch B: Intraday-stats engine (LLM-free signals from historical bars)
-
-**Depends on:** Batch A+.
-
-**Scope:** nightly cron computes per-symbol stats from historical 5-min IB bars — open fade, close fade, typical intraday-low %, lookback window TBD at batch start. Stats appear as a panel on TickerDetail; pollers can fire stats-driven Discord alerts (typical-low zone entry) once the picks are settled.
+**Why a sketch:** the tuning decisions need real Discord traffic to settle — which channels feel noisy vs. silent, whether `at_or_above` and `about` markers warrant their own channel, whether the stats band should fire on cross-into or also on "still inside after N min". Don't claim this batch until the user has eyeballed at least a week of live alerts.
 
 ### Pending decisions (settle when claiming)
-- Which stats first cut? (open-fade / close-fade / intraday-low — pick 1-3.)
-- Lookback window — 60 / 90 / 252 trading days?
-- Stats-driven alert path — separate channel or share `#upside-dip-buys`?
+- Are dip-buy + stats-alerts firing at roughly the cadence the user wants, or do we need cooldown changes / debounce / quiet hours?
+- Does `at_or_above` get a `#upside-targets` channel now, or stay queued?
+- Does `about` get a channel + ATR-band tuning?
+- Should entry-zone alerts split from `#upside-dip-buys` into their own channel?
+- Watchlist-row polish round 6: anything still cramped after the round-5 layout converged?
 
 ### Deliverables (sketch)
-1. `014_intraday_stats.sql` — per-symbol stat rows.
-2. Nightly cron `intradayStatsCron.ts` — pulls 5-min bars for each active-list conid, computes the chosen stats, upserts.
-3. Stats endpoint + FE panel on TickerDetail.
-4. (Optional in this batch) live alerts when price enters a stats-derived zone.
+1. Per-condition channel routing if decided (`at_or_above` → `#upside-targets`, etc.).
+2. Per-marker cooldown UI (the schema field exists; the FE control doesn't).
+3. Stats-alert second trigger ("still in band 10 min later") if cross-into proves too sensitive.
+4. Any FE polish slices that emerge.
 
 ---
 
