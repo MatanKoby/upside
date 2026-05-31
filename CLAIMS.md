@@ -41,6 +41,48 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## Completed
 
+### Polish slice — PriceFlicker animation + loading-state fix + ATR/Range/Scalpable on TickerDetail (2026-05-30 → 2026-05-31)
+- Owner: claude
+- Started: 2026-05-30 · Finished: 2026-05-31
+- Commits: c63f95c (animation wired in Watchlist + PositionCard + TickerDetail) → 05a0503 (TickerDetailShell + Watchlist header-stays-during-loading) → f93cf7a (ATR/Range today/Scalpable sessions on MarketStats).
+- **What shipped:** three FE polish slices bundled — same theme: make every ticker price surface honest about what's happening.
+  - **PriceFlicker** drops into every ticker price surface; 200ms color flash + directional arrow (▲/▼) on any change; double flash on bigger moves scaled to today's realized vol (floor 0.5%, otherwise 0.4× |today_change_pct|); layout never shifts (arrow absolutely-positioned). Uses project `--gain-rgb` / `--loss-rgb` so dark mode behaves.
+  - **Loading/error/not-held states on TickerDetail** extract a `TickerDetailShell` that keeps the back-button + symbol-title header geometry stable while the body shows the state message. Watchlist drops its early-return guard on `isLoading` so the title/glossary/settings header always renders (body shows "Loading…" while data resolves). No more "whole screen says coming-soon" pattern.
+  - **ATR(14d) + Range today + Scalpable sessions** added to Market Stats. BE pulls daily IB bars (`ibHistory(conid, '1y', '1d')`) on the snapshot route, computes via newly-exported `technicals.atr`, caches 6h alongside fundamentals. FE format "5.2% · $0.42" + "27/30 (90%)". Headline volatility cell replaces beta in the prime grid position; beta stays in the grid but no longer headlined (it's correlation-to-market, wrong axis for intraday scalping). Range Today computed FE-side from existing dayHigh/dayLow/open — no extra call.
+- **Live verification:** Animation auto-visible on next FE Realtime quote tick post-Vercel-deploy; loading-state fix only visible during the brief skeleton window on screen load; ATR/Range/Scalpable cells render after `./bin/upside rebuild` on the VPS (snapshot endpoint needs the new fields). Server + client typecheck clean throughout.
+
+### Screener Slice 1 — scoping artifacts (universe sample + retroactive band validation + animation prototype) (2026-05-30)
+- Owner: claude
+- Started + Finished: 2026-05-30
+- Commit: a31264d (artifacts) + 7c14f33 (spec split, doc-only — no separate CLAIMS entry per `feedback_doc_updates_no_batch`)
+- **What shipped:** pure exploration + design artifacts, no production code (foreground after the subagent-on-worktree attempt failed earlier — see [[feedback_no_subagents]]):
+  - `scripts/universe-sample.mjs` — Finnhub `/stock/symbol` pull (30,538 US symbols) → type+MIC filter (→ 5,307 pool) → 250-symbol random sample with `/quote` + `/stock/profile2` → applies $1-100 price + $150M cap. First run reported **Wilson 95% CI 2,728 – 3,373** survivors (point ~3,051), distribution roughly even across price + cap bands with small/mid caps dominant.
+  - `scripts/validate-bands.mjs` — retroactive band validation against user's actual 2026-05-29 trades. **RGTI**: 60d p50 dip 3.97%, actual 7.60%, user's $25.00 buy INSIDE p25–p75 envelope ($0.40 from p50 of $25.40). **MNTS**: 60d p50 dip 6.46%, actual **16.67%**, user's three buys ALL OUTSIDE envelope — exactly the `vol_regime_shift` case the adaptive band-engine layers are designed for. RGTI proves the static math; MNTS proves the adaptive layers are necessary, not optional.
+  - `client/src/components/common/PriceFlicker.tsx` + `scripts/anim-integration.md` — drop-in price-change animation component + integration sketch (wired into production by the polish slice above).
+  - **Spec split** (7c14f33, doc-only): `signals/screener-universe.md` leaned to 161 lines; new `signals/band-engine.md` (215 lines, the three adaptive layers); new `screens/screener.md` (130 lines, the FE tab); screener tables added to `schema.md` (universe, trait_scores, band_state); screener flows added to `flows.md` (Universe Sweep, Pre-mkt Refresh, Band Walk, Band-Touch Notification); Track 10 deferred items in `roadmap.md` (RSS firehose, mid-day discovery, sell-side mirror, AH-bands, IBKR push, auto-marker, auto-truncating-lookback) — each with an empirical revisit trigger; `data-sources.md` expanded to mention SEC EDGAR / FDA RSS / PR wires / Nasdaq Trader (planned for the RSS firehose phase).
+- **What this unblocks:** Batches S1–S4 (screener-track Slice 1 implementation) have their design + empirical justification + reusable component artifacts ready.
+
+### Batch C — first slice landed: noise floor on entry-zone Discord alerts (2026-05-30)
+- Owner: claude
+- First slice finished: 2026-05-30
+- Commit: f750aa2
+- **What shipped:** three filters added to `checkEntryZonesForConid`, driven by the 2026-05-30 dip-buys channel audit:
+  - **Confidence floor** (`MIN_CONFIDENCE_PCT = 60`) drops zones below 60% conviction — kills the historical 24% / 8% / 4% noise (VLN, BBAI, QCOM cases).
+  - **Overshoot gate** (`OVERSHOOT_TOLERANCE_PCT = 1.0`) fires only when current price is within 1% of zone level on cross-down — kills stale alerts where price plunged well below the zone in a single tick (CRM $178.30 firing at curr $176.17 case).
+  - **Horizon collapse** — the engine writes 3 `entry_zones` rows per ticker (intraday + overnight + multiday); identical-or-near levels (within 1%) collapse to a single ping, highest-confidence horizon wins, ties broken multiday > overnight > intraday. All horizons in the cluster get `last_fired_at` stamped to suppress independent re-fires.
+- **What remains in Batch C (still un-done):** per-marker cooldown UI (the schema field exists, the FE control doesn't); `at_or_above` markers getting their own channel rather than sharing `#upside-dip-buys`; stats-alert second trigger ("still in band 10 min later") if cross-into proves too sensitive in practice; any FE polish slices that emerge from further live observation.
+- **Live verification:** takes effect on next `./bin/upside rebuild` cycle. Subsequent dip-buys alerts should show no sub-60% confidence, no overshoot fires, no triple-horizon spam. Manual markers (the audit found those firing cleanly) are unchanged.
+
+### Tooling slice — bin/upside-psql + bin/upside-discord + PreToolUse hook (2026-05-30)
+- Owner: claude
+- Started + Finished: 2026-05-30
+- Commits: 6426ac0 (wrappers) → 9e3f099 (hook)
+- **What shipped:** silent dev-tool surface for the two most common ad-hoc reads + an enforcement hook that prevents regression:
+  - **`bin/upside-psql`** forwards args + stdin to psql with `.secrets/readonly-db` as the connection-string source — heredocs work, creds never land on the command line. Role is `upside_readonly` (SELECT-only via grants), so writes rejected at the Postgres layer. Allowlisted via `Bash(bin/upside-psql:*)` so calls are prompt-free.
+  - **`bin/upside-discord`** wraps the bot-token Discord read pattern from `.claude/skills/read-discord/SKILL.md`: `channels` lists channels, `<name|id> [N]` reads messages, `--raw` for piping to jq. Token from `.secrets/discord-token`. Bot has no post permissions, so read-only by token capability.
+  - **`.claude/hooks/wrapper-bypass-guard.sh`** — PreToolUse hook that intercepts Bash calls, exits 2 (block) on raw `psql ` or `discord.com/api/` (without `bin/upside-` prefix), with an error message pointing at the right wrapper. Enforces [[feedback_use_wrappers_not_raw]]. Self-tested inline before commit.
+- **Context:** memory entries written alongside ([[feedback_use_wrappers_not_raw]], [[feedback_no_subagents]]). The wrappers + hook were created after the 2026-05-30 subagent-on-worktree incident leaked the readonly DB password to a transcript log (subsequently rotated) — belt-and-suspenders so this can't recur.
+
 ### Batch B — Intraday-stats engine + typical-intraday-low band Discord alerts (2026-05-29)
 - Owner: claude
 - Started: 2026-05-29 13:11 · Finished: 2026-05-29 (server) → 2026-05-30 (FE + spec sweep)

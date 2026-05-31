@@ -85,13 +85,160 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The watchlist-pivot block (A1 → A2 → A+ → B) and the two polish slices are done and live on `dev`. The user has not yet picked the next batch — when the user types "continue" after a context clear, **ask** which un-done batch to claim rather than guessing. Best-fit candidates in rough priority order: **Batch C** (post-B alert tuning + watchlist-row polish — sketch below) · **Batch 13.2** (generic IB passthrough debug endpoint) · **Batch 14b** (accuracy cron) · **Batch 15** (alerts feed + settings). Everything else (13.3, 13.5, 13.7-9, 14c-f, 14.5, 16) is below those.
+> **Pick-order pointer for "continue".** Batch B's live-flip + the 2026-05-30 polish slices (animation, loading-state, ATR on TickerDetail, Batch C noise floor) are all done and live on `dev`. The screener track has been designed and scoped — Slice 1 is now four sequenced batches (**S1 → S2 → S3 → S4**) below, the main un-done block. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger — small polish slices) · **Batch 15** (alerts feed + settings flesh-out) · **Batch 14h** (live per-leg tracking + Refine mode, queued behind 14g) · **Batch 13.9** (Finnhub cadence tuning, internal-only) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but Slice 1 of the screener (S1 first) is the most likely answer right now.
 
-> **Outstanding live-flip steps** (the user has to do these on the VPS — don't try to do them remotely; see `feedback_infra_handson` memory):
-> 1. Apply migrations `017_intraday_stats.sql` + `018_quotes_today_open.sql` in Supabase. (Migrations 011–016 are already applied.)
-> 2. Create `#upside-stats-alerts` Discord channel; add `DISCORD_WEBHOOK_STATS_ALERTS=<url>` to VPS `.env`.
-> 3. `./bin/upside rebuild` on the VPS.
-> The first `intradayStatsCron` run is 5 minutes after boot; stats chips/panel populate as conids get covered.
+---
+
+## Batch S1: Stock universe + Ring 1 nightly cron
+
+**Depends on:** Batch 13.7 (Finnhub rate-limited queue).
+
+**Scope:** Production version of the universe scan + filter scoped in [Screener Slice 1 — scoping artifacts] (CLAIMS, 2026-05-30). New `universe` table maintained by a nightly cron. Foundation for S2/S3/S4 — without S1 there's nothing for trait scoring to score, no curated list for the band engine to walk, no rows for the FE tab to render. Spec: `spec/signals/screener-universe.md` (Ring 0, Ring 1, dynamic universe inclusion).
+
+### Deliverables
+
+1. **Migration `01X_universe.sql`** — `universe` table per `spec/schema.md` → `universe`. Service-role write, no user-facing reads needed (server-internal cache). Realtime NOT enabled (high churn, no FE consumer).
+2. **`server/src/cron/universeCron.ts`** — runs at **09:00 IDT** (= 2 AM ET) nightly. Steps: Finnhub `/stock/symbol?exchange=US` (single call, cached for the day) → in-process type+MIC filter → per-conid `finnhubQueue.request('quote'|'profile', ...)` for the price+cap gate → upsert `universe` rows with `filter_result` set. Sleep cadence honors the existing queue's 50/min budget; full sweep ~100 min wall-clock at free-tier.
+3. **`server/src/services/screener/universeFilter.ts`** — pure function tested via vitest (sample-of-survivors style fixtures from the scoping-script output).
+4. **`server/src/services/finnhub.ts`** — extend with `getSymbolList()` (`/stock/symbol?exchange=US`) and `getProfile2(symbol)` (`/stock/profile2`) if not already present.
+5. **Pre-market 15:30 IDT skeleton** — `universeCron` accepts a `mode: 'nightly' | 'premarket'` arg; the premarket pass refreshes price/cap on Ring-1-borderline tickers only (cheaper than full re-scan). Dynamic universe inclusion via 3× volume gap is **scaffolded but not wired** in S1 — the daily-bar pipeline that catalyst_reversal needs lands in S2, so the volume-gap promotion plugs in there.
+6. **Retention**: rows with no `last_filter_pass` in 30 days deleted by a small daily retention task.
+7. **Boot wiring** in `server/src/index.ts` to start the cron + an explicit `npm run cron:universe` one-shot for manual kicks.
+
+### Files this batch creates/edits
+- `supabase/migrations/01X_universe.sql` (new)
+- `server/src/cron/universeCron.ts` (new)
+- `server/src/services/screener/universeFilter.ts` (new)
+- `server/src/services/finnhub.ts` (extend)
+- `server/src/index.ts` (boot wiring)
+
+### Does NOT touch
+- Trait scoring (S2), band engine (S3), FE (S4).
+
+### Verification
+- Migration applied cleanly via Supabase SQL editor.
+- After cron's first nightly run: `bin/upside-psql -tAc "select count(*) from universe where filter_result='in';"` returns a number within the **2,728–3,373** CI from the scoping sample (point ~3,051).
+- `external_api_metrics` shows ≤ ~6,000 Finnhub calls for the sweep (≈ 2 calls per Ring-0 survivor) — within the free-tier 60/min × full-night budget.
+- Manual `npm run cron:universe` triggers a one-shot pass.
+
+---
+
+## Batch S2: Screener — trait scoring engine
+
+**Depends on:** Batch S1 (universe table), Batch B (existing `intraday_stats`).
+
+**Scope:** The three traits (`intraday_range_trader`, `catalyst_reversal`, `post_earnings_drift`) and the `trait_scores` table they write to. Discord first-fire notifications for the catalyst/earnings traits (the range-trader trait is silent — its tickers are the screener baseline). Spec: `spec/signals/screener-universe.md` → Traits.
+
+### Deliverables
+
+1. **Migration `01X_trait_scores.sql`** — `trait_scores(conid, trait, asof_date, score, payload jsonb, computed_at, PRIMARY KEY (conid, trait, asof_date))` per `spec/schema.md`. Realtime enabled.
+2. **`server/src/services/screener/traits/intradayRangeTrader.ts`** — pure function reading `intraday_stats` rows, applying the threshold rules (p50 ≥ 2%, p25 ≥ 1%, sample_size ≥ 30, envelope-tightness ≤ 1.5, price-bonus for sub-$30). Vitest fixtures for typical fade / narrow envelope / disqualified cases.
+3. **`server/src/services/screener/traits/catalystReversal.ts`** — A ∧ B rule (beaten-down + 3× volume gap + 5% move). First time we pull IB daily bars across the universe — cron-cached for the day; per-ticker fetch only when refresh needed.
+4. **`server/src/services/screener/traits/postEarningsDrift.ts`** — `finnhub.getEarningsCalendar(from, to)` + close-up-on-report-day test. Calendar pulled once per cron tick + cached.
+5. **`universeCron` extension** — after the universe pass, run a trait-scoring pass over the new survivors: compute all three traits per conid, upsert `trait_scores` for `asof_date = today`.
+6. **Trait shelf-life retention**: drop trait_scores beyond shelf-life — 1 day for `intraday_range_trader`, 3 days for `catalyst_reversal`, 5 days for `post_earnings_drift`.
+7. **Dynamic universe inclusion wiring** (carried forward from S1 skeleton) — pre-market sweep promotes non-Ring-1 tickers showing 3× volume gap using the daily-bar pipeline this batch establishes.
+8. **`services/notify.ts:notifyTraitFirstFire(trait, symbol, payload)`** — first-fire-per-(conid, trait, day) Discord ping. Routes catalyst_reversal + post_earnings_drift to `#upside-catalyst-alerts` (env `DISCORD_WEBHOOK_CATALYST_ALERTS`); `intraday_range_trader` is silent.
+
+### Files this batch creates/edits
+- `supabase/migrations/01X_trait_scores.sql` (new)
+- `server/src/services/screener/traits/*.ts` (new — three trait functions + vitest)
+- `server/src/cron/universeCron.ts` (extend the scoring pass)
+- `server/src/services/notify.ts` (add `notifyTraitFirstFire`)
+- `server/src/services/finnhub.ts` (extend with `/calendar/earnings` if not present)
+- `.env.example` (add `DISCORD_WEBHOOK_CATALYST_ALERTS`)
+
+### Does NOT touch
+- Universe filter itself (S1), band engine (S3), FE (S4).
+
+### Manual prereqs
+- Create `#upside-catalyst-alerts` Discord channel + webhook → `DISCORD_WEBHOOK_CATALYST_ALERTS` to VPS `.env`.
+
+### Verification
+- Migration applied.
+- After a cron run: `bin/upside-psql -c "select trait, count(*) from trait_scores where asof_date=current_date group by trait;"` shows three rows with non-trivial counts (intraday_range_trader likely 100s, others fewer).
+- Live (Saturday → Monday spans a post-earnings window): `#upside-catalyst-alerts` fires one ping per qualifying ticker per day; no duplicate fires for the same ticker on the same day.
+
+---
+
+## Batch S3: Improved entry engine — adaptive band layers
+
+**Depends on:** Batch S2 (`intraday_range_trader` trait gives us the curated list), Batch B (`intraday_stats` is the static baseline).
+
+**Scope:** The three adaptive layers on top of the static `intraday_stats` band — `session_regime` classifier, today's `vol_scalar`, walking band-state machine. The improvement over the existing entry-zone engine: bands adapt to today's gap + today's realized volatility + today's pivots instead of being frozen at open. Spec: `spec/signals/band-engine.md`.
+
+### Deliverables
+
+1. **Migration `01X_band_state.sql`** — `band_state(conid, session_date, anchors jsonb, current_low_band, current_high_band, session_regime, vol_scalar, vol_regime_shift, updated_at, PRIMARY KEY (conid, session_date))` per `spec/schema.md`. Realtime enabled (FE band chips subscribe).
+2. **`server/src/services/bandEngine/sessionRegime.ts`** — Layer 1 classifier (gap + first-15-min direction + pre-mkt volume → `mean_reversion | bullish_trend | bearish_trend | mixed`). Pure function + vitest fixtures (typical / trend / mixed).
+3. **`server/src/services/bandEngine/volScalar.ts`** — Layer 2: `ATR(last 12 5min bars) / ATR_30d_baseline` → band-width multiplier + annotation enum (`high_vol_today` / `calm_day` / null). Pure function + vitest. **Validated empirically 2026-05-30**: this layer would have widened MNTS's band to cover the actual low ($16.00 vs predicted $17.96).
+4. **`server/src/services/bandEngine/walkingState.ts`** — Layer 3: state machine with re-anchor on observed reversal from running extremum (threshold = `0.5 × intraday_ATR`). Both bands recompute on every anchor. No chain-length limit. Pure function + vitest with multi-leg scenario fixtures (REPL-style scalp pattern: 4 buy/sell legs in one session).
+5. **`server/src/services/bandEngine/volRegimeShift.ts`** — daily flag (last 5 sessions ATR > 2× prior 30d ATR) — the cheap correctness hedge per spec; just sets the flag + annotation, does NOT auto-truncate the lookback (that's a Track-10 deferred item).
+6. **`server/src/cron/bandEngineCron.ts`** — runs every 5 min during **16:30 IDT – 03:00 IDT** (regular session + AH) on the curated list (`intraday_range_trader` survivors, ~100 tickers). 15:45 IDT fires session_regime classifier; ticks thereafter run vol_scalar + walkingState. AH walking annotates `session_regime = 'ah_low_confidence'`.
+7. **Reset task at 16:30 IDT next session** — clears anchors, resets regime. Same cron file; mode-flag invocation.
+8. **`services/notify.ts:notifyBandTouchLow` / `notifyBandTouchHigh`** — band-touch Discord notifications. Low-touch on curated (not held) → `#upside-dip-buys` (existing channel). High-touch on held position → new `#upside-sell-zones` (env `DISCORD_WEBHOOK_SELL_ZONES`). 4h cooldown per `(conid, band_kind)` via a `band_touch_last_fired_at` jsonb field on `band_state`.
+
+### Files this batch creates/edits
+- `supabase/migrations/01X_band_state.sql` (new)
+- `server/src/services/bandEngine/*.ts` (new — sessionRegime, volScalar, walkingState, volRegimeShift + vitest)
+- `server/src/cron/bandEngineCron.ts` (new)
+- `server/src/services/notify.ts` (add `notifyBandTouchLow` / `notifyBandTouchHigh`)
+- `.env.example` (add `DISCORD_WEBHOOK_SELL_ZONES`)
+
+### Does NOT touch
+- Universe (S1), trait scoring (S2), FE (S4).
+
+### Manual prereqs
+- Create `#upside-sell-zones` Discord channel + webhook → `DISCORD_WEBHOOK_SELL_ZONES` to VPS `.env`.
+
+### Verification
+- Migration applied.
+- During regular session: `bin/upside-psql -c "select conid, session_regime, vol_scalar, jsonb_array_length(anchors) from band_state where session_date=current_date order by jsonb_array_length(anchors) desc limit 10;"` shows curated tickers with regime labels + walking anchors growing through the session.
+- Band-touch Discord pings fire on first touch + are suppressed on subsequent touches within 4h.
+- MNTS-style cases: when `vol_regime_shift = true`, the published band is visibly wider than the static `intraday_stats` band would have been.
+
+---
+
+## Batch S4: Virtual lists — Screener tab FE
+
+**Depends on:** Batch S2 (`trait_scores`), Batch S3 (`band_state`).
+
+**Scope:** New Screener tab in the bottom nav with vertical accordions per trait, walking-band annotation chips, and a promote-to-watchlist affordance. The user-facing endpoint of the screener track — the place where you SEE the discovered tickers. Spec: `spec/screens/screener.md`.
+
+### Deliverables
+
+1. **`client/src/pages/Screener.tsx`** (new) — top-level page; loading-state-fix pattern (header always visible, body shows skeleton + per-trait loading).
+2. **`client/src/components/common/BottomNav.tsx`** — add Screener tab (4 tabs total: Portfolio · Watchlist · **Screener** · Settings).
+3. **`client/src/routes.tsx`** — add `/screener` route.
+4. **`client/src/components/Screener/*`** (new):
+   - `TraitAccordion.tsx` — collapsible per-trait section; top-5 rows default + "Show all 30" expand. Section order: catalyst_reversal first when populated, range-traders default, drift last.
+   - `ScreenerRow.tsx` — uses the existing `TickerCard` primitive in `variant='screener'`. PriceFlicker wraps the price. Trait-specific chip cluster: `IntradayStatsChip` + "$X.XX band" for range-trader; gap multiplier + intraday move + beaten-down basis for catalyst_reversal; days-since-earnings + report-day pop for post_earnings_drift.
+   - `BandAnnotationChip.tsx` — small chip showing `session_regime` + `vol_scalar` annotation. Tap → opens popover with next predicted low/high bands. (Reuses the existing entry-zone popover styling pattern from Watchlist.)
+   - `PromoteSheet.tsx` — long-press / right-click on a row → sheet with "Add to Watchlist" + "Set marker" actions; the marker action prefills the price from the band engine's published p50 buy band.
+   - `ScreenerSettingsSheet.tsx` — gear icon → visible-traits toggles, top-N list size, sort (score / price / alphabetical), "hide tickers in my Watchlist" toggle.
+5. **`client/src/hooks/useScreenerData.ts`** — Supabase Realtime subscription on `trait_scores` + `band_state`, joined with `universe` + `contracts` for symbol/name lookup. Returns `tickersByTrait` shape ready to render.
+6. **Empty state**: "The screener is still warming up." (renders when no `trait_scores` rows exist for today). Refresh sub-row in header shows last-refresh timestamp.
+7. **Per-screen settings persist in localStorage** for v1 (Batch 15 will move them to `user_preferences.stat_config`-style — small follow-up migration).
+8. **CSS** for screener-specific blocks in `client/src/styles/components.css`.
+
+### Files this batch creates/edits
+- `client/src/pages/Screener.tsx` (new)
+- `client/src/components/common/BottomNav.tsx`
+- `client/src/routes.tsx`
+- `client/src/components/Screener/*.tsx` (new)
+- `client/src/hooks/useScreenerData.ts` (new)
+- `client/src/styles/components.css` (Screener-specific blocks)
+
+### Does NOT touch
+- Any signal-engine code, any cron, any schema. Pure FE consumer of S1+S2+S3 outputs.
+
+### Verification
+- New "Screener" tab visible in BottomNav.
+- Tapping it shows three accordions (catalyst_reversal at top when populated, range-traders default, drift last).
+- Each row shows trait-specific chips + walking-band annotation chip when `band_state` has data.
+- Tap a band chip → popover with next-low and next-high bands.
+- Long-press → promote sheet works; "Add to Watchlist" writes a `watchlist_items` row; the new ticker appears in Watchlist on next render.
+- Loading state shows header + accordion shells (not a whiteout — follows the loading-state pattern shipped 2026-05-30).
 
 ---
 
