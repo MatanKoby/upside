@@ -8,7 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — the 2026-05-28 watchlist-pivot block A1→A2→A+→B + the two polish slices are all complete + pushed to `dev`. Pick-order pointer for "continue" lives in `BUILD_QUEUE.md` → Un-done batches intro.)*
+*(empty — Batch S1 just landed, see Completed.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -40,6 +40,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S1 — Stock universe + Ring 1 nightly cron (2026-05-31)
+- Owner: claude
+- Started + Finished: 2026-05-31
+- **What shipped:** the screener-track foundation — a `universe` table that the nightly cron maintains. S2/S3/S4 all read from this.
+  - **Migration `019_universe.sql`** — `universe(conid PK, symbol, type, mic, last_filter_pass, filter_result CHECK in {in, out_price, out_cap, out_volume, no_data}, last_price, last_market_cap_m, last_avg_volume, computed_at)`. Two indexes (`filter_result`, `symbol`). Service-role-only writes. No Realtime publication (high churn, no FE consumer — the Screener tab will read `trait_scores` per S2).
+  - **`server/src/services/screener/universeFilter.ts`** — pure Ring-1 evaluator + pre-DB sieve. Surfaces the full diagnostic enum (including `out_type` / `out_mic` for testability) even though only the price/cap branches are DB-recorded. **24 vitest cases all green** — every enum branch + the pre-sieve + ordering edge cases.
+  - **`server/src/cron/universeCron.ts`** — 24h cadence, 5-min boot delay (mirrors `intradayStatsCron`'s pattern). Steps per tick: `getSymbolList('US')` → preFilterByTypeAndMic (sieves ~30.5k → ~5.3k) → per-symbol `getQuote` + `getProfile2` in parallel via `finnhubQueue` (queue handles the 50/min budget natively) → `filterRing1` → batched upserts (100 rows/batch) → retention sweep (delete rows older than 30d). Progress log every 500 symbols. `mode: 'nightly' | 'premarket'` arg accepted; premarket is a stub (volume-gap promotion lands in S2 alongside the daily-bar pipeline).
+  - **`server/src/services/finnhub.ts`** extended with `getSymbolList(exchange='US')` and `getProfile2(symbol)` (both queued through the existing infrastructure with categories `symbol` + `profile`).
+  - **`server/scripts/runUniverseCron.ts`** + `npm run cron:universe` — one-shot kick bypassing the 5-min boot delay; useful for manual sweep after migration applies.
+  - **Boot wiring** in `server/src/index.ts` — `startUniverseCron()` joins the existing cron set.
+  - **Synthetic conid keying** — Finnhub's `/stock/symbol` payload doesn't carry IBKR conids (it's figi/cusip-keyed), so `universe.conid` uses a stable negative-bigint FNV-1a hash of `mic|symbol` so the table has a primary key and re-runs are idempotent. Real conids back-fill via a one-shot migration when IB secdef resolution is wired.
+- **Manual prereqs for live-flip** (per `feedback_infra_handson`):
+  1. Apply migration `019_universe.sql` in Supabase.
+  2. `./bin/upside rebuild` on the VPS.
+  3. (Optional) Trigger a one-shot sweep — exec into the api container and run `npm run cron:universe`; otherwise the first scheduled sweep runs 5 min after boot, takes ~100 min wall-clock at 60-cpm Finnhub free tier.
+- **Verification** (after live-flip): `bin/upside-psql -tAc "select count(*) from universe where filter_result='in';"` returns a number within the **2,728–3,373** CI from the 2026-05-30 scoping sample (point ~3,051). `bin/upside-psql -c "select filter_result, count(*) from universe group by filter_result;"` shows the breakdown of why other ~2,000 symbols dropped out (mostly `out_price` + `out_cap`).
+- **Commit:** (this batch).
+- **What's next:** Batch S2 (trait scoring engine) plugs into the `(filter_result='in')` rows this cron produces. Per the dependency chain, S2 → S3 → S4 follow.
 
 ### Polish slice — PriceFlicker animation + loading-state fix + ATR/Range/Scalpable on TickerDetail (2026-05-30 → 2026-05-31)
 - Owner: claude

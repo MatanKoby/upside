@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "capture": "tsx scripts/captureIb.ts",
+    "cron:universe": "tsx scripts/runUniverseCron.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

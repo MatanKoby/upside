@@ -141,3 +141,58 @@ export async function basicFinancials(symbol: string): Promise<FinnhubMetrics | 
   );
   return data?.metric ?? null;
 }
+
+// /stock/symbol?exchange=US — the universe pull for the Screener track
+// (Batch S1). Returns ~30,538 US symbols across all listing venues; the
+// cron filters them down in-process before any per-symbol call. Single
+// request, but routed through the queue's `symbol` category for consistency
+// + metrics. Cached server-side by the cron (one call per nightly sweep).
+export interface FinnhubSymbolRow {
+  currency?: string;
+  description?: string;
+  displaySymbol?: string;
+  figi?: string;
+  mic?: string;        // exchange identifier (XNAS / XNYS / XASE / OOTC / etc.)
+  symbol?: string;
+  type?: string;       // 'Common Stock' | 'ADR' | 'ETP' | 'REIT' | ...
+}
+
+export async function getSymbolList(exchange = 'US'): Promise<FinnhubSymbolRow[]> {
+  const { data } = await call<FinnhubSymbolRow[]>(
+    'symbol',
+    exchange,
+    '/stock/symbol',
+    { exchange },
+  );
+  return Array.isArray(data) ? data : [];
+}
+
+// /stock/profile2?symbol=… — company profile used by the universe filter
+// for marketCapitalization. Finnhub reports cap in MILLIONS of USD (so 1500
+// = $1.5B). Same shape that the marketdata snapshot endpoint reads for the
+// MarketStats panel — keep them consistent.
+export interface FinnhubProfile2 {
+  country?: string;
+  currency?: string;
+  estimateCurrency?: string;
+  exchange?: string;
+  finnhubIndustry?: string;
+  ipo?: string;
+  marketCapitalization?: number;  // millions USD
+  name?: string;
+  phone?: string;
+  shareOutstanding?: number;       // millions
+  ticker?: string;
+  weburl?: string;
+  logo?: string;
+}
+
+export async function getProfile2(symbol: string): Promise<FinnhubProfile2 | null> {
+  const { data } = await call<FinnhubProfile2>(
+    'profile',
+    symbol,
+    '/stock/profile2',
+    { symbol },
+  );
+  return data ?? null;
+}

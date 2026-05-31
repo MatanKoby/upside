@@ -17,6 +17,7 @@ import { startFinnhubPricePoller } from './cron/finnhubPricePoller.js';
 import { startWatchlistQuotePoller } from './cron/watchlistQuotePoller.js';
 import { startEntryZonesCron } from './cron/entryZonesCron.js';
 import { startIntradayStatsCron } from './cron/intradayStatsCron.js';
+import { startUniverseCron } from './cron/universeCron.js';
 import { startZoneGapCleanup } from './cron/zoneGapCleanup.js';
 import { startMetricsRetention } from './cron/metricsRetention.js';
 import { startTunnelWatcher } from './services/tunnelWatcher.js';
@@ -73,6 +74,7 @@ app.listen(env.port, () => {
   startWatchlistQuotePoller();
   startEntryZonesCron();
   startIntradayStatsCron();
+  startUniverseCron();
   startZoneGapCleanup();
   startTunnelWatcher();
   startMetricsRetention();
