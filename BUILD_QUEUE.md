@@ -85,7 +85,72 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** Batch B's live-flip + the 2026-05-30 polish slices (animation, loading-state, ATR on TickerDetail, Batch C noise floor) are all done and live on `dev`. The screener track has been designed and scoped — Slice 1 is now four sequenced batches (**S1 → S2 → S3 → S4**) below, the main un-done block. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger — small polish slices) · **Batch 15** (alerts feed + settings flesh-out) · **Batch 14h** (live per-leg tracking + Refine mode, queued behind 14g) · **Batch 13.9** (Finnhub cadence tuning, internal-only) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but Slice 1 of the screener (S1 first) is the most likely answer right now.
+> **Pick-order pointer for "continue".** Batch S1 just landed (universe table + nightly Ring 1 cron, synthetic-conid keyed). The screener track now sequences as **S0.5 → S1.5 → S2 → S3 → S4**, with S0.5 the next claim (researches alternative price+volume sources to avoid pushing universe coverage onto IB). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S0.5** is the most likely answer right now.
+
+---
+
+## Batch S0.5: Universe price + volume coverage research + integration
+
+**Depends on:** Batch S1 (universe table exists), Batch 13.7 (Finnhub queue).
+
+**Scope:** Decide how to keep `quotes.canonical_price`-style data fresh for **universe tickers** (~3,000 Ring-1 IN) — not just the ~25 held + watchlist conids the existing pollers cover. Specifically resolves the gap that **Finnhub free `/quote` has price but no volume**, and the `catalyst_reversal` Stage-1 broad detection needs volume on ~5,300 tickers nightly without pushing daily IB usage past the on-demand budget.
+
+**Research portion** (~half-day): evaluate free-tier alternatives on (a) does it give volume? (b) batch endpoint or per-symbol? (c) free-tier rate limit + daily cap? (d) ToS for our scale? See `spec/signals/data-sources.md` → Universe coverage for the candidate list:
+
+- **yfinance / Yahoo (unofficial)** — free, no key, has intraday OHLCV + daily volume. ToS-gray.
+- **Polygon.io free tier** — 5 calls/min, aggregates + trades.
+- **Alpaca Market Data (free IEX feed)** — bars + volume; free with account.
+- **Twelve Data free** — 8 calls/min, 800/day; quotes with volume.
+
+**Integration portion** (~half-day): write a small `services/universeQuote.ts` wrapper that pulls price+volume for the universe with whichever source the research picked, on the cadence the caching/staggering plan calls for (`spec/signals/screener-universe.md` → Caching + staggering). Extends `universe.last_price` + `universe.last_avg_volume` fields S1 already provisioned. **If no free-tier source qualifies**, S0.5 concludes "IB snapshot is the only viable source" — record that decision, plan IB-snapshot batched calls into the cron, accept the IB-budget cost.
+
+### Files this batch creates/edits
+- `docs/universe-data-research.md` (new) — research notes + decision record
+- `server/src/services/universeQuote.ts` (new) — the integration wrapper, source-agnostic API
+- `server/src/cron/universeCron.ts` (extend — wire the new wrapper for price/volume refresh; weekly cap+vol, daily price)
+- `server/src/services/finnhub.ts` OR new provider file depending on research outcome
+- `spec/signals/data-sources.md` (update the Universe-coverage section with the chosen source)
+
+### Does NOT touch
+- Trait scoring (S2), band engine (S3), FE (S4), or any IB-related code (unless IB-snapshot path is chosen as the fallback).
+
+### Verification
+- Research doc lists each candidate with measured free-tier behavior + a clear pick.
+- After integration: `bin/upside-psql -c "select count(*) from universe where last_price is not null and last_avg_volume is not null;"` returns ≥ 90% of `filter_result='in'` count within 24h of cron.
+- Daily provider call count stays within the chosen tier's free quota.
+
+---
+
+## Batch S1.5: Real IBKR conid resolution for universe tickers
+
+**Depends on:** Batch S1 (universe table + synthetic-conid PK in place).
+
+**Scope:** Replace the synthetic conids in S1's `universe` rows with **real IBKR conids** resolved via `ibSecdefSearch`. Without this, S2's trait scoring can't join `intraday_stats` (IB-keyed) and S2's `catalyst_reversal` can't pull `ibHistory`. ~45 min IB **once**, then cached forever per ticker; re-resolves only on universe additions. Spec: `spec/signals/screener-universe.md` → Conid resolution.
+
+### Deliverables
+
+1. **Migration `020_universe_real_conid.sql`** — add `real_conid bigint null` + `auto_promoted bool default false` columns to `universe`. Index on `real_conid` for join performance. (Matches `spec/schema.md` → universe.)
+2. **`server/src/services/screener/conidResolver.ts`** — `resolveConid(symbol, mic)` that calls `ibSecdefSearch(symbol)`, filters to `secType=STK + currency=USD + exchange ∈ {NASDAQ, NYSE, AMEX}`, returns the primary-exchange match (or null if no STK match). First-listed tiebreaker for ambiguous cases (dual listings, A/B classes). Vitest fixtures for: clean single-match, multi-match w/ correct primary pick, no-match, non-STK-only response.
+3. **`server/src/cron/conidResolutionCron.ts`** (or extension of universeCron) — daily pass: select universe rows where `real_conid IS NULL`, resolve in IB-rate-limited batches (~10/sec). One-time backlog ~45 min IB; steady-state near-zero (only new symbols).
+4. **Optional one-shot kick** `npm run cron:resolve-conids` for the initial backlog flush.
+
+### Files this batch creates/edits
+- `supabase/migrations/020_universe_real_conid.sql` (new)
+- `server/src/services/screener/conidResolver.ts` (new + vitest)
+- `server/src/cron/conidResolutionCron.ts` (new) OR extend `universeCron.ts` with a resolution pass
+- `server/src/index.ts` (boot wiring)
+- `server/scripts/runConidResolutionCron.ts` (new) + `npm run cron:resolve-conids` script
+
+### Does NOT touch
+- Trait scoring (S2), band engine (S3), FE (S4). Pure data-layer slice.
+
+### Manual prereqs
+- IB connected during the initial backlog resolution (~45 min on first run; routine days are seconds).
+
+### Verification
+- Migration applied.
+- After first full resolution pass: `bin/upside-psql -tAc "select 100.0 * count(real_conid) / count(*) from universe;"` returns ≥ **95%** (the ~5% unresolved are obscure types, delisted-since-Finnhub-pull, or genuine ambiguity).
+- Spot-check: `bin/upside-psql -c "select symbol, conid, real_conid from universe where symbol in ('REPL', 'MNTS', 'RGTI');"` shows real conids matching the ones already in `watchlist_items` for the watchlist-overlap names.
 
 ---
 
@@ -125,27 +190,39 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ## Batch S2: Screener — trait scoring engine
 
-**Depends on:** Batch S1 (universe table), Batch B (existing `intraday_stats`).
+**Depends on:** Batch S1 (universe table), Batch S1.5 (real_conid resolution), Batch S0.5 (universe price+volume coverage), Batch B (existing `intraday_stats`).
 
-**Scope:** The three traits (`intraday_range_trader`, `catalyst_reversal`, `post_earnings_drift`) and the `trait_scores` table they write to. Discord first-fire notifications for the catalyst/earnings traits (the range-trader trait is silent — its tickers are the screener baseline). Spec: `spec/signals/screener-universe.md` → Traits.
+**Scope:** The three traits (`intraday_range_trader`, `catalyst_reversal`, `post_earnings_drift`) and the `trait_scores` table they write to. Implements the **caching + staggering + event-gated** architecture from `spec/signals/screener-universe.md` → "Caching + staggering" so daily IB usage stays ~15-20 min (compatible with on-demand IBeam, not requiring 13.3). Discord first-fire notifications for the catalyst/earnings traits.
 
 ### Deliverables
 
-1. **Migration `01X_trait_scores.sql`** — `trait_scores(conid, trait, asof_date, score, payload jsonb, computed_at, PRIMARY KEY (conid, trait, asof_date))` per `spec/schema.md`. Realtime enabled.
-2. **`server/src/services/screener/traits/intradayRangeTrader.ts`** — pure function reading `intraday_stats` rows, applying the threshold rules (p50 ≥ 2%, p25 ≥ 1%, sample_size ≥ 30, envelope-tightness ≤ 1.5, price-bonus for sub-$30). Vitest fixtures for typical fade / narrow envelope / disqualified cases.
-3. **`server/src/services/screener/traits/catalystReversal.ts`** — A ∧ B rule (beaten-down + 3× volume gap + 5% move). First time we pull IB daily bars across the universe — cron-cached for the day; per-ticker fetch only when refresh needed.
-4. **`server/src/services/screener/traits/postEarningsDrift.ts`** — `finnhub.getEarningsCalendar(from, to)` + close-up-on-report-day test. Calendar pulled once per cron tick + cached.
-5. **`universeCron` extension** — after the universe pass, run a trait-scoring pass over the new survivors: compute all three traits per conid, upsert `trait_scores` for `asof_date = today`.
-6. **Trait shelf-life retention**: drop trait_scores beyond shelf-life — 1 day for `intraday_range_trader`, 3 days for `catalyst_reversal`, 5 days for `post_earnings_drift`.
-7. **Dynamic universe inclusion wiring** (carried forward from S1 skeleton) — pre-market sweep promotes non-Ring-1 tickers showing 3× volume gap using the daily-bar pipeline this batch establishes.
-8. **`services/notify.ts:notifyTraitFirstFire(trait, symbol, payload)`** — first-fire-per-(conid, trait, day) Discord ping. Routes catalyst_reversal + post_earnings_drift to `#upside-catalyst-alerts` (env `DISCORD_WEBHOOK_CATALYST_ALERTS`); `intraday_range_trader` is silent.
+1. **Migration `01X_trait_scores.sql`** — `trait_scores(conid, trait, asof_date, score, payload jsonb, computed_at, PRIMARY KEY (conid, trait, asof_date))` per `spec/schema.md`. Realtime enabled. Note: `conid` here references `universe.real_conid` (S1.5), not the synthetic PK.
+
+2. **`server/src/services/screener/traits/intradayRangeTrader.ts`** — pure function reading `intraday_stats` rows (joined via `universe.real_conid`), applying threshold rules (p50 ≥ 2%, p25 ≥ 1%, sample_size ≥ 30, envelope-tightness ≤ 1.5, price-bonus for sub-$30). Vitest fixtures.
+
+3. **`server/src/services/screener/traits/catalystReversal.ts`** — **three-stage** per spec:
+   - **Stage 0**: pull Finnhub `/calendar/earnings` (today + last 3 days) + a daily `/news-sentiment` sweep over universe tickers showing prior-day news. Candidates = universe ∩ (had-news ∪ reported-earnings). ~100–300/day.
+   - **Stage 1**: IB snapshot per Stage-0 candidate (~9 min IB). Flag those showing ≥3× vol vs `universe.last_avg_volume` AND ≥5% gap/intraday move.
+   - **Stage 2**: `ibHistory(real_conid, '1y', '1d')` per Stage-1 hit (~5–50 tickers/day, ~1 min IB). Evaluate A ∧ B (beaten-down + confirmed wake-up). Survivors → `trait_scores` + set `universe.auto_promoted=true`.
+
+4. **`server/src/services/screener/traits/postEarningsDrift.ts`** — Finnhub `/calendar/earnings` (one bulk call) + close-up-on-report-day test via `ibHistory(real_conid, '1m', '1d')` on each reporter (~10–50/day, ~1 min IB).
+
+5. **Staggered `intradayStatsCron` extension** — change the cron from "iterate active watchlist conids" to "iterate `universe WHERE filter_result='in' AND real_conid IS NOT NULL AND real_conid mod 7 = day_of_week`" (plus continue covering watchlist conids for back-compat). Each ticker refreshes weekly; ~430 universe tickers/day × ~1 sec IB = ~7 min IB/day. Spec: `spec/signals/screener-universe.md` → Caching + staggering.
+
+6. **Weekly market-cap refresh cron** (Sunday) — re-pulls Finnhub `/stock/profile2` for all `filter_result='in'` rows to update `last_market_cap_m` + `last_avg_volume`. ~50 min Finnhub / week. Filter re-evaluates at next nightly `universeCron` pass.
+
+7. **Trait shelf-life retention**: drop `trait_scores` beyond shelf-life — 1 day for `intraday_range_trader`, 3 days for `catalyst_reversal`, 5 days for `post_earnings_drift`. Daily cleanup task.
+
+8. **`services/notify.ts:notifyTraitFirstFire(trait, symbol, payload)`** — first-fire-per-(conid, trait, day) Discord ping. Routes `catalyst_reversal` + `post_earnings_drift` to `#upside-catalyst-alerts` (env `DISCORD_WEBHOOK_CATALYST_ALERTS`); `intraday_range_trader` is silent (baseline trait, would spam).
 
 ### Files this batch creates/edits
 - `supabase/migrations/01X_trait_scores.sql` (new)
 - `server/src/services/screener/traits/*.ts` (new — three trait functions + vitest)
-- `server/src/cron/universeCron.ts` (extend the scoring pass)
+- `server/src/cron/universeCron.ts` (extend with the scoring pass + Stage-0 news pre-filter for catalyst)
+- `server/src/cron/intradayStatsCron.ts` (change target list to staggered universe set)
+- `server/src/cron/marketCapRefreshCron.ts` (new — Sunday weekly cap+vol refresh)
 - `server/src/services/notify.ts` (add `notifyTraitFirstFire`)
-- `server/src/services/finnhub.ts` (extend with `/calendar/earnings` if not present)
+- `server/src/services/finnhub.ts` (extend with `/calendar/earnings`, `/news-sentiment` if not present)
 - `.env.example` (add `DISCORD_WEBHOOK_CATALYST_ALERTS`)
 
 ### Does NOT touch

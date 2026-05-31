@@ -67,6 +67,45 @@ Catches REPL-on-FDA-day even when its baseline 30d volume was below the
 1M-shares floor. No mid-day broad-pool discovery in v1 — see `roadmap.md` →
 Screener deferred items.
 
+### Conid resolution (S1.5)
+
+Finnhub's `/stock/symbol` payload is figi/cusip-keyed — no IBKR conids. Two
+options for `universe.conid` key:
+
+- **Synthetic** (Batch S1 ships this): negative-bigint FNV-1a hash of
+  `mic|symbol`. Lets the table have a PK + re-runs are idempotent. Cheap.
+  But doesn't join to anything IB-keyed (`intraday_stats`, `positions`,
+  `watchlist_items`, IB history calls).
+- **Real conids** (S1.5): add `real_conid bigint null` column, resolve via
+  `ibSecdefSearch(symbol)` filtering to `secType=STK + currency=USD +
+  exchange ∈ {NASDAQ, NYSE, AMEX}`. ~95% resolve unambiguously; ambiguous
+  cases (dual listings, A/B classes) take the first-listed / primary
+  exchange as tiebreaker.
+
+S1.5 resolves the **whole ~5,300 type+MIC pool**, not just Ring-1 IN — the
+`catalyst_reversal` Stage-1 detector needs to snapshot tickers currently OUT
+by volume too. ~45 min IB **once**, cached forever per ticker. Re-resolve
+only on universe additions.
+
+### Caching + staggering — daily IB usage budget
+
+Naive per-tick refresh of every universe row would push daily IB usage to
+6-8 hours, incompatible with the on-demand IBeam model. Cache aggressively,
+recompute only when stale, gate expensive paths on cheap signals:
+
+| Field / step | Refresh cadence | Daily cost |
+| --- | --- | --- |
+| `real_conid`              | once per ticker, cached forever | ~0 (one-time S1.5) |
+| `last_market_cap_m`, `last_avg_volume`, 52w hi/lo | **weekly** (Sunday cron) | ~50 min Finnhub / week, not nightly |
+| `last_price`              | daily, IB snapshot per Ring-1 IN | ~5 min IB / day |
+| `intraday_stats`          | **weekly per ticker, staggered** by `(conid mod 7)` — each day refreshes 1/7 of the universe (~430 tickers) | ~7 min IB / day |
+| `catalyst_reversal` detection | **event-gated** (see trait below) | ~10 min IB / day |
+| `post_earnings_drift`     | one earnings-calendar call + per-reporter daily-bar | ~1 min IB / day |
+| Walking bands (S3, per session) | per 5-min tick on curated ~100 only | continuous lightweight |
+
+**Total daily IB usage ~15-20 min after caching** — well within on-demand
+IBeam. 13.3 (always-on IB) becomes a nice-to-have, not a hard prerequisite.
+
 ## Traits
 
 Each trait is a pure-function rule over the existing computed feature pack
@@ -95,20 +134,42 @@ on the FE row chip.
 
 ### `catalyst_reversal`
 
-REPL-on-FDA-day. Mechanical volume-gap detection, no news API needed.
+REPL-on-FDA-day. A discovery mechanism — promotes tickers from the
+filtered-out pool back into the screener for the day. **Three-stage gate**
+keeps it cheap:
 
-Rule — A ∧ B both must hold:
+**Stage 0 — event/news pre-filter (single Finnhub call/day).** Pull
+`/calendar/earnings` (today + last 3 days) and a daily `/news-sentiment`
+sweep restricted to tickers showing **any** prior-day news. Candidates for
+Stage 1 = type+MIC pool ∩ (had-news-today ∪ reported-earnings-recently).
+Drops the candidate pool from ~5,300 to ~100-300/day.
+
+**Stage 1 — broad cheap volume detection (IB snapshot, ~9 min).** One IB
+snapshot per Stage-0 candidate (or per Ring-1 IN ticker for already-active
+names) reads today's open + volume + price. Flag the few showing **≥3× vol
+gap** vs `universe.last_avg_volume` AND **≥5% gap or intraday move**.
+
+**Stage 2 — expensive A ∧ B evaluation (only on Stage-1 hits, ~5–50/day).**
+Pull `ibHistory(conid, '1y', '1d')` for daily bars. Evaluate:
 
 - **A (beaten down)** — any of:
   - `price < SMA(200)` (sustained downtrend), OR
   - `% off 52w high > 30%`, OR
   - `RSI(14)` hit `< 30` within last 30 sessions
-- **B (sudden wake-up)** — both:
-  - `today_volume > 3 × median(volume, 30d)` (the gap)
+- **B (sudden wake-up, confirmed from history)** — both:
+  - `today_volume > 3 × median(volume, 30d)`
   - `|today_intraday_move %| > 5%` OR `|today_open_gap %| > 5%`
 
-Score: composite of (gap multiplier × intraday-move magnitude × beaten-down
-depth). Shelf life 1–3 days from `last_fired_at`; trait drops off automatically.
+Stage-2 survivors → `trait_scores` entry → Discord ping → promoted into
+`universe.filter_result='in'` with `auto_promoted=true` for the day so the
+rest of the screener picks them up. Score: composite of (gap multiplier ×
+intraday-move magnitude × beaten-down depth). Shelf life 1–3 days from
+`last_fired_at`; trait drops off automatically.
+
+**Why event-gated**: tickers don't move 5%+ on 3× vol without a reason; if
+there's no news / earnings, the volume signal is likely noise (illiquid
+microcap chop, options-expiry weirdness). The Stage-0 filter loses very few
+real catalyst events while cutting Stage-1 cost by ~20×.
 
 ### `post_earnings_drift`
 

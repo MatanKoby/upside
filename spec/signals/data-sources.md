@@ -44,3 +44,27 @@ the post-Batch-B work.
 - **SEC EDGAR API** (`https://data.sec.gov/`): no rate limit, official, gives company facts (fundamentals, insider holdings, ownership) better than Finnhub's free tier in many cases. Planned as a Finnhub-fundamentals supplement.
 - **yfinance / Yahoo pattern** (unofficial, no key, ToS-gray): potential redundancy + fallback layer. Listed for completeness — not yet committed to.
 - **Alpha Vantage / Twelve Data / Polygon free tiers**: backup quote/candle providers if Finnhub becomes a bottleneck. Each has a different free-tier shape; none has been adopted yet. See `roadmap.md` → Track 9 for the chart-resilience research.
+
+## Universe coverage — alternative data sources (S0.5 research scope)
+
+The screener needs **price + volume** on the ~3,000-ticker universe, not
+just the ~25 held + watchlist conids. Finnhub free `/quote` provides price
+but **no volume field**. IB snapshot has both but is rate-limited + requires
+real conids + on-demand session. The S0.5 batch researches whether a
+free-tier alternative can fill the gap so universe coverage doesn't push
+daily IB usage past the on-demand budget:
+
+- **yfinance / Yahoo (unofficial)** — free, no key, has intraday OHLCV +
+  daily volume. ToS-gray for high-volume use; fine at our scale.
+- **Polygon.io free tier** — 5 calls/min, but provides aggregate volume
+  and trades. Probably too thin for daily universe sweep.
+- **Alpaca Market Data (free IEX feed)** — bars + volume; requires Alpaca
+  account but free.
+- **Twelve Data free** — 8 calls/min, 800/day; quotes with volume field.
+  Cap is too tight for ~3,000-ticker daily sweep.
+- **IEX Cloud sunset path** — historical option, mostly paid now.
+
+Goal: pick one that provides **batch quote with volume** OR per-ticker
+quote-with-volume cheap enough for a daily universe sweep without IB. If
+none qualify, S0.5 concludes "IB snapshot is the only viable source" and
+the screener coverage stays IB-gated.
