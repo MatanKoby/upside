@@ -31,6 +31,11 @@ interface MarketSnapshot {
     beta: number | null;
     avgVol30d: number | null;
     dividend: number | null;
+    // Volatility (added 2026-05-30) — null when IB is disconnected.
+    atrPctOfPrice: number | null;
+    atrDollar: number | null;
+    scalpableSessions30d: number | null;
+    scalpableTotalSessions: number | null;
   };
 }
 
@@ -49,20 +54,52 @@ function buildMarketStats(snap: MarketSnapshot): MarketStat[] {
     snap.week52Low == null || snap.week52High == null
       ? DASH
       : `${formatCurrency(snap.week52Low)}–${formatCurrency(snap.week52High)}`;
-  // Default-visible set, shown 4-per-row (up to 3 rows). put/call + tweet
-  // volume have no data source yet, so they stay off. The grid renders every
-  // enabled stat (no fixed cap); the Edit panel toggles them (persistence is
-  // Batch 15).
+
+  // Volatility cells — "5.2% · $0.42" format. Both halves carry meaning: the
+  // % tells you "scalpable" (3%+ = real moves), the $ tells you absolute
+  // tick magnitude (helpful for sizing limit orders). Hidden when ATR is
+  // null (IB disconnected; no Finnhub free candle fallback).
+  const atrCell =
+    s.atrPctOfPrice == null || s.atrDollar == null
+      ? DASH
+      : `${s.atrPctOfPrice.toFixed(1)}% · ${formatCurrency(s.atrDollar)}`;
+  // Range today — purely client-side from existing snapshot fields (no extra
+  // call). Same dual format as ATR so they compare cleanly side-by-side.
+  const rangeTodayCell = (() => {
+    if (snap.dayLow == null || snap.dayHigh == null) return DASH;
+    const range = snap.dayHigh - snap.dayLow;
+    if (range <= 0) return DASH;
+    const base = snap.open ?? snap.last ?? snap.prevClose;
+    if (base == null || base <= 0) return formatCurrency(range);
+    return `${((range / base) * 100).toFixed(1)}% · ${formatCurrency(range)}`;
+  })();
+  const scalpableCell =
+    s.scalpableSessions30d == null || s.scalpableTotalSessions == null
+      ? DASH
+      : `${s.scalpableSessions30d}/${s.scalpableTotalSessions}` +
+        (s.scalpableTotalSessions > 0
+          ? `  (${Math.round((s.scalpableSessions30d / s.scalpableTotalSessions) * 100)}%)`
+          : '');
+
+  // Default-visible set, shown 4-per-row. Order puts the scalping-decision
+  // metrics in prime real estate (ATR + Range today + Scalpable sessions on
+  // top), with traditional fundamentals (P/E, EPS, beta) deeper in the grid.
+  // Beta stays in the grid but no longer headlined as the volatility cell —
+  // it measures correlation to the market, not intraday swing magnitude
+  // (see `spec/signals/screener-universe.md` rationale).
   return [
-    { key: 'volume', label: 'Volume', value: cnt(s.volume), enabled: true },
-    { key: 'fwdPE', label: 'P/E', value: num(s.peRatio, 1), enabled: true },
-    { key: 'priorClose', label: 'Prior close', value: cur(snap.prevClose), enabled: true },
-    { key: 'beta', label: 'Beta', value: num(s.beta, 2), enabled: true },
-    { key: 'open', label: 'Open', value: cur(snap.open), enabled: true },
-    { key: 'eps', label: 'EPS', value: cur(s.eps), enabled: true },
+    { key: 'atr', label: 'ATR (14d)', value: atrCell, enabled: true },
+    { key: 'rangeToday', label: 'Range today', value: rangeTodayCell, enabled: true },
+    { key: 'scalpableSessions', label: 'Scalpable sessions', value: scalpableCell, enabled: true },
     { key: 'range52w', label: '52w range', value: range52, enabled: true },
-    { key: 'marketCap', label: 'Market cap', value: s.marketCap == null ? DASH : formatCompactCurrency(s.marketCap), enabled: true },
+    { key: 'volume', label: 'Volume', value: cnt(s.volume), enabled: true },
     { key: 'avgVolume', label: 'Avg volume', value: cnt(s.avgVol30d), enabled: true },
+    { key: 'marketCap', label: 'Market cap', value: s.marketCap == null ? DASH : formatCompactCurrency(s.marketCap), enabled: true },
+    { key: 'priorClose', label: 'Prior close', value: cur(snap.prevClose), enabled: true },
+    { key: 'open', label: 'Open', value: cur(snap.open), enabled: true },
+    { key: 'fwdPE', label: 'P/E', value: num(s.peRatio, 1), enabled: true },
+    { key: 'eps', label: 'EPS', value: cur(s.eps), enabled: true },
+    { key: 'beta', label: 'Beta', value: num(s.beta, 2), enabled: true },
     { key: 'dividend', label: 'Dividend', value: cur(s.dividend), enabled: true },
     { key: 'putCall', label: 'Put/call', value: DASH, enabled: false },
     { key: 'tweetVolume', label: 'Tweet volume', value: DASH, enabled: false },

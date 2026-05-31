@@ -50,7 +50,12 @@ export type MarketStatKey =
   | 'dividend'
   | 'putCall'
   | 'tweetVolume'
-  | 'avgVolume';
+  | 'avgVolume'
+  // Volatility metrics (added 2026-05-30) — see buildMarketStats in
+  // hooks/useTickerDetail.ts. Headlines the scalping-decision view.
+  | 'atr'
+  | 'rangeToday'
+  | 'scalpableSessions';
 
 export type MarketStat = {
   key: MarketStatKey;

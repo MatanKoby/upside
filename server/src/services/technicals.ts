@@ -154,6 +154,12 @@ function atrLast(bars: Bars, period = 14): number | null {
   return lastOf(out);
 }
 
+// Public ATR helper for surfaces that don't build a full feature pack —
+// MarketStats panel uses this directly (Batch C+1, 2026-05-30).
+export function atr(bars: Bars, period = 14): number | null {
+  return atrLast(bars, period);
+}
+
 // Classic floor-trader pivots from the prior completed session's H/L/C.
 function classicPivots(priorHigh: number, priorLow: number, priorClose: number) {
   const p = (priorHigh + priorLow + priorClose) / 3;

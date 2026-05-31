@@ -10,6 +10,7 @@ import {
 } from '../services/redis.js';
 import { supabase } from '../services/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
+import { atr } from '../services/technicals.js';
 import type { RawIbSnapshot } from '../types/index.js';
 
 const router = Router();
@@ -134,6 +135,15 @@ export interface MarketSnapshot {
     beta: number | null;
     avgVol30d: number | null;
     dividend: number | null;
+    // Volatility — added 2026-05-30. ATR is the right "how much does this stock
+    // swing intraday" metric (beta is correlation-to-market, not vol). Computed
+    // from IB daily history; null when IB is disconnected (no Finnhub free
+    // candles, so no fallback). See `signals/screener-universe.md` for the
+    // scalpable-sessions definition.
+    atrPctOfPrice: number | null;     // ATR(14) / last close × 100 — e.g. 5.2 means typical day moves 5.2% of price
+    atrDollar: number | null;         // ATR(14) in absolute dollars — e.g. 0.42
+    scalpableSessions30d: number | null;  // count of last 30 sessions with intraday range ≥ 3%
+    scalpableTotalSessions: number | null; // denominator (≤ 30 when fewer bars returned)
   };
 }
 
@@ -272,6 +282,75 @@ async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
   return result;
 }
 
+interface Volatility {
+  atrPctOfPrice: number | null;
+  atrDollar: number | null;
+  scalpableSessions30d: number | null;
+  scalpableTotalSessions: number | null;
+}
+const EMPTY_VOL: Volatility = {
+  atrPctOfPrice: null,
+  atrDollar: null,
+  scalpableSessions30d: null,
+  scalpableTotalSessions: null,
+};
+
+// Volatility tier: ATR(14) + last-30-sessions scalpability from IB daily bars.
+// Cached 6h (daily-grain). When IB is off, no Finnhub candle fallback (paid
+// tier only), so we surface null and the FE renders "—".
+async function getVolatility(userId: string, symbol: string): Promise<Volatility> {
+  const key = `mkt:vol:${symbol}`;
+  try {
+    const cached = await redisGet(key);
+    if (cached) return JSON.parse(cached) as Volatility;
+  } catch {
+    // Redis down → compute fresh.
+  }
+
+  const conid = await resolveConid(userId, symbol);
+  if (!conid) return EMPTY_VOL;
+
+  const { authenticated, connected } = await ibStatus().catch(() => ({
+    authenticated: false,
+    connected: false,
+  }));
+  if (!authenticated || !connected) return EMPTY_VOL;
+
+  const hist = await ibHistory(conid, '1y', '1d').catch(() => null);
+  const bars = hist?.data ?? [];
+  if (bars.length < 15) return EMPTY_VOL;
+
+  // Use the last 30 daily bars for both ATR(14) and scalpable-session count.
+  // ATR(14) needs 15 bars minimum; 30 gives a stable reading and matches the
+  // scalpable denominator.
+  const recent = bars.slice(-30);
+  const barsForAtr = {
+    o: recent.map((b) => b.o),
+    h: recent.map((b) => b.h),
+    l: recent.map((b) => b.l),
+    c: recent.map((b) => b.c),
+    v: recent.map((b) => b.v),
+  };
+  const atrAbs = atr(barsForAtr, 14);
+  const lastClose = recent[recent.length - 1]?.c ?? null;
+  const atrPct =
+    atrAbs != null && lastClose != null && lastClose > 0 ? (atrAbs / lastClose) * 100 : null;
+
+  // Scalpable session = intraday range ≥ 3% of the open (matches the screener
+  // `intraday_range_trader` trait threshold, so this number is "how often does
+  // this stock meet the screener's range bar").
+  const scalpable = recent.filter((b) => b.o > 0 && (b.h - b.l) / b.o >= 0.03).length;
+
+  const result: Volatility = {
+    atrPctOfPrice: atrPct,
+    atrDollar: atrAbs,
+    scalpableSessions30d: scalpable,
+    scalpableTotalSessions: recent.length,
+  };
+  void setWithTtl(key, JSON.stringify(result), FUNDAMENTALS_TTL_S).catch(() => undefined);
+  return result;
+}
+
 // Fundamentals tier: Finnhub /stock/metric, cached 6h (daily-grain data).
 async function getFundamentals(symbol: string): Promise<FinnhubMetrics | null> {
   const key = marketFundamentalsKey(symbol);
@@ -297,9 +376,10 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
     return;
   }
 
-  const [intraday, metric] = await Promise.all([
+  const [intraday, metric, volatility] = await Promise.all([
     getIntraday(req.user.id, symbol),
     getFundamentals(symbol),
+    getVolatility(req.user.id, symbol),
   ]);
 
   // marketCap + avg-vol arrive from Finnhub in millions.
@@ -326,6 +406,10 @@ router.get('/snapshot/:symbol', async (req: Request, res: Response) => {
       beta: pickMetric(metric, ['beta']),
       avgVol30d: avgVolM == null ? null : avgVolM * 1e6,
       dividend: pickMetric(metric, ['dividendPerShareTTM', 'dividendPerShareAnnual']),
+      atrPctOfPrice: volatility.atrPctOfPrice,
+      atrDollar: volatility.atrDollar,
+      scalpableSessions30d: volatility.scalpableSessions30d,
+      scalpableTotalSessions: volatility.scalpableTotalSessions,
     },
   };
 
