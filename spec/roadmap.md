@@ -302,3 +302,26 @@ Currently, band-touches notify (Discord) but don't write `watchlist_markers` row
 `vol_regime_shift` currently sets a flag + annotation. v2: when the flag fires, dynamically truncate the lookback window to post-shift sessions only when computing `intraday_stats`. The trick is detecting the regime break point cleanly (5-session ATR jump is noisy; need better edge detection).
 
 **Revisit when** we have ≥5 observed `vol_regime_shift` cases logged, so the truncation rule can be calibrated against real data rather than a synthetic estimate.
+
+---
+
+## Tech debt + low-priority cleanups
+
+A holding pen for known inefficiencies, minor bugs, and small architectural cleanups that aren't worth their own batch right now. Items move out of here either when their cost grows enough to matter or when a related batch picks them up "while we're touching that file." Distinct from the deferred-feature tracks above (those are forward functionality; this is hygiene on what already ships).
+
+Format per entry: **what's wrong** · **observed impact** · **proposed fix** · **trigger to claim**.
+
+### Unresolvable-symbol retry loop in conidResolutionProducer
+
+**What's wrong:** when a universe ticker has no IB STK match (share-class suffixes like `BF.A` / `BF.B`, foreign-only listings, delisted-since-Finnhub-pull), the worker fails the job after 2 attempts and the producer calls `finalizeFailure` → row deleted from `screener_jobs`. **But** the next 24h producer cycle re-scans `universe WHERE real_conid IS NULL`, sees the same symbol, re-enqueues. Endless 24h-scale loop for permanently-unresolvable tickers.
+
+**Observed impact (2026-06-02):** 7 unresolvable symbols out of ~3,000-row backlog → ~14 wasted IB secdef calls per symbol per year ≈ ~100 calls/year total. Negligible at current scale; would matter if the pattern grows or if IB rate-limits become tight.
+
+**Proposed fix** (~10 min):
+1. Migration: add `last_resolution_attempt_at timestamptz` to `universe`.
+2. Producer `loadPendingRows` query: `... AND (last_resolution_attempt_at IS NULL OR last_resolution_attempt_at < now() - interval '7 days')`.
+3. On `finalizeFailure`, producer updates the universe row's `last_resolution_attempt_at = now()`.
+
+Result: each unresolvable symbol re-attempted at most weekly (catches genuinely-new IB indexings) while costing ~2 calls/symbol/week instead of ~2 calls/symbol/day.
+
+**Trigger to claim:** when this category grows past ~50 symbols OR IB rate-limit budget becomes tight OR when next touching `conidResolutionProducer.ts` for another reason.
