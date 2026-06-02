@@ -325,3 +325,36 @@ Format per entry: **what's wrong** · **observed impact** · **proposed fix** ·
 Result: each unresolvable symbol re-attempted at most weekly (catches genuinely-new IB indexings) while costing ~2 calls/symbol/week instead of ~2 calls/symbol/day.
 
 **Trigger to claim:** when this category grows past ~50 symbols OR IB rate-limit budget becomes tight OR when next touching `conidResolutionProducer.ts` for another reason.
+
+---
+
+## Meta — agent context efficiency
+
+Agent (Claude Code / Cursor) sessions on this repo run at 150k+ tokens routinely because the coordinating files (`BUILD_QUEUE.md`, `CLAIMS.md`) and the larger spec files exceed Read-tool single-call caps and force re-reads + truncation. Anthropic's own Skills file convention sits at <250 tokens per skill — a deliberate "one fact per file" discipline. We're missing that discipline; the result is wasted tokens, slower turns, and stale-context risk near the cap.
+
+The fix is **measure first, split second** — don't guess which files are the hot ones.
+
+### Observability: per-file Read counter
+
+PreToolUse hook on the `Read` tool appends one line per call to a gitignored stats file (`.claude-stats/file-reads.log`): UTC timestamp, file path, byte count, session id. A small helper (`bin/upside-readstats`) aggregates: reads per file (lifetime + last 7 days), avg bytes per read, sessions touched. Lets us answer "which files cost the most context per week?" without guessing.
+
+The hook is non-blocking (`exit 0` always) and stateless beyond the append; failure modes don't break tool calls. Opt-out by deleting the hook entry from `.claude/settings.local.json`.
+
+### Splitting discipline
+
+After ~1 week of stats, top-N hot files get sliced. Two known-hot candidates already visible without data:
+
+- **`BUILD_QUEUE.md`** (1101 lines, ~38k tokens) — split into `BUILD_QUEUE.md` (un-done batches only) + `BUILD_QUEUE_DONE.md` (completed batch one-liners). Halves a typical orientation read.
+- **`CLAIMS.md`** (463 lines, ~30k tokens) — same split: `CLAIMS.md` (in-progress + recent completed) + `CLAIMS_DONE.md` (archive of older completed batches).
+
+Spec files (`spec/signals/*.md`, `spec/schema.md`) get split based on the measured numbers — guessing "schema.md is too big" without data risks fragmenting coherent reads that work fine today. The Anthropic Skill <250-token discipline is the **ceiling** to aspire to for per-fact files, not a one-size-fits-all rule for narrative spec files.
+
+### Reference policy
+
+`AGENTS.md` gets a short addendum: "Before reading a large file, use Grep / line-range Read to scope to the section you need. The whole-file read pattern only makes sense for files <500 lines or first-time orientation." Encodes the read-discipline the splitting is meant to enable.
+
+### Non-goals
+
+- Don't split files that are already small and coherent just to hit a token target — coherence beats fragmentation.
+- Don't auto-summarize the archive files; agents that need the full history still get it via a deliberate read.
+- Don't add the counter to non-Read tools — Write/Edit/Bash are fast enough that the noise outweighs the data.

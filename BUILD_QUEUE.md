@@ -85,7 +85,7 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring engine). The screener track now sequences as **S3 → S4**, with **S3 the next claim** (band engine — adaptive layers on top of the static intraday-stats band). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S3** is the most likely answer right now.
+> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring engine). The screener track now sequences as **S3 → S4**, with **S3 the next claim** (band engine — adaptive layers on top of the static intraday-stats band). Orthogonal slice that can land in parallel: **Batch M1** (agent context efficiency — Read-counter hook + immediate splits of BUILD_QUEUE / CLAIMS). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S3** is the most likely answer right now.
 
 ---
 
@@ -391,6 +391,60 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 - Tap a band chip → popover with next-low and next-high bands.
 - Long-press → promote sheet works; "Add to Watchlist" writes a `watchlist_items` row; the new ticker appears in Watchlist on next render.
 - Loading state shows header + accordion shells (not a whiteout — follows the loading-state pattern shipped 2026-05-30).
+
+---
+
+## Batch M1: Agent context efficiency — measurement + file size discipline
+
+**Depends on:** none. Pure tooling + dev-workflow batch; no product surface.
+
+**Scope:** stop paying for 150k+-token agent sessions where most of the burn is re-reading bloated coordination files. Two slices that ship together: (1) a PreToolUse hook that counts per-file Read calls so we know which files to split, (2) a first round of obvious splits applied immediately based on what's already visible (BUILD_QUEUE.md + CLAIMS.md). Subsequent split rounds run **data-driven** after a week of stats. Spec: `spec/roadmap.md` → Meta — agent context efficiency.
+
+### Observed pain (why now)
+
+This session alone: `BUILD_QUEUE.md` (1101 lines, ~38k tokens) and `CLAIMS.md` (463 lines, ~30k tokens) both blew the Read-tool 25k single-call cap and forced truncated reads + follow-up Grep calls. `/context` reports messages at 183k tokens, dominated by tool-result file contents. Cache misses past the 5-min TTL on long sessions compound the cost. Splitting these two files alone is expected to halve the typical orientation read.
+
+### Deliverables
+
+1. **`.claude/hooks/read-counter.sh`** — PreToolUse hook on the `Read` tool. Appends one tab-separated line per call to gitignored `.claude-stats/file-reads.log`: `<utc-iso>\t<file-path>\t<bytes>\t<session-id>`. Non-blocking (`exit 0` always); silent (no stdout); resilient to a missing stats dir (creates on first call). Registered in `.claude/settings.local.json` so it loads only in this repo + only for the user who opts in.
+2. **`bin/upside-readstats`** — aggregator script: prints "top N most-read files" (lifetime + last 7d), avg bytes per read, sessions touched. Allowlisted via `Bash(bin/upside-readstats:*)` so the user (or the agent) can call it without an approval prompt. Reads from the gitignored log; never writes secrets.
+3. **`.claude-stats/` directory** — gitignored. Created lazily by the hook. `.gitignore` line added.
+4. **`.gitignore` update** — `.claude-stats/`.
+5. **Immediate splits (no data needed — already evident)**:
+   - `BUILD_QUEUE.md` → keep current shape but move the **Completed batches** one-paragraph summaries (currently lines 18-83) into a new **`BUILD_QUEUE_DONE.md`** (archive). The active file becomes "Un-done batches + pick-order pointer" only. Cross-link from BUILD_QUEUE.md's top: "Completed history: see `BUILD_QUEUE_DONE.md`."
+   - `CLAIMS.md` → analogous: keep In progress + Known issues + the last ~5 completed batches; move older completed entries to a new **`CLAIMS_DONE.md`** (archive). Cross-link from CLAIMS.md's bottom: "Older completed batches archived in `CLAIMS_DONE.md`."
+6. **`AGENTS.md` addendum** — a short "Read discipline" section: "Before reading a large file, use Grep / line-range Read to scope to the section you need. Whole-file reads only make sense for files <500 lines or first-time orientation." Encodes the read pattern the splitting enables.
+7. **Spec roadmap update** is already in place (`spec/roadmap.md` → Meta — agent context efficiency).
+
+### Out of scope (deferred to a data-driven follow-up after ~1 week of stats)
+
+- Splitting spec files (`spec/signals/*.md`, `spec/schema.md`) — coherence beats fragmentation; wait for the read-counter data to identify which sections are actually re-read independently before slicing.
+- Splitting code files — same reasoning; measure before cutting.
+- Auto-summarization of archive files.
+- Hooks on Write / Edit / Bash — not where the context goes.
+
+### Files this batch creates/edits
+- `.claude/hooks/read-counter.sh` (new)
+- `.claude/settings.local.json` (register the hook)
+- `bin/upside-readstats` (new, chmod +x)
+- `.gitignore` (add `.claude-stats/`)
+- `BUILD_QUEUE.md` (move Completed batches → archive)
+- `BUILD_QUEUE_DONE.md` (new)
+- `CLAIMS.md` (move older completed → archive)
+- `CLAIMS_DONE.md` (new)
+- `AGENTS.md` (Read discipline section)
+
+### Verification
+
+- `bin/upside-readstats` prints a table after a few sessions; "top 5" should match intuition (BUILD_QUEUE / CLAIMS / large spec files).
+- `BUILD_QUEUE.md` Read returns under the 25k cap without truncation.
+- `CLAIMS.md` Read returns under the 25k cap without truncation.
+- Existing pointers ("the screener track now sequences as S0.3 → ... → S4") still resolve cleanly post-split; un-done batch lookups don't require cross-file traversal.
+- A clean session orientation read costs measurably fewer tokens (track via `/context` before/after).
+
+### Trigger for the data-driven follow-up batch (M2, sketched only)
+
+After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code files with sustained heavy read traffic AND a clear sub-structure that maps to independent reads (e.g. one section of a file consistently read alone), spawn M2 to split those. Don't pre-spec M2 — let the data shape it.
 
 ---
 
