@@ -1,0 +1,258 @@
+// postEarningsDriftProducer — Batch S2.
+//
+// Daily producer for the post_earnings_drift trait. One Finnhub call
+// covers the candidate set; per-reporter IB history calls land on the
+// `ib` worker pool via `eval_post_earnings_drift` jobs.
+//
+// Flow per spec/signals/screener-universe.md → post_earnings_drift:
+//   1. Bulk /calendar/earnings for the last 5 trading days.
+//   2. Filter to universe IN ∩ real_conid resolved.
+//   3. Enqueue 'eval_post_earnings_drift' per (real_conid, report_date).
+//   4. Drain done — worker returned {report_day_pop_pct, days_since,
+//      today_close}; run scorePostEarningsDrift; write trait_scores +
+//      notifyTraitFirstFire on first fire.
+//
+// Cadence: 24h, 11-min boot delay (after catalystReversalProducer).
+
+import { supabase } from '../services/supabase.js';
+import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
+import { earningsCalendarRange } from '../services/finnhub.js';
+import {
+  enqueue,
+  drainDone,
+  drainFailed,
+  deleteJob,
+  markRetry,
+  finalizeFailure,
+  type JobRow,
+} from '../services/jobs/queue.js';
+import { makeKey } from '../services/jobs/keys.js';
+import { ibRegistry } from '../services/jobs/actions.js';
+import { ibHistory } from '../services/ibGateway.js';
+import {
+  scorePostEarningsDrift,
+  findReportDayPop,
+} from '../services/screener/traits/postEarningsDrift.js';
+import type { RawIbHistory } from '../types/index.js';
+
+const CADENCE_MS = 24 * 60 * 60_000;
+const FIRST_RUN_DELAY_MS = 11 * 60_000;
+const MAX_RETRY_ATTEMPTS = 2;
+const LOOKBACK_TRADING_DAYS = 5;
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysAgoIsoDate(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60_000).toISOString().slice(0, 10);
+}
+
+interface ReporterTarget {
+  real_conid: number;
+  symbol: string;
+  report_date: string;
+}
+
+async function loadReporters(): Promise<ReporterTarget[]> {
+  const from = daysAgoIsoDate(LOOKBACK_TRADING_DAYS);
+  const to = todayIsoDate();
+  let earnings;
+  try {
+    earnings = await earningsCalendarRange(from, to);
+  } catch (e) {
+    void notifyError('postEarningsDriftProducer.earningsCal', (e as Error).message, e);
+    return [];
+  }
+  if (earnings.length === 0) return [];
+
+  // Most-recent report-date per symbol (Finnhub may list multiple rows for
+  // the same ticker in the window — rare but possible for revisions).
+  const latestBySymbol = new Map<string, string>();
+  for (const r of earnings) {
+    if (!r.symbol || !r.date) continue;
+    const cur = latestBySymbol.get(r.symbol);
+    if (cur == null || r.date > cur) latestBySymbol.set(r.symbol, r.date);
+  }
+  const symbols = Array.from(latestBySymbol.keys());
+
+  const out: ReporterTarget[] = [];
+  for (let i = 0; i < symbols.length; i += 900) {
+    const chunk = symbols.slice(i, i + 900);
+    const { data, error } = await supabase()
+      .from('universe')
+      .select('real_conid, symbol')
+      .eq('filter_result', 'in')
+      .not('real_conid', 'is', null)
+      .in('symbol', chunk);
+    if (error) {
+      void notifyError('postEarningsDriftProducer.loadReporters', error.message);
+      continue;
+    }
+    for (const row of (data ?? []) as Array<{ real_conid: number; symbol: string }>) {
+      const rd = latestBySymbol.get(row.symbol);
+      if (!rd) continue;
+      out.push({ real_conid: row.real_conid, symbol: row.symbol, report_date: rd });
+    }
+  }
+  return out;
+}
+
+async function enqueueJobs(targets: ReporterTarget[]): Promise<{ enqueued: number; deduped: number }> {
+  const asof = todayIsoDate();
+  let enqueued = 0, deduped = 0;
+  for (const t of targets) {
+    const jobKey = makeKey('eval_post_earnings_drift', t.real_conid, asof);
+    try {
+      const r = await enqueue(jobKey, 'eval_post_earnings_drift', 'ib', {
+        real_conid: t.real_conid,
+        symbol: t.symbol,
+        report_date: t.report_date,
+        asof_date: asof,
+      });
+      if (r === 'created') enqueued++; else deduped++;
+    } catch (e) {
+      void notifyError(`postEarningsDriftProducer.enqueue.${t.symbol}`, (e as Error).message);
+    }
+  }
+  return { enqueued, deduped };
+}
+
+interface PedJobResult {
+  report_day_pop_pct: number;
+  days_since_earnings: number;
+  today_close: number;
+}
+
+async function drainResults(): Promise<{ scored: number; dropped: number; retried: number; gave_up: number }> {
+  const done = await drainDone('eval_post_earnings_drift').catch((e: Error) => {
+    void notifyError('postEarningsDriftProducer.drainDone', e.message);
+    return [] as JobRow[];
+  });
+  let scored = 0, dropped = 0;
+  const nowIso = new Date().toISOString();
+  for (const j of done) {
+    const payload = j.payload as { real_conid?: number; symbol?: string; asof_date?: string };
+    const r = j.result as unknown as PedJobResult | undefined;
+    if (!r || payload.real_conid == null || !payload.symbol || !payload.asof_date) {
+      await deleteJob(j.id).catch(() => undefined);
+      dropped++;
+      continue;
+    }
+    const result = scorePostEarningsDrift({
+      report_day_pop_pct: r.report_day_pop_pct,
+      days_since_earnings: r.days_since_earnings,
+      today_price: r.today_close,
+    });
+    if (!result) {
+      dropped++;
+      await deleteJob(j.id).catch(() => undefined);
+      continue;
+    }
+    const { error } = await supabase()
+      .from('trait_scores')
+      .upsert(
+        {
+          conid: payload.real_conid,
+          trait: 'post_earnings_drift',
+          asof_date: payload.asof_date,
+          score: result.score,
+          payload: result.payload,
+          computed_at: nowIso,
+        },
+        { onConflict: 'conid,trait,asof_date' },
+      );
+    if (error) {
+      void notifyError(`postEarningsDriftProducer.upsert.${payload.symbol}`, error.message);
+      continue;
+    }
+    const { data: stamped } = await supabase()
+      .from('trait_scores')
+      .update({ last_fired_at: nowIso })
+      .eq('conid', payload.real_conid)
+      .eq('trait', 'post_earnings_drift')
+      .eq('asof_date', payload.asof_date)
+      .is('last_fired_at', null)
+      .select('conid');
+    if (stamped && stamped.length > 0) {
+      void notifyTraitFirstFire({
+        trait: 'post_earnings_drift',
+        symbol: payload.symbol,
+        score: result.score,
+        payload: result.payload,
+      });
+    }
+    scored++;
+    await deleteJob(j.id).catch(() => undefined);
+  }
+
+  const failed = await drainFailed('eval_post_earnings_drift').catch((e: Error) => {
+    void notifyError('postEarningsDriftProducer.drainFailed', e.message);
+    return [] as JobRow[];
+  });
+  let retried = 0, gave_up = 0;
+  for (const j of failed) {
+    if (j.attempts < MAX_RETRY_ATTEMPTS) {
+      await markRetry(j).catch(() => undefined);
+      retried++;
+    } else {
+      await finalizeFailure(j).catch(() => undefined);
+      gave_up++;
+    }
+  }
+  return { scored, dropped, retried, gave_up };
+}
+
+async function tick(): Promise<void> {
+  const t0 = Date.now();
+  const reporters = await loadReporters();
+  const enq = await enqueueJobs(reporters);
+  const drain = await drainResults();
+  const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(
+    `[postEarningsDriftProducer] reporters=${reporters.length} ` +
+      `enq[new=${enq.enqueued} dedup=${enq.deduped}] ` +
+      `drain[score=${drain.scored} drop=${drain.dropped} retry=${drain.retried} give-up=${drain.gave_up}] ` +
+      `elapsed=${elapsedSec}s`,
+  );
+}
+
+export function startPostEarningsDriftProducer(): void {
+  console.log('[postEarningsDriftProducer] starting, 24h cadence');
+  const loop = async () => {
+    try {
+      await tick();
+    } catch (e) {
+      void notifyError('postEarningsDriftProducer.loop', (e as Error).message, e);
+    }
+    setTimeout(loop, CADENCE_MS).unref();
+  };
+  setTimeout(loop, FIRST_RUN_DELAY_MS).unref();
+}
+
+// ---------------------------------------------------------------------------
+// Worker handler — `ib` pool. Pulls ~30 days of daily bars, extracts the
+// report-day pop via the pure helper, returns the values to the producer.
+// ---------------------------------------------------------------------------
+
+interface PedPayload {
+  real_conid: number;
+  symbol: string;
+  report_date: string;
+  asof_date: string;
+}
+
+ibRegistry['eval_post_earnings_drift'] = async (payloadIn) => {
+  const payload = payloadIn as unknown as PedPayload;
+  if (payload.real_conid == null) throw new Error('eval_post_earnings_drift: missing real_conid');
+  const hist: RawIbHistory | null = await ibHistory(payload.real_conid, '1m', '1d');
+  if (!hist?.data || hist.data.length < 2) {
+    throw new Error(`eval_post_earnings_drift: insufficient bars for ${payload.symbol}`);
+  }
+  const bars = hist.data.map((b) => ({ t: b.t, c: b.c }));
+  const found = findReportDayPop(bars, payload.report_date);
+  if (!found) {
+    throw new Error(`eval_post_earnings_drift: no report-day bar for ${payload.symbol} on ${payload.report_date}`);
+  }
+  return found as unknown as Record<string, unknown>;
+};

@@ -26,6 +26,10 @@ export interface JobRow {
   lease_expires_at: string | null;
   attempts: number;
   last_error: string | null;
+  // Worker-written output, consumed by the producer during drainDone for
+  // multi-stage flows (e.g. catalyst_reversal Stage 1 → Stage 2). Added in
+  // migration 025 (Batch S2); empty object for actions that don't use it.
+  result: Record<string, unknown>;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -133,13 +137,22 @@ export async function finalizeFailure(failed: JobRow): Promise<void> {
 
 /**
  * Worker-facing — marks the in-flight job as `done`. Worker calls this
- * after writing the result onto the target table.
+ * after writing the result onto the target table. The optional `result`
+ * payload is for multi-stage flows where the producer needs the worker's
+ * computed value to decide the next step (catalyst_reversal Stage 1 → 2);
+ * single-stage actions can omit it.
  */
-export async function markDone(id: string): Promise<void> {
-  const { error } = await supabase()
-    .from('screener_jobs')
-    .update({ status: 'done', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', id);
+export async function markDone(
+  id: string,
+  result: Record<string, unknown> | null = null,
+): Promise<void> {
+  const patch: Record<string, unknown> = {
+    status: 'done',
+    completed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (result != null) patch.result = result;
+  const { error } = await supabase().from('screener_jobs').update(patch).eq('id', id);
   if (error) throw new Error(`markDone(${id}) failed: ${error.message}`);
 }
 

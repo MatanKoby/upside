@@ -8,7 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — Batch S1.5 just landed, see Completed.)*
+*(empty — Batch S2 just landed, see Completed.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -40,6 +40,41 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S2 — Screener trait scoring engine (2026-06-02)
+- Owner: claude
+- Started + Finished: 2026-06-02
+- **What shipped:** the three traits per `spec/signals/screener-universe.md` (intraday_range_trader, catalyst_reversal, post_earnings_drift) with the caching + staggering + event-gated architecture so daily IB usage stays ~15-20 min (on-demand IBeam compatible; not blocked on 13.3). Discord first-fire ping for the two event-shaped traits; the baseline range-trader trait scores silently (band-touches will carry its actionable events when S3 lands).
+  - **Migration `024_trait_scores.sql`** — `trait_scores(conid, trait, asof_date, score, payload jsonb, computed_at, last_fired_at, PRIMARY KEY (conid, trait, asof_date))` per spec/schema.md. Realtime publication for the Screener tab (S4). Indexes for "top-N per trait today" + per-conid lookup. `conid` here references `universe.real_conid` (S1.5), not the synthetic PK.
+  - **Migration `025_screener_jobs_result.sql`** — adds `result jsonb` to `screener_jobs` so multi-stage producer flows (catalyst Stage 1 → Stage 2) can hand off computed values via the job row. Existing actions (resolve_conid, fallback_yahoo_quote, noop) ignore the column. Queue.ts `markDone(id, result?)` and worker.ts pass-through wired in alongside; `JobHandler` return type is now `Promise<void | Record<string, unknown>>`.
+  - **`services/screener/traits/intradayRangeTrader.ts`** — pure scorer per spec: p50 ≥ 2%, p25 ≥ 1% (derived as p50/2 until the column lands), sample ≥ 30, envelope tightness ≤ 1.5, sub-$30/sub-$10 price bonus. Payload ready-to-render: `{p25, p50, p75, sample_size, today_open_band_low}`. 10 vitest fixtures green.
+  - **`services/screener/traits/catalystReversal.ts`** — two pure evaluators. **Stage 1**: vol-multiple ≥ 3× AND max(|gap %|, |intraday move %|) ≥ 5% — derived from the IB snapshot fields. **Stage 2**: A (beaten-down: below SMA200 OR > 30% off 52w high OR RSI<30 within last 30 sessions) ∧ B (Stage-1 carryover); Wilder's RSI(14) implementation inline. Score composite of vol × move × depth, saturating at sane ceilings. 13 vitest fixtures green.
+  - **`services/screener/traits/postEarningsDrift.ts`** — pure scorer (pop ≥ +2%, days_since ≤ 5; pop magnitude 60pts saturating at +5%, freshness 40pts decaying linearly) + `findReportDayPop` helper that pulls the report-day close vs prior close from daily bars. 11 vitest fixtures green.
+  - **`cron/intradayRangeTraderProducer.ts`** — 24h cadence, inline compute (no queue indirection — pure DB join + score over universe IN ⨝ intraday_stats by real_conid). Silent trait, no Discord ping.
+  - **`cron/catalystReversalProducer.ts`** — three-stage producer + two `ib`-pool worker actions (`eval_catalyst_stage1` + `eval_catalyst_stage2`). Stage 0 inline (bulk `/calendar/earnings` for the last 3 trading days); news-sentiment sweep deferred per spec note (one-call Finnhub bulk avoids the 5,300 × per-symbol news call pattern). Stage 1 → 2 handoff carries vol_multiple/move/gap via the new job.result column. Stage 2 survivors: trait_scores upsert + universe.auto_promoted=true + first-fire `notifyTraitFirstFire` gated by atomic `last_fired_at IS NULL` UPDATE.
+  - **`cron/postEarningsDriftProducer.ts`** — bulk Finnhub earnings calendar + per-reporter `eval_post_earnings_drift` jobs on `ib` pool (ibHistory '1m' '1d'). Worker returns `{report_day_pop_pct, days_since_earnings, today_close}`; producer scores + upserts + first-fire ping.
+  - **`cron/intradayStatsCron.ts` extension** — adds `staggeredUniverseConids()` so each day refreshes 1/7 of the Ring-1 IN universe (`real_conid % 7 = day_of_week`), giving ~430 tickers/day × ~1 sec IB = ~7 min IB/day weekly coverage of every universe ticker's intraday_stats. Watchlist tickers still get their existing daily coverage; the universe slice is added on top.
+  - **`cron/marketCapRefreshCron.ts`** — weekly cadence; re-pulls Finnhub `/stock/profile2` for every Ring-1 IN row to refresh `last_market_cap_m`. Filter re-evaluates at next nightly universeCron.
+  - **`cron/traitScoresRetention.ts`** — daily sweep deletes trait_scores past shelf-life (1d / 3d / 5d for intraday_range_trader / catalyst_reversal / post_earnings_drift respectively).
+  - **`services/notify.ts:notifyTraitFirstFire(trait, symbol, score, payload)`** — routes catalyst_reversal + post_earnings_drift to `#upside-catalyst-alerts` (env `DISCORD_WEBHOOK_CATALYST_ALERTS`). Trait-specific summary line (vol-multiple + move + off-52w-high + basis; or pop + days-since-earnings).
+  - **`services/finnhub.ts`** — extended with `earningsCalendarRange(from, to)` — the bulk no-symbol variant of `/calendar/earnings` (existing `earningsCalendar(symbol)` stayed for the per-symbol use cases).
+  - **Boot wiring** in `server/src/index.ts` — five new starters joined the cron set (intradayRangeTraderProducer, catalystReversalProducer, postEarningsDriftProducer, marketCapRefreshCron, traitScoresRetention).
+- **Vitest coverage** (34 new cases, 94 total green): intradayRangeTrader 10 (textbook range, threshold rejections, envelope tightness, explicit-p25 path, price bonus tiers, band-low computation, missing-open path), catalystReversal 13 (Stage 1 qualified/rejected combos including negative gap; rsiSeries warm-up + uptrend/downtrend extremes; Stage 2 A ∧ B and each A sub-clause; Stage-1 carry-through), postEarningsDrift 11 (score gates, freshness premium, saturation cap; findReportDayPop happy path + every failure mode).
+- **Manual prereqs for live-flip:**
+  1. Apply migrations `024_trait_scores.sql` + `025_screener_jobs_result.sql` in the Supabase SQL editor.
+  2. Create Discord channel `#upside-catalyst-alerts`, generate a webhook, set `DISCORD_WEBHOOK_CATALYST_ALERTS` in VPS `.env`.
+  3. `./bin/upside rebuild` on the VPS.
+- **Verification post-live-flip:**
+  - Boot logs show `[intradayRangeTraderProducer]`, `[catalystReversalProducer]`, `[postEarningsDriftProducer]`, `[marketCapRefreshCron]`, `[traitScoresRetention]` starting at 24h / 7d cadences.
+  - After first tick (~6 min boot): `bin/upside-psql -c "select trait, count(*) from trait_scores where asof_date=current_date group by trait;"` shows three rows. `intraday_range_trader` typically 100s; `catalyst_reversal` + `post_earnings_drift` smaller (event-dependent — may be zero on a quiet earnings day).
+  - `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs where action like 'eval_%' group by 1,2;"` shows the Stage-1/Stage-2 + post-earnings-drift queue draining when IB is connected.
+  - First catalyst_reversal / post_earnings_drift hit on a known reporter day fires one ping in `#upside-catalyst-alerts` per ticker per day (gated by `trait_scores.last_fired_at`).
+  - Spot check: `bin/upside-psql -c "select symbol, trait, score, payload from trait_scores ts join universe u on u.real_conid=ts.conid where asof_date=current_date order by score desc limit 20;"` shows top scorers + their FE-ready payloads.
+- **Out of scope / follow-up:**
+  - Stage 0 news-sentiment sweep — current Stage 0 is earnings-only; news pre-filter requires either a daily per-universe `/news-sentiment` budget (~5,300 calls/day, doesn't fit free tier) or a Stage -1 RSS firehose. Spec'd as a follow-up alongside the broader RSS work (`spec/roadmap.md` → Screener deferred).
+  - `last_avg_volume` weekly 30-day median — Stage 1 currently uses `last_volume` (yesterday's single-day shares) as the baseline. Less robust than a median; spec note in catalystReversal.ts to swap when the weekly volume-median producer lands.
+  - Dynamic universe inclusion (3× volume gap promotion from filtered-OUT pool back into the screener) — catalyst_reversal stays inside Ring-1 IN for v1 to limit Stage-1 IB cost. Spec'd at `signals/screener-universe.md` → Dynamic universe inclusion as a follow-up.
+- **What's next:** S3 (band engine — adaptive layers on top of the static intraday-stats band). S4 (FE Screener tab) follows after S3.
 
 ### Batch S1.5 — Real IBKR conid resolution for universe tickers (2026-06-02)
 - Owner: claude

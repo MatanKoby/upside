@@ -118,9 +118,9 @@ export function createWorker(opts: WorkerOptions): Worker {
     }
 
     try {
-      await handler(job.payload, job);
+      const result = await handler(job.payload, job);
       try {
-        await markDone(job.id);
+        await markDone(job.id, result ?? null);
       } catch (e) {
         void notifyError(`jobs.${pool}.markDone`, (e as Error).message, e);
       }

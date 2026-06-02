@@ -32,6 +32,44 @@ async function activeConidsToProcess(): Promise<Array<{ conid: number; symbol: s
   return activeWatchlistOnlyConids(new Set());
 }
 
+// Batch S2 — staggered universe coverage. Each day refreshes 1/7 of the
+// Ring-1 IN universe (the slice where `real_conid mod 7 = day_of_week`),
+// so every universe ticker's intraday_stats is refreshed once per week
+// on a rolling schedule. ~430 tickers/day × ~1 sec IB = ~7 min IB/day,
+// fits inside the on-demand IBeam window. Spec:
+// spec/signals/screener-universe.md → Caching + staggering.
+async function staggeredUniverseConids(
+  alreadyCovered: Set<number>,
+): Promise<Array<{ conid: number; symbol: string }>> {
+  const dow = new Date().getUTCDay();   // 0..6 — stable per UTC date
+  const out: Array<{ conid: number; symbol: string }> = [];
+  let offset = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data, error } = await supabase()
+      .from('universe')
+      .select('real_conid, symbol')
+      .eq('filter_result', 'in')
+      .not('real_conid', 'is', null)
+      .range(offset, offset + PAGE - 1);
+    if (error) {
+      void notifyError('intradayStatsCron.loadUniverse', error.message);
+      break;
+    }
+    const rows = (data ?? []) as Array<{ real_conid: number; symbol: string }>;
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (r.real_conid == null) continue;
+      if (r.real_conid % 7 !== dow) continue;
+      if (alreadyCovered.has(r.real_conid)) continue;
+      out.push({ conid: r.real_conid, symbol: r.symbol });
+    }
+    if (rows.length < PAGE) break;
+    offset += PAGE;
+  }
+  return out;
+}
+
 async function tick(): Promise<void> {
   const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
@@ -40,8 +78,14 @@ async function tick(): Promise<void> {
     return;
   }
 
-  const targets = await activeConidsToProcess();
+  const watchlistTargets = await activeConidsToProcess();
+  const watchlistConidSet = new Set(watchlistTargets.map((t) => t.conid));
+  const universeTargets = await staggeredUniverseConids(watchlistConidSet);
+  const targets = [...watchlistTargets, ...universeTargets];
   if (targets.length === 0) return;
+  console.log(
+    `[intradayStatsCron] watchlist=${watchlistTargets.length} universe-slice=${universeTargets.length} total=${targets.length}`,
+  );
 
   let okCount = 0;
   let failCount = 0;

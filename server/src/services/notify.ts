@@ -289,6 +289,67 @@ export function notifyIntradayStatsHit(args: {
   });
 }
 
+/**
+ * Trait first-fire ping (Batch S2). Routes the two event-shaped traits
+ * (catalyst_reversal + post_earnings_drift) to #upside-catalyst-alerts.
+ * `intraday_range_trader` is the baseline-of-the-screener trait — pinging
+ * its surfacings daily would be noise; band-touch alerts (band-engine.md)
+ * carry the actionable events for those names. No-ops when the channel
+ * isn't configured.
+ *
+ * Cooldown is owned by the caller (anchored on `trait_scores.last_fired_at`
+ * keyed by (conid, trait, asof_date)) so it survives restarts.
+ */
+export function notifyTraitFirstFire(args: {
+  trait: 'catalyst_reversal' | 'post_earnings_drift';
+  symbol: string;
+  score: number;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  const { trait, symbol, score, payload } = args;
+  const url = env.discordCatalystAlertsWebhookUrl;
+  // Trait-specific one-line summary so the channel reads at a glance.
+  let summary = '';
+  if (trait === 'catalyst_reversal') {
+    const vol = num(payload['vol_multiple']);
+    const move = num(payload['today_move_pct']);
+    const off = num(payload['pct_off_52w_high']);
+    const basis = String(payload['stage2_basis'] ?? '');
+    summary =
+      `${vol != null ? `${vol.toFixed(1)}× vol` : ''}` +
+      `${move != null ? ` · +${move.toFixed(1)}% move` : ''}` +
+      `${off != null ? ` · ${off.toFixed(0)}% off 52w high` : ''}` +
+      `${basis ? ` · ${basis}` : ''}`;
+  } else {
+    const pop = num(payload['report_day_pop_pct']);
+    const days = num(payload['days_since_earnings']);
+    summary =
+      `${pop != null ? `+${pop.toFixed(1)}% pop` : ''}` +
+      `${days != null ? ` · ${days}d since earnings` : ''}`;
+  }
+  const line = `🚨 ${symbol} · ${trait} · score ${score} · ${summary}`;
+  console.log(`[trait-fire] ${line}`);
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🚨 ${symbol} · ${trait}`,
+      description: line,
+      color: trait === 'catalyst_reversal' ? 0xE0991A : 0x8B5CF6,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
+function num(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 export function notifyDipBuyMarkerHit(args: {
   symbol: string;
   markerPrice: number;

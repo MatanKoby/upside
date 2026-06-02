@@ -8,8 +8,13 @@
 import type { JobRow, WorkerPool } from './queue.js';
 
 /** Handler signature: takes the job payload, returns when done. Throws on
- *  failure — the framework catches + marks the job failed. */
-export type JobHandler = (payload: Record<string, unknown>, job: JobRow) => Promise<void>;
+ *  failure — the framework catches + marks the job failed. Optionally
+ *  returns a `result` object that the framework persists on the job row
+ *  for the producer's drainDone step to consume (multi-stage flows). */
+export type JobHandler = (
+  payload: Record<string, unknown>,
+  job: JobRow,
+) => Promise<void | Record<string, unknown>>;
 
 /** Per-pool action registry. The worker dispatches by action name. */
 export type ActionRegistry = Record<string, JobHandler>;

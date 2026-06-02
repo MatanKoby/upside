@@ -20,6 +20,11 @@ import { startIntradayStatsCron } from './cron/intradayStatsCron.js';
 import { startUniverseCron } from './cron/universeCron.js';
 import { startUniverseQuoteProducer } from './cron/universeQuoteProducer.js';
 import { startConidResolutionProducer } from './cron/conidResolutionProducer.js';
+import { startIntradayRangeTraderProducer } from './cron/intradayRangeTraderProducer.js';
+import { startCatalystReversalProducer } from './cron/catalystReversalProducer.js';
+import { startPostEarningsDriftProducer } from './cron/postEarningsDriftProducer.js';
+import { startMarketCapRefreshCron } from './cron/marketCapRefreshCron.js';
+import { startTraitScoresRetention } from './cron/traitScoresRetention.js';
 import { startJobsReaper } from './cron/jobsReaper.js';
 import { startJobsRetention } from './cron/jobsRetention.js';
 import { createIbWorker, createFinnhubWorker, createComputeWorker } from './services/jobs/worker.js';
@@ -82,6 +87,12 @@ app.listen(env.port, () => {
   startUniverseCron();
   startUniverseQuoteProducer();
   startConidResolutionProducer();
+  // Screener trait scoring (Batch S2) — three traits + weekly cap refresh + shelf-life retention.
+  startIntradayRangeTraderProducer();
+  startCatalystReversalProducer();
+  startPostEarningsDriftProducer();
+  startMarketCapRefreshCron();
+  startTraitScoresRetention();
   // Job-queue infrastructure (Batch S0.3) — three worker pools + reaper + retention.
   createIbWorker().start();
   createFinnhubWorker().start();

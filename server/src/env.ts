@@ -91,4 +91,9 @@ export const env = {
   // dip-buys so the two mental categories (statistical-pattern vs. structural-
   // level / user-marker) can be muted independently.
   discordStatsAlertsWebhookUrl: optional('DISCORD_WEBHOOK_STATS_ALERTS'),
+  // DISCORD_WEBHOOK_CATALYST_ALERTS — Batch S2. catalyst_reversal +
+  // post_earnings_drift trait first-fire pings (once per ticker per day).
+  // intraday_range_trader is silent — its band-touches carry the actionable
+  // events.
+  discordCatalystAlertsWebhookUrl: optional('DISCORD_WEBHOOK_CATALYST_ALERTS'),
 };

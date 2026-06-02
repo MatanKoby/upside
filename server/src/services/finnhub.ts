@@ -90,6 +90,32 @@ export async function earningsCalendar(symbol: string): Promise<unknown> {
   return data;
 }
 
+// Bulk earnings-calendar pull (Batch S2). One call returns every US ticker
+// that reported in [from, to]. `from`/`to` are YYYY-MM-DD wall-clock dates.
+// Used by catalystReversalProducer + postEarningsDriftProducer for the
+// daily Stage 0 / candidate-set computation.
+export interface FinnhubEarningsRow {
+  date?: string;        // YYYY-MM-DD report date
+  symbol?: string;
+  hour?: 'bmo' | 'amc' | 'dmh' | string;  // before-mkt-open / after-mkt-close / during
+  epsActual?: number | null;
+  epsEstimate?: number | null;
+  revenueActual?: number | null;
+  revenueEstimate?: number | null;
+  quarter?: number;
+  year?: number;
+}
+
+export async function earningsCalendarRange(from: string, to: string): Promise<FinnhubEarningsRow[]> {
+  const { data } = await call<{ earningsCalendar?: FinnhubEarningsRow[] }>(
+    'earnings',
+    `_range_${from}_${to}`,
+    '/calendar/earnings',
+    { from, to },
+  );
+  return Array.isArray(data?.earningsCalendar) ? data!.earningsCalendar! : [];
+}
+
 export async function insiderTransactions(symbol: string): Promise<unknown> {
   const { data } = await call('insider', symbol, '/stock/insider-transactions', { symbol });
   return data;
