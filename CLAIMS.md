@@ -8,7 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — Batch S1 just landed, see Completed.)*
+*(empty — Batch S0.3 just landed, see Completed.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -40,6 +40,29 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S0.3 — Async job queue (`screener_jobs`) (2026-06-02)
+- Owner: claude
+- Started + Finished: 2026-06-02
+- **What shipped:** the screener-track infrastructure foundation — a Postgres-backed async job queue that decouples producers (cron schedulers) from workers (pure executors). Downstream screener batches (S0.5 / S1.5 / S2 / S3) and their IB-touching crons migrate onto this so IB-connection windows aren't wasted. Per `spec/job-queue.md`.
+  - **Migration `021_screener_jobs.sql`** — `screener_jobs` table + the **partial unique index** on `job_key WHERE status IN ('queued','claimed')` (the dedup mechanism) + indexes for claim/drain/reaper. Two Postgres functions: `enqueue_job(...)` (INSERT … ON CONFLICT DO NOTHING; returns `'created' | 'deduped'`) and `claim_next_job(...)` (atomic `SELECT … FOR UPDATE SKIP LOCKED` + UPDATE-RETURNING; safe under concurrent worker claim). Both marked `security definer` + granted to `service_role`.
+  - **`server/src/services/jobs/keys.ts`** — pure `makeKey(action, ...parts)` constructor. 5 vitest cases green; isolated in its own file so the test suite doesn't pull in supabase/env at module-load.
+  - **`server/src/services/jobs/queue.ts`** — producer-facing API: `enqueue` (RPC), `drainDone`, `drainFailed`, `markRetry` (insert-fresh + delete-failed; race-safe via the partial index), `finalizeFailure`. Worker-facing API: `claimNext` (RPC), `markDone`, `markFailed` (never retry — producer's job).
+  - **`server/src/services/jobs/actions.ts`** — typed `ActionRegistry` + three per-pool registries (`ibRegistry`, `finnhubRegistry`, `computeRegistry`). Ships two placeholder actions (`noop:ok` / `noop:fail`) for the framework smoke test. Downstream batches register real handlers into the relevant pool.
+  - **`server/src/services/jobs/worker.ts`** — `createWorker({ pool, poolGateOk, idleMs, leaseSeconds, registry })` loop runner. Per-tick: `poolGateOk` → `claimNext` → execute via registry → `markDone` or `markFailed`. **Circuit breaker** per action — `notifyCritical` when ≥10 failures land within 5 min for a single action; suppresses re-fire until the window clears. Convenience factories `createIbWorker()` / `createFinnhubWorker()` / `createComputeWorker()` colocate pool gates: `ib` gates on `ibStatus().connected && .authenticated`; `finnhub` and `compute` are always open. Worker id format: `${pool}-${pid}-${hostname}`.
+  - **`server/src/cron/jobsReaper.ts`** — 60s cadence, flips `status='claimed' AND lease_expires_at < now()` to `'failed' last_error='lease expired'` so the producer's drainFailed path picks up. Covers worker crash / hang / container-restart mid-claim.
+  - **`server/src/cron/jobsRetention.ts`** — 24h cadence, 5-min boot delay. Deletes `done | failed` rows older than 7 days as a safety net.
+  - **Boot wiring** in `server/src/index.ts` — three worker pools start + reaper + retention join the existing cron set.
+- **Manual prereqs for live-flip:**
+  1. Apply migration `021_screener_jobs.sql` in Supabase.
+  2. `./bin/upside rebuild` on the VPS.
+- **Verification post-live-flip:**
+  - Boot logs show `[jobs/ib]`, `[jobs/finnhub]`, `[jobs/compute]` worker startup + `[jobsReaper]` + `[jobsRetention]` cadences.
+  - Smoke (any future producer): enqueue `noop:ok` jobs, drain to zero via the `compute` worker within seconds. `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs group by 1,2 order by 1,2;"` is the queue-depth-at-a-glance query.
+  - Dedup: two rapid enqueues of identical key → second returns `'deduped'`, only one queued row exists.
+  - Crash safety: kill worker mid-claim → reaper transitions to `failed` after lease expiry (default 5 min).
+- **What this batch does NOT do** (per `spec/job-queue.md` → "What this layer does NOT do"): no DAGs, no lease-renewal heartbeats, no realtime dashboard, no external queue infra. Downstream batches' producers do their own retry policy + Stage1→Stage2 dependency handling in producer logic.
+- **What's next:** downstream batches (S0.5, S1.5, S2, S3) now register their real action handlers via `ibRegistry` / `finnhubRegistry` / `computeRegistry` and turn their crons into producer cycles.
 
 ### Batch S1 — Stock universe + Ring 1 nightly cron (2026-05-31)
 - Owner: claude
