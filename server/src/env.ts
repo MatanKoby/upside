@@ -55,6 +55,12 @@ export const env = {
   // we leave a 10-call buffer. See server/src/services/finnhubQueue.ts.
   finnhubRateLimitPerMin: Number(optional('FINNHUB_RATE_LIMIT_PER_MIN', '50')),
 
+  // Polygon free-tier API key (Batch S0.5) — primary daily price+volume
+  // source for the screener universe. Grouped-daily-bars endpoint returns
+  // ALL US stocks in one call, well within the 5/min free cap.
+  // See spec/signals/data-sources.md → Universe coverage.
+  polygonApiKey: optional('POLYGON_API_KEY'),
+
   ibGatewayUrl: optional('IB_GATEWAY_URL', 'http://ib-gateway:5000'),
   redisUrl: optional('REDIS_URL', 'redis://redis:6379'),
 

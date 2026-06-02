@@ -8,7 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — Batch S0.3 just landed, see Completed.)*
+*(empty — Batch S0.5 just landed, see Completed.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -40,6 +40,36 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S0.5 — Universe price + volume coverage (Polygon primary + Yahoo fallback) (2026-06-02)
+- Owner: claude
+- Started + Finished: 2026-06-02
+- **What shipped:** daily-grain price + volume coverage for every Ring-1 IN universe ticker, via Polygon free-tier grouped-daily-bars (primary) + Yahoo v8/chart per-symbol (fallback). Built on top of S0.3's job queue — producer does direct Polygon work + enqueues per-gap Yahoo fallback jobs to the `finnhub` worker pool. Spec decision in `spec/signals/data-sources.md` → Universe coverage; integration design in the same file.
+  - **Research (commit eb94f6d, doc-only, no separate claim per `feedback_doc_updates_no_batch`)**: tested Yahoo v8/chart (keyless, full OHLCV, per-symbol; works), Yahoo v8/spark batch (rejected — close-only, no volume), Yahoo v7/quote (rejected — crumb-cookie auth as of 2023). Polygon's grouped-daily-bars endpoint confirmed as ideal: one call → ALL US stocks' OHLCV, well under the 5/min free-tier cap. Alpaca + Twelve Data documented but not picked.
+  - **Migration `022_universe_last_volume.sql`** — adds `last_volume bigint` to `universe`. Separate from `last_avg_volume` (the 30d median for catalyst_reversal Stage-1; updated by the weekly producer that lands as a follow-up).
+  - **`server/src/services/universeQuote.ts`** — `polygonGroupedDaily(date)` (calls `/v2/aggs/grouped/locale/us/market/stocks/{date}` with `adjusted=true`, returns symbol→OHLCV map; throws on auth/network failure so the producer can log + skip) + `yahooChart(symbol)` (v8/chart, keyless via Mozilla UA, returns OHLCV from `meta` fields or null when missing). Defaults `open` to `previousClose` when Yahoo lacks `regularMarketOpen` directly.
+  - **`server/src/cron/universeQuoteProducer.ts`** — 24h cadence, 5-min boot delay. Three steps per tick:
+    1. Polygon grouped-daily for `yesterdayUtcDate()` → batched write of `(last_price, last_volume, computed_at)` to every universe row Polygon covered.
+    2. Per-gap Yahoo fallback: `enqueue(jobKey, 'fallback_yahoo_quote', 'finnhub', {symbol, date})` for tickers Polygon's response missed.
+    3. Drain prior-cycle `fallback_yahoo_quote` jobs: done rows deleted (worker already wrote OHLCV); failed rows go through producer-side retry (max 2 attempts) or `finalizeFailure`. Per `spec/job-queue.md` producer-owned retry policy.
+  - **Worker action `fallback_yahoo_quote`** registered into `finnhubRegistry` from the producer file (keeps the action handler colocated with its producer's interface). Handler reads payload `{symbol, date}`, calls `yahooChart(symbol)`, writes OHLCV directly to the universe row by symbol. Throws on null Yahoo response so the framework marks the job failed.
+  - **`server/src/env.ts`** — `polygonApiKey: optional('POLYGON_API_KEY')`. Producer skips cleanly when the key is unset (the cron logs "POLYGON_API_KEY not set — skipping" and returns).
+  - **Boot wiring** in `server/src/index.ts` — `startUniverseQuoteProducer()` joins the existing cron set.
+- **Vitest coverage** (in `server/src/services/universeQuote.test.ts`): 9 parser cases via mocked axios — Polygon happy path, empty results, HTTP error, Polygon-side NOT_AUTHORIZED, results without ticker field; Yahoo happy path, HTTP error, empty chart result, missing meta field. Pure parser surface; live HTTP exercised by the cron after deploy.
+- **Manual prereqs for live-flip:**
+  1. Sign up at https://polygon.io for the free tier — no credit card required. Generate an API key from the dashboard.
+  2. Add `POLYGON_API_KEY=<key>` to **VPS** `.env` AND local `.env`.
+  3. Apply migration `022_universe_last_volume.sql` in Supabase SQL editor.
+  4. `./bin/upside rebuild` on the VPS.
+- **Verification post-live-flip:**
+  - Boot logs show `[universeQuoteProducer] starting, 24h cadence`.
+  - First tick fires ~5 min after boot. Logs `[universeQuoteProducer] polygon hit=N/M gaps=G` showing how many of the M universe rows Polygon covered vs how many gapped to Yahoo. Healthy first run: hit≈M, gaps≈low double digits.
+  - `bin/upside-psql -c "select count(*) from universe where filter_result='in' and last_price is not null and last_volume is not null;"` should return ≥ 90% of the `filter_result='in'` count within 24h.
+  - `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs where action='fallback_yahoo_quote' group by 1,2;"` shows fallback throughput; queue should drain to zero within the producer cycle.
+- **Out of scope / follow-up:**
+  - Weekly 30-day median refresh into `last_avg_volume` — separate small slice (~30 Polygon calls / week bootstrap, 7 calls/week steady-state). Spec'd in `spec/signals/data-sources.md` → Cadence per the caching plan; lands when S2's catalyst_reversal needs it.
+  - Intraday volume coverage for `catalyst_reversal` Stage-1 — IB-snapshot path per spec; not this batch.
+  - Real-time session updates for universe-only tickers — out of scope per spec; Screener tab (S4) renders the daily-refreshed price.
 
 ### Batch S0.3 — Async job queue (`screener_jobs`) (2026-06-02)
 - Owner: claude

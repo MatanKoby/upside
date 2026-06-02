@@ -18,6 +18,7 @@ import { startWatchlistQuotePoller } from './cron/watchlistQuotePoller.js';
 import { startEntryZonesCron } from './cron/entryZonesCron.js';
 import { startIntradayStatsCron } from './cron/intradayStatsCron.js';
 import { startUniverseCron } from './cron/universeCron.js';
+import { startUniverseQuoteProducer } from './cron/universeQuoteProducer.js';
 import { startJobsReaper } from './cron/jobsReaper.js';
 import { startJobsRetention } from './cron/jobsRetention.js';
 import { createIbWorker, createFinnhubWorker, createComputeWorker } from './services/jobs/worker.js';
@@ -78,6 +79,7 @@ app.listen(env.port, () => {
   startEntryZonesCron();
   startIntradayStatsCron();
   startUniverseCron();
+  startUniverseQuoteProducer();
   // Job-queue infrastructure (Batch S0.3) — three worker pools + reaper + retention.
   createIbWorker().start();
   createFinnhubWorker().start();
