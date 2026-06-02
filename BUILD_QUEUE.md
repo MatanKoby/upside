@@ -85,7 +85,82 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** Batch S1 just landed (universe table + nightly Ring 1 cron, synthetic-conid keyed). The screener track now sequences as **S0.5 → S1.5 → S2 → S3 → S4**, with S0.5 the next claim (researches alternative price+volume sources to avoid pushing universe coverage onto IB). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S0.5** is the most likely answer right now.
+> **Pick-order pointer for "continue".** Batch S1 just landed (universe table + nightly Ring 1 cron, synthetic-conid keyed). The screener track now sequences as **S0.3 → S0.5 → S1.5 → S2 → S3 → S4**, with **S0.3 the next claim** (async job-queue infrastructure that every downstream batch's cron migrates onto — without it, IB-connection windows get wasted and produced work piles up unbounded). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S0.3** is the most likely answer right now.
+
+---
+
+## Batch S0.3: Async job queue (`screener_jobs`)
+
+**Depends on:** none (it's the foundation downstream batches migrate onto).
+
+**Scope:** Implement the Postgres-backed async job queue per **`spec/job-queue.md`**. Producers (cron schedulers) enqueue deduplicated jobs; workers (per-pool: `ib` / `finnhub` / `compute`) drain via atomic claims. Without this, S0.5 / S1.5 / S2 / S3's IB-touching crons each have to re-invent their own connection-window handling and stale-data avoidance — and the user would lose work whenever IB is offline. Pure infrastructure batch; no user-facing change.
+
+### Deliverables
+
+1. **Migration `021_screener_jobs.sql`** — `screener_jobs` table per `spec/schema.md` → `screener_jobs`, including the **partial unique index** on `job_key` filtered to `status IN ('queued','claimed')` (the dedup mechanism). Index on `(worker_pool, status, scheduled_for, priority)` for the worker's claim query.
+
+2. **`server/src/services/jobs/queue.ts`** — producer-facing helpers (pure functions over Supabase):
+   - `enqueue(action, payload, opts)` → builds deterministic `job_key`, runs `INSERT ON CONFLICT DO NOTHING`. Returns `'created' | 'deduped'`.
+   - `drainCompleted(action)` → returns the `done` + `failed` rows for the action (so the producer can act on them in its cycle).
+   - `markRetry(jobRow)` → inserts a fresh row with the same `job_key` (the failed row is outside the partial index, so insert succeeds); deletes the failed row.
+   - `finalizeFailure(jobRow, reason)` → deletes the failed row, fires a Discord notification through the existing `notifyApiFailure` policy.
+   - `makeKey(action, parts)` → canonical key constructor used by every producer.
+   - Vitest: dedup-against-active, success-then-re-enqueue-tomorrow, failed-then-retry, race-safety smoke (insert N concurrent same-key, expect 1 created).
+
+3. **`server/src/services/jobs/worker.ts`** — worker-pool framework:
+   - `createWorker(pool, opts)` → returns a loop runner: `start()`, `stop()`.
+   - `atomicClaim(pool)` → `SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` followed by the claim UPDATE in one tx. Sets `lease_expires_at = now() + LEASE_DURATION` (default 5 min).
+   - `executeJob(job, registry)` → look up the action's handler in the worker's `registry`, call it, catch errors, persist outcome (`done` + result write, or `failed` + last_error + attempts++).
+   - **Pool gating** is `opts.poolGateOk()` — a per-pool predicate the framework calls before each claim. For `ib`, gates on `ibStatus().connected && .authenticated`. For `finnhub`, always true (the queue limiter inside Finnhub handlers handles backpressure). For `compute`, always true.
+   - No retry logic in the worker — pure execute-and-report per spec.
+
+4. **`server/src/services/jobs/actions.ts`** (or a registry pattern, your call) — typed registry of action handlers. S0.3 ships **two placeholder no-op actions** for the framework smoke test: `'noop:ok'` (always succeeds) and `'noop:fail'` (always throws). Real actions (resolve_conid, refresh_intraday_stats, etc.) land in their owning downstream batches and register themselves into the worker's action map.
+
+5. **`server/src/cron/jobsReaper.ts`** — runs every 60s, flips `status='claimed' AND lease_expires_at < now()` rows to `status='failed'` with `last_error='lease expired'`. Logs count to stdout.
+
+6. **`server/src/cron/jobsRetention.ts`** — daily sweep, deletes `done OR failed` rows older than 7 days. Safety net (producers should normally drain on their own cycle).
+
+7. **Boot wiring** in `server/src/index.ts`:
+   - Start one worker per pool (`ib`, `finnhub`, `compute`).
+   - Start `jobsReaper`.
+   - Start `jobsRetention`.
+   - Workers join the existing cron set; producers are added incrementally as downstream batches land.
+
+8. **Observability** (minimal v1):
+   - `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs group by 1,2 order by 1,2;"` — the queue-depth-at-a-glance query (call out in this batch's verification).
+   - On circuit-breaker-style sustained failure (≥10 failures within 5 min for a single action), `services/notify.ts:notifyCritical` to `#errors-critical`. Acts as the early warning before a full dashboard exists.
+
+### Files this batch creates/edits
+- `supabase/migrations/021_screener_jobs.sql` (new)
+- `server/src/services/jobs/queue.ts` (new + vitest)
+- `server/src/services/jobs/worker.ts` (new + vitest)
+- `server/src/services/jobs/actions.ts` (new — empty action registry + the two `noop:*` placeholders)
+- `server/src/cron/jobsReaper.ts` (new)
+- `server/src/cron/jobsRetention.ts` (new)
+- `server/src/index.ts` (boot wiring — start three workers + two crons)
+- `server/src/services/notify.ts` (extend with `notifyJobQueueCircuit(action)` if not already covered by `notifyCritical`)
+
+### Does NOT touch
+- Any business logic (no real actions; S0.3 ships only the framework + `noop:*` placeholders).
+- Existing crons (S0.5 / S1.5 / S2 / S3 migrate themselves onto the queue when they land; S0.3 doesn't migrate the existing pollers — those keep their current shape).
+- Any FE surface.
+
+### Verification
+
+- Migration applied.
+- Boot logs show three worker pools started + reaper + retention crons.
+- Smoke: enqueue 100 `noop:ok` jobs, observe queue counts via the psql query above. Workers drain to zero within ~1 minute. Enqueue 100 `noop:fail`, observe all transition to `failed` and `notifyJobQueueCircuit` fires once at the threshold breach.
+- Dedup smoke: call `enqueue('noop:ok', {x:1})` twice in quick succession; second call returns `'deduped'`, only one `queued` row exists.
+- Crash safety: kill the worker process mid-claim, wait for reaper, observe row transitions back through `failed` (lease expired). Producer's retry path is exercised by the downstream batches' producers — not this batch's verification.
+- Concurrent-claim safety: spawn 4 worker processes against 1,000 queued `noop:ok` jobs, confirm no duplicate execution (each job's done timestamp is unique to one worker's `claimed_by`).
+
+### Out of scope (per `spec/job-queue.md` → "What this layer does NOT do")
+
+- DAGs / declarative dependencies (cross-stage chaining lives in producer logic).
+- Heartbeat / lease renewal (jobs assumed to fit within `LEASE_DURATION`).
+- Realtime worker observability dashboard (psql query + Discord notifications are enough for v1).
+- External queue infra (BullMQ / RabbitMQ / NATS).
+- Job-payload encryption.
 
 ---
 
