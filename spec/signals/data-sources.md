@@ -45,26 +45,56 @@ the post-Batch-B work.
 - **yfinance / Yahoo pattern** (unofficial, no key, ToS-gray): potential redundancy + fallback layer. Listed for completeness — not yet committed to.
 - **Alpha Vantage / Twelve Data / Polygon free tiers**: backup quote/candle providers if Finnhub becomes a bottleneck. Each has a different free-tier shape; none has been adopted yet. See `roadmap.md` → Track 9 for the chart-resilience research.
 
-## Universe coverage — alternative data sources (S0.5 research scope)
+## Universe coverage — primary + fallback (S0.5 decision, 2026-06-02)
 
 The screener needs **price + volume** on the ~3,000-ticker universe, not
-just the ~25 held + watchlist conids. Finnhub free `/quote` provides price
-but **no volume field**. IB snapshot has both but is rate-limited + requires
-real conids + on-demand session. The S0.5 batch researches whether a
-free-tier alternative can fill the gap so universe coverage doesn't push
-daily IB usage past the on-demand budget:
+just the ~25 held + watchlist conids. Finnhub free `/quote` has price but
+**no volume field**. IB snapshot has both but is rate-limited + requires
+real conids + on-demand session. S0.5 evaluated four free-tier candidates;
+final pick recorded here so downstream batches and the queue can implement
+against it.
 
-- **yfinance / Yahoo (unofficial)** — free, no key, has intraday OHLCV +
-  daily volume. ToS-gray for high-volume use; fine at our scale.
-- **Polygon.io free tier** — 5 calls/min, but provides aggregate volume
-  and trades. Probably too thin for daily universe sweep.
-- **Alpaca Market Data (free IEX feed)** — bars + volume; requires Alpaca
-  account but free.
-- **Twelve Data free** — 8 calls/min, 800/day; quotes with volume field.
-  Cap is too tight for ~3,000-ticker daily sweep.
-- **IEX Cloud sunset path** — historical option, mostly paid now.
+### Decision matrix
 
-Goal: pick one that provides **batch quote with volume** OR per-ticker
-quote-with-volume cheap enough for a daily universe sweep without IB. If
-none qualify, S0.5 concludes "IB snapshot is the only viable source" and
-the screener coverage stays IB-gated.
+| Source | Has volume | Batch | Free-tier rate | Auth | Notes |
+| --- | --- | --- | --- | --- | --- |
+| **Polygon** `/v2/aggs/grouped/locale/us/market/stocks/{date}` | ✓ | **✓ ALL US stocks in 1 call** | 5/min | free key (signup) | **PRIMARY**. One call/day → whole universe's daily OHLCV. Fits perfectly under the 5-cpm free limit. |
+| **Yahoo** `query1.finance.yahoo.com/v8/finance/chart/{sym}` | ✓ | per-symbol | undocumented (~few hundred/hr safe from single IP) | **none** | **FALLBACK**. Used for tickers Polygon's grouped-bars doesn't return (IPOs, halted/delisted-since-snapshot, special situations). ToS-gray but at our cadence (1 call/missed-ticker/day, ~tens/day) the exposure is minimal. |
+| Yahoo v8/spark batch | close only | ✓ | undocumented | none | Rejected — no volume field. |
+| Yahoo v7/quote batch | ✓ | ✓ | requires crumb-cookie auth as of 2023 | brittle | Rejected — auth hack we'd have to maintain. |
+| Alpaca Market Data (free IEX feed) | ✓ | ✓ | unlimited | brokerage account | Powerful but more onboarding friction than Polygon; revisit if Polygon hits limits. |
+| Twelve Data free | ✓ | partial | 800/day, 8/min | key | Rejected — daily cap can't cover ~3,000-ticker sweep. |
+
+### Cadence per the caching plan
+
+| Field | Source | Cadence | Daily call cost |
+| --- | --- | --- | --- |
+| `universe.last_price` | Polygon grouped-daily | nightly | **1 call** |
+| `universe.last_avg_volume` (30d median) | Polygon grouped-daily, aggregated client-side from 30 days of grouped responses (one call per missing day) | weekly Sunday | **~30 calls** initial bootstrap, then **~7 calls** rolling weekly |
+| Per-ticker gap-fills (Polygon missing) | Yahoo v8/chart | nightly, only on gaps | **~tens** |
+
+Total daily Polygon: well under the 5/min free cap. Total daily Yahoo:
+small, fits comfortably under the unofficial-rate-limit headroom.
+
+### What this DOES NOT cover
+
+- **Intraday volume during pre-market** for `catalyst_reversal` Stage-1 — that needs IB snapshot (with `real_conid`). Polygon grouped-bars is daily-grain; Polygon's intraday endpoints require paid plans. See `signals/screener-universe.md` → `catalyst_reversal` for the Stage-1 IB-snapshot path.
+- **Real-time price during regular session** — the existing `quotes` pollers (IB + Finnhub) own that for held + watchlist tickers. Universe tickers don't get realtime updates; they get the once-daily refresh from Polygon. The Screener tab (S4) renders the last cached price; tap-through to TickerDetail still pulls live (via the existing marketdata snapshot route).
+
+### Implementation interface
+
+`server/src/services/universeQuote.ts` exposes a source-agnostic API:
+
+```typescript
+// Returns the daily OHLCV map for all US stocks for the given date.
+// First tries Polygon grouped-bars; on failure / partial response, the
+// caller (the producer) iterates missing-ticker fallback via yahoo().
+export interface DailyOhlcv {
+  open: number; high: number; low: number; close: number; volume: number;
+}
+
+export async function polygonGroupedDaily(date: string): Promise<Record<string, DailyOhlcv>>;
+export async function yahooChart(symbol: string): Promise<DailyOhlcv | null>;
+```
+
+The producer (`universeQuoteProducer` cron) calls `polygonGroupedDaily(yesterday)`, walks the universe rows it expects, and enqueues per-ticker `fallback_yahoo_quote` jobs (worker pool: `finnhub` — reusing the rate-limited HTTP infrastructure, even though Yahoo is keyless) only for gaps. The single Polygon call is a producer-side action, not a queued job, because it's one-shot per day and inexpensive.
