@@ -8,7 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — Batch S0.5 just landed, see Completed.)*
+*(empty — Batch S1.5 just landed, see Completed.)*
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
@@ -40,6 +40,29 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S1.5 — Real IBKR conid resolution for universe tickers (2026-06-02)
+- Owner: claude
+- Started + Finished: 2026-06-02
+- **What shipped:** real IBKR conid resolution for the universe via `ibSecdefSearch` + S0.3's job queue. Producer enqueues per-universe-row jobs on the `ib` worker pool; worker drains when IB is connected, writes `real_conid` back to the row. Initial backlog (~3,000 universe rows) drains in ~10 min at sustainable secdef pacing; steady-state ~few new jobs/week.
+  - **Migration `023_universe_real_conid.sql`** — adds `real_conid bigint` (null until resolved) + `auto_promoted bool default false` (the catalyst_reversal Stage-2 promotion flag, used by S2). Two partial indexes: `universe_real_conid_pending_idx` for the producer's claim query (`filter_result='in' AND real_conid IS NULL`), `universe_real_conid_idx` for downstream joins. The synthetic FNV `conid` PK stays for in-table identity + idempotent universeCron re-runs; `real_conid` is the cross-table join key.
+  - **`server/src/services/screener/conidPicker.ts`** — pure `pickUsStockMatch(results)` extracted into its own file (separate from conidResolver to keep vitest happy without supabase/env at module-init, same pattern as jobs/keys.ts). Filters to `description ∈ {NASDAQ, NYSE, AMEX}` with at least one `secType='STK'` section; rejects non-numeric or zero conids; first-listed wins for dual US listings. Live IB shapes captured 2026-06-02 informed the test fixtures: MNTS (MOMENTUS NASDAQ vs SCHIEHALLION LSE), REPL (Replimune NASDAQ vs RUDRABHISHEK NSE).
+  - **`server/src/services/screener/conidResolver.ts`** — `resolveConid(symbol)` calls `ibSecdefSearch` + delegates to `pickUsStockMatch`. Throws on IB error (network / 401 / 503) so the worker framework marks failed; returns null on "IB responded fine, no US STK match" so the caller decides.
+  - **`server/src/cron/conidResolutionProducer.ts`** — 24h cadence, 5-min boot delay. Per tick: load `universe WHERE filter_result='in' AND real_conid IS NULL` (capped at 5,000), enqueue `resolve_conid` jobs onto `ib` pool, drain prior-cycle done/failed. Failed-job retry policy: up to 2 attempts (covers transient IB hiccups), then `finalizeFailure` for genuinely unresolvable symbols (delisted, foreign-only listings).
+  - **Worker action `resolve_conid`** registered into `ibRegistry`. Handler: read `{universeConid, symbol, mic}`, call `resolveConid(symbol)`, write `real_conid` to the universe row by synthetic conid PK, mark done. Null result → throw → marked failed → producer's retry/give-up policy applies.
+  - **Boot wiring** in `server/src/index.ts` — `startConidResolutionProducer()` joins the existing cron set.
+- **Vitest coverage** (`conidResolver.test.ts`): 9 cases — US match when foreign exists, all-foreign null, NYSE/AMEX listings accepted, first-US wins on dual listings, US-description without STK section rejected, non-numeric/zero conid rejected, empty response null, garbage sections array tolerated. Pure picker surface; live `ibSecdefSearch` exercised by the cron after deploy.
+- **Manual prereqs for live-flip:**
+  1. Apply migration `023_universe_real_conid.sql` in Supabase SQL editor.
+  2. `./bin/upside rebuild` on the VPS.
+  3. Connect IB so the `ib` worker pool can drain. Initial backlog ~10 min IB. If IB stays connected overnight the whole sweep finishes in one window; if disconnected mid-way, the remaining jobs stay queued until next IB connection (per S0.3's pool gating).
+- **Verification post-live-flip:**
+  - Boot logs show `[conidResolutionProducer] starting, 24h cadence`.
+  - First tick fires ~5 min after boot. Logs `[conidResolutionProducer] pending=N enqueued=N deduped=0 elapsed=Xs` showing how many universe rows were enqueued for resolution.
+  - `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs where action='resolve_conid' group by 1,2;"` shows the queue draining.
+  - `bin/upside-psql -tAc "select round(100.0 * count(real_conid) / count(*), 1) from universe where filter_result='in';"` should reach **≥95%** within a few IB-connected hours. The ~5% unresolved are obscure types, delisted-since-Finnhub-pull, or genuine ambiguity.
+  - Spot check: `bin/upside-psql -c "select symbol, conid as synthetic, real_conid from universe where symbol in ('REPL','MNTS','RGTI');"` shows real conids matching the ones in `watchlist_items` for MNTS + RGTI.
+- **What's next:** S2 (trait scoring engine) joins `universe` ⨝ `intraday_stats` on `real_conid`, calls `ibHistory(real_conid, ...)` for catalyst_reversal Stage-2, etc. The whole screener track's IB-side work is now on the queue + properly conid-keyed.
 
 ### Batch S0.5 — Universe price + volume coverage (Polygon primary + Yahoo fallback) (2026-06-02)
 - Owner: claude
