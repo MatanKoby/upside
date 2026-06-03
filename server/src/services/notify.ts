@@ -350,6 +350,80 @@ function num(v: unknown): number | null {
   return null;
 }
 
+/**
+ * Band engine — low-band touch on a curated (non-held) ticker (Batch S3).
+ * Posts to DISCORD_WEBHOOK_DIP_BUYS (same channel as existing dip-buys, same
+ * audience). 4h cooldown owned by the caller via
+ * `band_state.band_touch_last_fired_at['low']`.
+ *
+ * Distinct from notifyIntradayStatsHit: stats-hit fires when price drops into
+ * the static intraday-stats p50–p75 band (per-day band); band-engine fires on
+ * the walking re-published low band, which adapts to each leg's anchor.
+ */
+export function notifyBandTouchLow(args: {
+  symbol: string;
+  currentPrice: number;
+  lowBand: number;
+  highBand: number;
+  sessionRegime: string | null;
+  volScalar: number | null;
+}): Promise<void> {
+  const { symbol, currentPrice, lowBand, highBand, sessionRegime, volScalar } = args;
+  const regimeNote = sessionRegime ? ` · ${sessionRegime}` : '';
+  const scalarNote = volScalar != null && Number.isFinite(volScalar)
+    ? ` · vol_scalar ${volScalar.toFixed(2)}` : '';
+  const line =
+    `🟢 ${symbol} touched predicted low band — $${currentPrice.toFixed(2)} ` +
+    `(band $${lowBand.toFixed(2)}–$${highBand.toFixed(2)})${regimeNote}${scalarNote}`;
+  console.log(`[band-engine] ${line}`);
+  const url = env.discordDipBuysWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🟢 ${symbol} · band-engine low touch`,
+      description: line,
+      color: 0x4f8ef7,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
+/**
+ * Band engine — high-band touch on a held position (Batch S3). Posts to
+ * DISCORD_WEBHOOK_SELL_ZONES (own channel so sell-side pings are mutable
+ * independently from buy-side). 4h cooldown owned by the caller via
+ * `band_state.band_touch_last_fired_at['high']`.
+ */
+export function notifyBandTouchHigh(args: {
+  symbol: string;
+  currentPrice: number;
+  lowBand: number;
+  highBand: number;
+  sessionRegime: string | null;
+  volScalar: number | null;
+}): Promise<void> {
+  const { symbol, currentPrice, lowBand, highBand, sessionRegime, volScalar } = args;
+  const regimeNote = sessionRegime ? ` · ${sessionRegime}` : '';
+  const scalarNote = volScalar != null && Number.isFinite(volScalar)
+    ? ` · vol_scalar ${volScalar.toFixed(2)}` : '';
+  const line =
+    `🔺 ${symbol} touched predicted high band — $${currentPrice.toFixed(2)} ` +
+    `(band $${lowBand.toFixed(2)}–$${highBand.toFixed(2)})${regimeNote}${scalarNote}`;
+  console.log(`[band-engine] ${line}`);
+  const url = env.discordSellZonesWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🔺 ${symbol} · band-engine high touch`,
+      description: line,
+      color: 0xE0991A,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyDipBuyMarkerHit(args: {
   symbol: string;
   markerPrice: number;

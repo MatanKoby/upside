@@ -96,4 +96,9 @@ export const env = {
   // intraday_range_trader is silent — its band-touches carry the actionable
   // events.
   discordCatalystAlertsWebhookUrl: optional('DISCORD_WEBHOOK_CATALYST_ALERTS'),
+  // DISCORD_WEBHOOK_SELL_ZONES — Batch S3. Predicted-high band touch on a
+  // held position posts here (distinct from dip-buys so sell-side pings are
+  // mutable independently). Low-touch on curated-not-held still routes to
+  // DISCORD_WEBHOOK_DIP_BUYS — the existing dip-buys channel.
+  discordSellZonesWebhookUrl: optional('DISCORD_WEBHOOK_SELL_ZONES'),
 };

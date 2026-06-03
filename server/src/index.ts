@@ -23,6 +23,7 @@ import { startConidResolutionProducer } from './cron/conidResolutionProducer.js'
 import { startIntradayRangeTraderProducer } from './cron/intradayRangeTraderProducer.js';
 import { startCatalystReversalProducer } from './cron/catalystReversalProducer.js';
 import { startPostEarningsDriftProducer } from './cron/postEarningsDriftProducer.js';
+import { startBandEngineCron } from './cron/bandEngineCron.js';
 import { startMarketCapRefreshCron } from './cron/marketCapRefreshCron.js';
 import { startTraitScoresRetention } from './cron/traitScoresRetention.js';
 import { startJobsReaper } from './cron/jobsReaper.js';
@@ -93,6 +94,8 @@ app.listen(env.port, () => {
   startPostEarningsDriftProducer();
   startMarketCapRefreshCron();
   startTraitScoresRetention();
+  // Adaptive band engine (Batch S3) — 5-min cadence during regular + AH.
+  startBandEngineCron();
   // Job-queue infrastructure (Batch S0.3) — three worker pools + reaper + retention.
   createIbWorker().start();
   createFinnhubWorker().start();
