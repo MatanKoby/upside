@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch M1 — Agent context efficiency (measurement + structural slim-down)
-- Owner: claude
-- Started: 2026-06-03 05:46
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch M1 — Agent context efficiency (measurement + structural slim-down) (2026-06-03)
+- Owner: claude
+- Started: 2026-06-03 05:46 · Finished: 2026-06-03 06:13
+- Commit: 63b0af0
+- **What shipped:** five slices in one commit, all aimed at cutting agent context burn in long sessions:
+  - **Slice A — measurement.** `.claude/hooks/read-counter.sh` (PreToolUse on the Read tool) appends `<utc-iso>\t<file>\t<bytes>\t<session-id>` to gitignored `.claude-stats/file-reads.log` on every Read call. Non-blocking, silent, resilient to missing dir. `bin/upside-readstats [N]` prints the top-N most-read files lifetime + last 7d, with avg-bytes + distinct sessions, plus a totals footer. Both registered in `.claude/settings.local.json` (Read-hook entry + `Bash(bin/upside-readstats:*)` allowlist). `.claude-stats/` added to `.gitignore`. Smoke-tested with synthetic hook input — TSV row appended, `upside-readstats 5` rendered cleanly. The hook itself starts emitting from the next session start (Claude Code loads hooks at boot).
+  - **Slice B — content splits.** `BUILD_QUEUE_DONE.md` (new, 72 lines) holds the one-paragraph summaries that used to live in `BUILD_QUEUE.md`'s "## Completed batches" section. `CLAIMS_DONE.md` (new, 300 lines) holds the older completed entries (Polish slices, A1/A2/A+, Batch B/C first slice, Tooling slice, 14a/c/e/f/14.5, 13.x, 12, 11, 10, 8, 9, 7.5/7, 6, 5, 4, 3, 2, 1, plus the 2026-05-24 Settings + Discord-observability slices). Active `CLAIMS.md` keeps In progress + Known issues + the five most recent (S2 / S1.5 / S0.5 / S0.3 / S1) + a cross-link footer; trimmed from 464 → 179 lines. Active `BUILD_QUEUE.md` now points at `BUILD_QUEUE_DONE.md` for history and carries only the Un-done section + pick-order pointer.
+  - **Slice C — procedure extraction.** Three new skills under `.claude/skills/`: `claim-batch` (pull, eligibility, dependency, parallelism, `CLAIMS.md` entry, `meta: claim`, push-race recovery, mid-batch handoff, stale-claim recovery), `finish-batch` (final SHA capture, move-to-Completed, `meta: complete`, `/compact` reminder), `spec-edit` (concern-matching via per-folder README, cross-reference rule, archive rule, propagation to `BUILD_QUEUE.md`, persisting design decisions). All three appeared in the available-skills system reminder live during this session — verifying the harness picks them up automatically.
+  - **Slice D — hierarchical spec index.** `spec/signals/README.md` (new, 21 lines) indexes the 9 signal files; `spec/screens/README.md` (new, 19 lines) indexes the 7 screen files. `spec/README.md` slimmed from per-file rows for both sub-folders to root-files + pointer-to-sub-folder-READMEs; 88 → 42 lines.
+  - **Slice E — AGENTS.md slim-down.** Spec-layout table → one-line pointer to `spec/README.md`. Claim / push-race / mid-batch handoff / stale-claim recovery / finish / spec-edit-and-design-decisions → each compressed to a 2-3 line policy statement + a pointer to the relevant skill. Force-push prohibition stays inline (it's policy, not procedure). Commit-message convention table, file ownership, ideation handoff, branch model, what-does-NOT-belong → unchanged. AGENTS.md down from 231 → 130 lines. `CLAUDE.md` and `BUILD_QUEUE.md` stale "6 domain files + archive" references both updated.
+- **Verification:**
+  - `git diff --stat` shows 15 files / +748 / -510, no `server/` or `client/` touches (slice D + E only).
+  - All three new skills (`claim-batch`, `finish-batch`, `spec-edit`) live in the available-skills system reminder.
+  - `CLAIMS.md` (~8.3k tokens), `AGENTS.md` (~2.2k tokens) both fit under the Read-tool 25k single-call cap.
+  - `BUILD_QUEUE.md` post-split is still over the 25k cap because the user-owned Un-done section still carries the full S0.3-S2 batch bodies plus the post-MVP polish/PWA batches. Pruning those is the user's call (BUILD_QUEUE.md is user-owned) — or a later data-driven M2 slice.
+  - `bin/upside-readstats` smoke-rendered the top-N table from synthetic input.
+- **Out of scope (deferred to M2, data-driven, after ~1 week of read-counter stats):** content-spec splits (signals/* / schema.md / roadmap.md); code-file splits; auto-summarization of archive files; hooks on Write/Edit/Bash.
+- **What's next:** S3 (band engine — adaptive layers on top of the static intraday-stats band) remains the top un-done pick per the BUILD_QUEUE pointer. M2 surfaces itself once read-counter data accumulates.
 
 ### Batch S2 — Screener trait scoring engine (2026-06-02)
 - Owner: claude
