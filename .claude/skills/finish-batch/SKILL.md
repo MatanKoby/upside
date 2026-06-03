@@ -28,13 +28,25 @@ The full procedure. AGENTS.md carries only the 2-line policy pointer to this fil
 
 4. Commit `meta: complete batch-N` and `git push origin dev`.
 
-## Hand the context back
+## Hand the context back — compose a *specific* `/compact` suggestion
 
-5. Prompt the user to run `/compact` to reset the context window now that the batch is closed. Suggest which threads are worth preserving:
+5. Prompt the user to run `/compact` with **concrete** keep-args, not a generic "preserve relevant threads." A useful suggestion has three pieces:
 
-   > Batch N done. Suggest `/compact keep <topic>` — e.g. relevant design constraints, follow-ups you might want to claim next.
+   - **2–4 named items worth keeping.** Things the next batch's reasoning will lean on: durable artifacts shipped (new skills, new patterns, new infrastructure), design decisions made or reaffirmed in this session, forward pointers (next likely batch and why).
+   - **A one-line rationale** explaining what's being dropped vs. preserved — the *shape* of the trim, not a list of every excluded thread.
+   - **Honesty about your own role.** End with "I can't run /compact for you" so it's clear this is a reminder, not a queued action.
 
-   You **cannot** run `/compact` yourself — it's a user-driven command. This is a reminder, not an action.
+   What to *drop*: blow-by-blow execution detail, specific file paths / SHAs (git + `CLAIMS.md` own those), debug threads that are now resolved, intermediate states.
+
+   Template:
+
+   > Batch N done. Suggest `/compact keep <item-1>, <item-2>, <item-3>` to drop <execution-detail descriptor> but preserve <the enduring pieces>. I can't run /compact for you.
+
+   Concrete example (from Batch M1, 2026-06-03):
+
+   > Batch M1 done. Suggest `/compact keep M1 measurement, claim/finish/spec-edit skills, S3 next` to drop M1's execution detail but preserve the skill model and the next-batch pointer. I can't run /compact for you.
+
+   If nothing about the closed batch is worth preserving (rare — usually the *patterns* it established are), say so plainly and suggest a bare `/compact` instead.
 
 ## Next
 
