@@ -1,0 +1,60 @@
+#!/bin/bash
+# Aggregate the read-counter hook's log. Top-N most-read files lifetime + last
+# 7d, average bytes per read, distinct sessions per file. Reads
+# .claude-stats/file-reads.log (TSV, written by .claude/hooks/read-counter.sh).
+#
+# Usage: bin/upside-readstats [N]   (default N=15)
+
+set -u
+
+LOG="${CLAUDE_PROJECT_DIR:-$(pwd)}/.claude-stats/file-reads.log"
+
+if [[ ! -s "$LOG" ]]; then
+  echo "No reads logged yet (expected file: $LOG)."
+  echo "The PreToolUse hook in .claude/settings.local.json appends one line per Read call."
+  exit 0
+fi
+
+N="${1:-15}"
+
+top_n() {
+  awk -F'\t' '
+    {
+      counts[$2]++
+      bytes_total[$2] += $3
+      sessions[$2 SUBSEP $4] = 1
+    }
+    END {
+      for (f in counts) {
+        sess = 0
+        for (key in sessions) {
+          split(key, parts, SUBSEP)
+          if (parts[1] == f) sess++
+        }
+        printf "%d\t%d\t%d\t%s\n", counts[f], bytes_total[f]/counts[f], sess, f
+      }
+    }
+  ' | sort -rn -k1 | head -n "$N" | \
+  awk -F'\t' 'BEGIN { printf "%-7s %-12s %-9s %s\n", "READS", "AVG-BYTES", "SESSIONS", "FILE" }
+              { printf "%-7d %-12d %-9d %s\n", $1, $2, $3, $4 }'
+}
+
+echo "=== Top $N most-read files (lifetime) ==="
+top_n < "$LOG"
+
+echo
+echo "=== Top $N most-read files (last 7d) ==="
+CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+       || date -u -v-7d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+       || echo "")
+if [[ -z "$CUTOFF" ]]; then
+  echo "(no usable 'date -d' / '-v' on this platform — skipping 7d window)"
+else
+  awk -F'\t' -v cut="$CUTOFF" '$1 >= cut' "$LOG" | top_n
+fi
+
+TOTAL_READS=$(wc -l < "$LOG")
+UNIQUE_FILES=$(awk -F'\t' '{print $2}' "$LOG" | sort -u | wc -l)
+UNIQUE_SESSIONS=$(awk -F'\t' '{print $4}' "$LOG" | sort -u | wc -l)
+echo
+echo "Totals: $TOTAL_READS reads across $UNIQUE_FILES files in $UNIQUE_SESSIONS sessions"

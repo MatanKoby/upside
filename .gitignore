@@ -90,3 +90,8 @@ captures/
 network_captures/
 *.har
 
+# === Read-counter stats (Batch M1) ===
+# .claude/hooks/read-counter.sh appends one TSV line per Read tool call here.
+# Per-machine, gitignored — drives data-driven follow-up file splits (M2).
+.claude-stats/
+
