@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch S3 — Improved entry engine: adaptive band layers
-- Owner: claude
-- Started: 2026-06-03 06:32
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,38 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch S3 — Improved entry engine: adaptive band layers (2026-06-03)
+- Owner: claude
+- Started: 2026-06-03 06:32 · Finished: 2026-06-03 07:06
+- Commit: 009e516
+- **What shipped:** the three adaptive band layers from `signals/band-engine.md`, stacked on top of the static `intraday_stats` baseline.
+  - **Migration 026_band_state.sql** — new `band_state(conid, session_date, anchors jsonb, current_low_band, current_high_band, session_regime, vol_scalar, vol_regime_shift, band_touch_last_fired_at jsonb, updated_at)` PK `(conid, session_date)`. Realtime enabled; service-role write, authenticated read.
+  - **Layer 1 — `sessionRegime.ts`** (pure): gap + first-15-min direction + premkt-vol-ratio → `mean_reversion | bullish_trend | bearish_trend | mixed`. 10 vitest fixtures covering all four labels + boundaries + null premkt fallback.
+  - **Layer 2 — `volScalar.ts`** (pure): `ATR(last 12 5min bars) / baseline_atr → scalar (0.7 / 1.0 / 1.5) + annotation (calm_day / null / high_vol_today)`. Includes the MNTS 2026-05-30 validation fixture (2.6× vol → 1.5× wider band).
+  - **Layer 3 — `walkingState.ts`** (pure): state machine with `anchor_low / anchor_high / running_max / running_min / leg_direction / anchors[]`. Re-anchors on observed reversal from running extremum (threshold = `0.5 × intraday_ATR`). `leg_direction` added as explicit state (spec implied it but didn't name it) to prevent same-side anchor re-firing. 15 fixtures incl. seed phase, direction-tracking, REPL-style 5-leg ladder, publication math, vol_scalar widening.
+  - **`volRegimeShift.ts`** (pure): daily flag — last 5 sessions' ATR > 2× prior 30d ATR. 5 fixtures.
+  - **`bandEngineCron.ts`** — 5-min cadence during regular session + AH (09:30–20:00 ET). Loads today's `intraday_range_trader` curated list, IB-pulls `'2m' '5mins'` bars per conid, stacks Layer 1 (on first tick after 09:45 ET) + Layer 2 + Layer 3, persists `band_state`, fires band-touch Discord pings with 4h per-(conid, band_kind) cooldown via `band_touch_last_fired_at` jsonb.
+  - **`notify.ts`** — added `notifyBandTouchLow` (→ `DISCORD_WEBHOOK_DIP_BUYS`, existing channel, for non-held curated) + `notifyBandTouchHigh` (→ new `DISCORD_WEBHOOK_SELL_ZONES`, for held positions).
+  - **`env.ts` + `.env.example`** — new `DISCORD_WEBHOOK_SELL_ZONES` slot.
+  - **Wiring** — `startBandEngineCron()` added to `index.ts` after the trait producers + retention block.
+- **v1 simplifications persisted to spec (`spec: 009e516`):**
+  - Baseline ATR approximated as `today_open × intraday_low_pct_p50 / 100` — `intraday_stats` carries no `atr_30d_5min` column. Track-10 sharpening = add the column + compute in `intradayStatsCron`.
+  - Symmetric fade-pct (one `intraday_low_pct_p50` used for both up- and down-leg) — schema carries no `leg_up_fade_pct_p50` / `leg_down_fade_pct_p50` split. Track-10 sharpening = extend `computeIntradayStats` to bucket per-leg fade.
+  - Both noted as `Fade-pct + baseline-ATR sourcing (v1 simplification)` in `signals/band-engine.md` + as a follow-up in `roadmap.md` Track 10. Spec also fixes the **15:45 IDT → 16:45 IDT** classifier-timestamp typo + adds `leg_direction` to the persisted-state section.
+- **Manual prereqs for live-flip:**
+  - Create `#upside-sell-zones` Discord channel + incoming webhook → set `DISCORD_WEBHOOK_SELL_ZONES` in VPS `.env`. (Optional — without it, high-band touches still log to stdout, just no Discord ping.)
+  - Apply migration `026_band_state.sql` (`supabase migration up` on prod or via the migration GUI).
+- **Verification:**
+  - `pnpm typecheck` clean; `pnpm exec vitest run` 133/133 (39 new band-engine fixtures + 94 existing).
+  - During regular session: `bin/upside-psql -c "select conid, session_regime, vol_scalar, jsonb_array_length(anchors) from band_state where session_date=current_date order by jsonb_array_length(anchors) desc limit 10;"` should show curated tickers with regime labels + anchor counts growing through the session.
+  - Band-touch Discord pings fire on first cross + are suppressed within 4h.
+  - When `vol_regime_shift = true`, the published low band is visibly wider than the static `intraday_stats` band would have been.
+- **Follow-ups deferred (Track-10):**
+  - `intraday_stats.atr_30d_5min` column + nightly computation (replaces the price-space-from-p50 baseline proxy).
+  - `intraday_stats.leg_up_fade_pct_p50` + `leg_down_fade_pct_p50` columns + per-leg fade computation (replaces the symmetric proxy).
+  - Both wait on enough live band-engine sessions to compare predicted vs. realized leg sizes — data-driven sharpening, not blind extension.
+- **Known caveat:** `bandEngineCron` is IB-gated like `intradayStatsCron` — when IB is disconnected the tick is a no-op (curated list still loads but bars pull returns null + per-conid loop fails fast). User's on-demand IB session covers regular-hours coverage; AH coverage is only when the user keeps IB connected past close.
 
 ### Batch M1 — Agent context efficiency (measurement + structural slim-down) (2026-06-03)
 - Owner: claude
