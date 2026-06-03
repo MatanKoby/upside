@@ -394,52 +394,92 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ---
 
-## Batch M1: Agent context efficiency — measurement + file size discipline
+## Batch M1: Agent context efficiency — measurement + structural slim-down
 
 **Depends on:** none. Pure tooling + dev-workflow batch; no product surface.
 
-**Scope:** stop paying for 150k+-token agent sessions where most of the burn is re-reading bloated coordination files. Two slices that ship together: (1) a PreToolUse hook that counts per-file Read calls so we know which files to split, (2) a first round of obvious splits applied immediately based on what's already visible (BUILD_QUEUE.md + CLAIMS.md). Subsequent split rounds run **data-driven** after a week of stats. Spec: `spec/roadmap.md` → Meta — agent context efficiency.
+**Scope:** stop paying for 150k+-token agent sessions where most of the burn is re-reading bloated coordination files. Four slices ship together: (1) a PreToolUse hook that counts per-file Read calls so future split rounds (M2) are data-driven, (2) immediate content-file splits where the bloat is already obvious (BUILD_QUEUE.md, CLAIMS.md), (3) procedure extraction from `AGENTS.md` into three Claude-Code skills whose plain-markdown bodies Cursor also reads, (4) a hierarchical README index across `spec/` so orientation reads scope to the folder you're touching. Subsequent content-file split rounds (e.g. slicing `spec/roadmap.md` or `spec/signals/*`) run **data-driven** after a week of stats. Spec: `spec/roadmap.md` → Meta — agent context efficiency.
 
 ### Observed pain (why now)
 
-This session alone: `BUILD_QUEUE.md` (1101 lines, ~38k tokens) and `CLAIMS.md` (463 lines, ~30k tokens) both blew the Read-tool 25k single-call cap and forced truncated reads + follow-up Grep calls. `/context` reports messages at 183k tokens, dominated by tool-result file contents. Cache misses past the 5-min TTL on long sessions compound the cost. Splitting these two files alone is expected to halve the typical orientation read.
+This session alone: `BUILD_QUEUE.md` (~1100 lines, ~38k tokens) and `CLAIMS.md` (~460 lines, ~30k tokens) both blew the Read-tool 25k single-call cap and forced truncated reads + follow-up Grep calls. `/context` reports messages at 183k tokens, dominated by tool-result file contents. Cache misses past the 5-min TTL on long sessions compound the cost. `AGENTS.md` (~230 lines) re-reads on every session orientation, and most of its bulk is procedure rather than policy.
 
 ### Deliverables
 
+#### Slice A — Measurement
+
 1. **`.claude/hooks/read-counter.sh`** — PreToolUse hook on the `Read` tool. Appends one tab-separated line per call to gitignored `.claude-stats/file-reads.log`: `<utc-iso>\t<file-path>\t<bytes>\t<session-id>`. Non-blocking (`exit 0` always); silent (no stdout); resilient to a missing stats dir (creates on first call). Registered in `.claude/settings.local.json` so it loads only in this repo + only for the user who opts in.
 2. **`bin/upside-readstats`** — aggregator script: prints "top N most-read files" (lifetime + last 7d), avg bytes per read, sessions touched. Allowlisted via `Bash(bin/upside-readstats:*)` so the user (or the agent) can call it without an approval prompt. Reads from the gitignored log; never writes secrets.
-3. **`.claude-stats/` directory** — gitignored. Created lazily by the hook. `.gitignore` line added.
-4. **`.gitignore` update** — `.claude-stats/`.
-5. **Immediate splits (no data needed — already evident)**:
-   - `BUILD_QUEUE.md` → keep current shape but move the **Completed batches** one-paragraph summaries (currently lines 18-83) into a new **`BUILD_QUEUE_DONE.md`** (archive). The active file becomes "Un-done batches + pick-order pointer" only. Cross-link from BUILD_QUEUE.md's top: "Completed history: see `BUILD_QUEUE_DONE.md`."
-   - `CLAIMS.md` → analogous: keep In progress + Known issues + the last ~5 completed batches; move older completed entries to a new **`CLAIMS_DONE.md`** (archive). Cross-link from CLAIMS.md's bottom: "Older completed batches archived in `CLAIMS_DONE.md`."
-6. **`AGENTS.md` addendum** — a short "Read discipline" section: "Before reading a large file, use Grep / line-range Read to scope to the section you need. Whole-file reads only make sense for files <500 lines or first-time orientation." Encodes the read pattern the splitting enables.
-7. **Spec roadmap update** is already in place (`spec/roadmap.md` → Meta — agent context efficiency).
+3. **`.claude-stats/` directory** — gitignored. Created lazily by the hook.
+4. **`.gitignore` update** — add `.claude-stats/`.
 
-### Out of scope (deferred to a data-driven follow-up after ~1 week of stats)
+#### Slice B — Immediate content splits
 
-- Splitting spec files (`spec/signals/*.md`, `spec/schema.md`) — coherence beats fragmentation; wait for the read-counter data to identify which sections are actually re-read independently before slicing.
+5. **`BUILD_QUEUE.md` split** — keep current shape but move the **Completed batches** one-paragraph summaries (currently lines 18-83) into a new **`BUILD_QUEUE_DONE.md`** (archive). The active file becomes "Un-done batches + pick-order pointer" only. Cross-link from `BUILD_QUEUE.md`'s top: "Completed history: see `BUILD_QUEUE_DONE.md`."
+6. **`CLAIMS.md` split** — analogous: keep In progress + Known issues + the last ~5 completed batches; move older completed entries to a new **`CLAIMS_DONE.md`** (archive). Cross-link from `CLAIMS.md`'s bottom: "Older completed batches archived in `CLAIMS_DONE.md`."
+
+#### Slice C — Procedure extraction (three skills)
+
+7. **`.claude/skills/claim-batch/SKILL.md`** — claim protocol + push-race recovery + mid-batch handoff + stale-claim recovery (currently AGENTS.md lines 116–171). Description-line trigger: *"Use when claiming a batch from `BUILD_QUEUE.md` — eligibility check, dependency check, parallelism check, CLAIMS.md entry, `meta: claim` commit, push-race recovery, handoff/reclaim flows. Invoke before starting any new batch."*  Body is a focused step-by-step checklist; AGENTS.md becomes a 3-line policy pointer.
+8. **`.claude/skills/finish-batch/SKILL.md`** — finish protocol (currently AGENTS.md lines 130–138). Description-line trigger: *"Use when wrapping up a claimed batch — final commit, SHA capture, CLAIMS.md move-to-completed, `meta: complete` commit, push, `/compact` reminder."* Body is the step-by-step.
+9. **`.claude/skills/spec-edit/SKILL.md`** — encodes the "before editing spec" checklist + design-decision persistence (currently AGENTS.md lines 193–222). Description-line trigger: *"Use before editing any file under `spec/**`, or when persisting a design/spec decision the user has just made. Encodes concern-matching via per-folder README, size-watch, cross-reference rule, archive rule, propagation to `BUILD_QUEUE.md`, and the per-folder README pattern."* Body covers the full checklist incl. when to flag miscarving and the per-folder index convention.
+
+All three skills get allowlisted via `Skill(claim-batch)`, `Skill(finish-batch)`, `Skill(spec-edit)` in `.claude/settings.local.json` so invocation isn't a friction point — they just load their body, no side effects.
+
+#### Slice D — Hierarchical spec index
+
+10. **`spec/README.md` slim-down** — drop the `spec/signals/*` and `spec/screens/*` per-file rows. Keep root files (architecture / flows / schema / job-queue / roadmap / archive) + two pointer lines to the sub-folder READMEs. Reading-order + editing-convention sections stay.
+11. **`spec/signals/README.md`** (new) — per-folder index for the 9 signal files. One-line description per file, matching the current top-level descriptions.
+12. **`spec/screens/README.md`** (new) — per-folder index for the 7 screen files. Same shape.
+
+#### Slice E — AGENTS.md slim-down
+
+13. **`AGENTS.md` rewrite** — drops from ~230 to ~120 lines:
+    - Spec-layout table (lines 27–50) → one-liner pointer to `spec/README.md`.
+    - Claim protocol (116–128), Push race recovery (140–151), Mid-batch handoff (153–162), Stale-claim recovery (164–171) → each compressed to a 2–3 line policy statement + pointer to the `claim-batch` skill.
+    - Finish protocol (130–138) → 2-line policy + pointer to `finish-batch` skill.
+    - Design and spec decisions (193–222) → 2-line policy ("Design decisions must be persisted to `spec/**` and `BUILD_QUEUE.md` before moving on") + pointer to `spec-edit` skill.
+    - Commit-message convention table, file ownership, ideation handoff, branch model, what-does-NOT-belong → unchanged.
+
+### Out of scope (deferred to M2, data-driven, after ~1 week of stats)
+
+- Splitting content spec files (`spec/signals/*.md`, `spec/schema.md`, `spec/roadmap.md`) — coherence beats fragmentation; wait for the read-counter data to identify which sections are actually re-read independently before slicing.
 - Splitting code files — same reasoning; measure before cutting.
 - Auto-summarization of archive files.
 - Hooks on Write / Edit / Bash — not where the context goes.
 
 ### Files this batch creates/edits
 - `.claude/hooks/read-counter.sh` (new)
-- `.claude/settings.local.json` (register the hook)
+- `.claude/settings.local.json` (register hook + allowlist three skills)
 - `bin/upside-readstats` (new, chmod +x)
 - `.gitignore` (add `.claude-stats/`)
 - `BUILD_QUEUE.md` (move Completed batches → archive)
 - `BUILD_QUEUE_DONE.md` (new)
 - `CLAIMS.md` (move older completed → archive)
 - `CLAIMS_DONE.md` (new)
-- `AGENTS.md` (Read discipline section)
+- `.claude/skills/claim-batch/SKILL.md` (new)
+- `.claude/skills/finish-batch/SKILL.md` (new)
+- `.claude/skills/spec-edit/SKILL.md` (new)
+- `spec/README.md` (slim-down)
+- `spec/signals/README.md` (new)
+- `spec/screens/README.md` (new)
+- `AGENTS.md` (procedure extraction + spec-map → pointer)
+
+### Does NOT touch
+- Any code under `server/` or `client/`.
+- Any `spec/` content file other than the README slim-down and the two new sub-folder READMEs.
+- `CLAUDE.md` (already minimal — 4 lines deferring to AGENTS.md).
 
 ### Verification
 
-- `bin/upside-readstats` prints a table after a few sessions; "top 5" should match intuition (BUILD_QUEUE / CLAIMS / large spec files).
+- `bin/upside-readstats` prints a table after a few sessions; "top 5" should match intuition.
 - `BUILD_QUEUE.md` Read returns under the 25k cap without truncation.
 - `CLAIMS.md` Read returns under the 25k cap without truncation.
+- `AGENTS.md` Read returns under ~120 lines / ~4k tokens.
 - Existing pointers ("the screener track now sequences as S0.3 → ... → S4") still resolve cleanly post-split; un-done batch lookups don't require cross-file traversal.
+- All three skills appear in the available-skills system reminder at session start with their trigger descriptions.
+- Invoking each skill via the Skill tool returns the SKILL.md body without an approval prompt.
+- Existing AGENTS.md cross-references from spec / queue still resolve (the policy statements + skill pointers replace the procedures cleanly).
 - A clean session orientation read costs measurably fewer tokens (track via `/context` before/after).
 
 ### Trigger for the data-driven follow-up batch (M2, sketched only)

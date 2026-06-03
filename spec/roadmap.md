@@ -332,7 +332,7 @@ Result: each unresolvable symbol re-attempted at most weekly (catches genuinely-
 
 Agent (Claude Code / Cursor) sessions on this repo run at 150k+ tokens routinely because the coordinating files (`BUILD_QUEUE.md`, `CLAIMS.md`) and the larger spec files exceed Read-tool single-call caps and force re-reads + truncation. Anthropic's own Skills file convention sits at <250 tokens per skill — a deliberate "one fact per file" discipline. We're missing that discipline; the result is wasted tokens, slower turns, and stale-context risk near the cap.
 
-The fix is **measure first, split second** — don't guess which files are the hot ones.
+The fix is **measure first, split second** for content files — don't guess which are hot — but **structural moves that don't fragment content** (skill extraction, hierarchical indexes, slim-down of always-loaded policy files) ship now without needing data, because they're reversible and tighten the read-on-orientation footprint at almost zero risk.
 
 ### Observability: per-file Read counter
 
@@ -340,21 +340,55 @@ PreToolUse hook on the `Read` tool appends one line per call to a gitignored sta
 
 The hook is non-blocking (`exit 0` always) and stateless beyond the append; failure modes don't break tool calls. Opt-out by deleting the hook entry from `.claude/settings.local.json`.
 
-### Splitting discipline
+### Splitting discipline (content files)
 
-After ~1 week of stats, top-N hot files get sliced. Two known-hot candidates already visible without data:
+After ~1 week of stats, top-N hot **content** files get sliced. Two known-hot candidates ship immediately without needing data:
 
-- **`BUILD_QUEUE.md`** (1101 lines, ~38k tokens) — split into `BUILD_QUEUE.md` (un-done batches only) + `BUILD_QUEUE_DONE.md` (completed batch one-liners). Halves a typical orientation read.
-- **`CLAIMS.md`** (463 lines, ~30k tokens) — same split: `CLAIMS.md` (in-progress + recent completed) + `CLAIMS_DONE.md` (archive of older completed batches).
+- **`BUILD_QUEUE.md`** (~1100 lines, ~38k tokens) — split into `BUILD_QUEUE.md` (un-done batches only) + `BUILD_QUEUE_DONE.md` (completed batch one-liners). Halves a typical orientation read.
+- **`CLAIMS.md`** (~460 lines, ~30k tokens) — same split: `CLAIMS.md` (in-progress + recent completed) + `CLAIMS_DONE.md` (archive of older completed batches).
 
-Spec files (`spec/signals/*.md`, `spec/schema.md`) get split based on the measured numbers — guessing "schema.md is too big" without data risks fragmenting coherent reads that work fine today. The Anthropic Skill <250-token discipline is the **ceiling** to aspire to for per-fact files, not a one-size-fits-all rule for narrative spec files.
+Other spec files (`spec/signals/*.md`, `spec/schema.md`, `spec/roadmap.md`) get split based on measured numbers — guessing without data risks fragmenting coherent reads that work fine today. The Anthropic Skill <250-token discipline is the **ceiling** to aspire to for per-fact files, not a one-size-fits-all rule for narrative spec files.
 
-### Reference policy
+### Procedure extraction: AGENTS.md → skills
 
-`AGENTS.md` gets a short addendum: "Before reading a large file, use Grep / line-range Read to scope to the section you need. The whole-file read pattern only makes sense for files <500 lines or first-time orientation." Encodes the read-discipline the splitting is meant to enable.
+`AGENTS.md` (~230 lines) re-reads every session for orientation. Most of its bulk is *procedure* (claim protocol, finish protocol, push-race recovery, handoff, reclaim, design-decision persistence) rather than *policy*. Procedure moves into `.claude/skills/` SKILL.md files — invoked deliberately at the moment they apply, terse and focused. Policy stays in `AGENTS.md` as 2–3 line statements that point at the skill for the how.
+
+Skill files are plain markdown — Cursor reads them like any other repo file even though it can't invoke them as Claude-Code skills. So one skill body = both agents see the convention; no duplication.
+
+Three skills land in M1:
+
+- **`claim-batch`** — claim protocol, push-race recovery, mid-batch handoff, stale-claim recovery. All four flows live here because they're the same flow at different moments.
+- **`finish-batch`** — finish protocol (final commit, SHA capture, CLAIMS move-to-completed, `meta: complete` commit, push, `/compact` reminder).
+- **`spec-edit`** — encodes the "before editing spec" checklist: match concern to file (use the per-folder README index), watch file size, prefer cross-reference over restatement, archive when no longer live, propagate design decisions to `BUILD_QUEUE.md`. Also encodes the per-folder README pattern below.
+
+Description-line phrasing for each skill is written to fire on the right moment (e.g. spec-edit: "before editing any file under `spec/**`, or when persisting a design decision the user has just made") so the always-loaded skills index doubles as the trigger reminder.
+
+### Hierarchical spec index
+
+`spec/README.md` today carries the full file map for all 21 spec files in one table. As `spec/signals/` and `spec/screens/` grow, that table grows. Restructure to a fractal hierarchy:
+
+- `spec/README.md` — slim top-level index: root files (architecture, flows, schema, job-queue, roadmap, archive) + pointers to the two sub-folder READMEs.
+- `spec/signals/README.md` (new) — per-folder index for the 9 signal files.
+- `spec/screens/README.md` (new) — per-folder index for the 7 screen files.
+
+Read a small index as you navigate down the tree, instead of one big map every session. Scales as folders grow (e.g. when a `spec/signals/playbook.md` eventually warrants its own sub-folder, the pattern extends without redesign). Encoded in the `spec-edit` skill: when adding a spec file, place it in the matching sub-folder; add a one-line entry to that folder's `README.md`; cross-reference by relative path.
+
+Token math at current scale is roughly a wash — the structural win (clearer hierarchy, easier to extend, encodes the carving rule at the folder level) is the real reason to ship it now.
+
+### AGENTS.md slim-down
+
+After the spec-map relocation and procedure extraction, `AGENTS.md` drops from ~230 to ~120 lines:
+
+- Spec-map table → pointer to `spec/README.md` (which itself now points to the sub-folder READMEs).
+- Claim/finish/handoff/reclaim/push-race sections → 3-line policy statement each + pointer to the owning skill.
+- Design-and-spec-decisions section → 2-line policy statement + pointer to `spec-edit` skill.
+- Commit-message convention table, file ownership, ideation handoff, branch model → all stay (brief, both-agent policy).
+
+Net: ~4k tokens saved on every session orientation, single source of truth per concern.
 
 ### Non-goals
 
-- Don't split files that are already small and coherent just to hit a token target — coherence beats fragmentation.
+- Don't split content files that are already small and coherent just to hit a token target — coherence beats fragmentation.
 - Don't auto-summarize the archive files; agents that need the full history still get it via a deliberate read.
 - Don't add the counter to non-Read tools — Write/Edit/Bash are fast enough that the noise outweighs the data.
+- Don't duplicate procedure between `AGENTS.md` and skill files — single source of truth, skill body is canonical for the how.
