@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-*(empty — Batch S2 just landed, see Completed.)*
+### Batch M1 — Agent context efficiency (measurement + structural slim-down)
+- Owner: claude
+- Started: 2026-06-03 05:46
 
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
