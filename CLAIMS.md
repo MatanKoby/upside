@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch S3 — Improved entry engine: adaptive band layers
+- Owner: claude
+- Started: 2026-06-03 06:32
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
