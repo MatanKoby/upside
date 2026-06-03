@@ -303,6 +303,15 @@ Currently, band-touches notify (Discord) but don't write `watchlist_markers` row
 
 **Revisit when** we have ≥5 observed `vol_regime_shift` cases logged, so the truncation rule can be calibrated against real data rather than a synthetic estimate.
 
+### Band-engine baseline + fade-pct sharpening (S3 v1 simplifications)
+
+Batch S3 ships two intentional proxies in the band engine (see `signals/band-engine.md` → Fade-pct + baseline-ATR sourcing):
+
+- **Baseline ATR for vol_scalar** — currently approximated as `today_open × intraday_low_pct_p50 / 100`. v2 adds an `atr_30d_5min` column to `intraday_stats` + computes it during the nightly bar pull. Tightens the high-vol / calm-day classification.
+- **Per-direction fade %s** — currently uses `intraday_low_pct_p50` for both up-leg and down-leg fade. v2 extends `computeIntradayStats` to bucket per-leg fade %s and stores `leg_up_fade_pct_p50` + `leg_down_fade_pct_p50` separately. Tightens asymmetric-leg cases (especially trend days).
+
+**Revisit when** we have enough live band-engine sessions to compare predicted vs. realized leg sizes — both bias diagnosis (proxy vs. observed) and the v2 schema change should be driven by that data rather than guesswork. Both items are schema migrations + cron extensions; not low-effort.
+
 ---
 
 ## Tech debt + low-priority cleanups

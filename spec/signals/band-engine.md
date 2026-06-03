@@ -45,8 +45,9 @@ Three layers fix all three:
 
 ## Layer 1 — Session regime classifier
 
-Publishes a single label at **15:45 IDT** (15 min after regular open). One
-classification per ticker per day; held until 16:30 IDT next session.
+Publishes a single label at **16:45 IDT** (15 min after regular open at
+16:30 IDT). One classification per ticker per day; held until 16:30 IDT
+next session.
 
 | label | when fired |
 | --- | --- |
@@ -87,6 +88,35 @@ today is the evidence.
 Stored on `band_state.vol_scalar`. Logged with each tick so back-testing
 can see the time evolution.
 
+### Fade-pct + baseline-ATR sourcing (v1 simplification)
+
+The math above assumes two inputs from `intraday_stats` that the current
+schema (`stats.md`) does NOT separately carry:
+
+- **`ATR_30d_baseline`** in price space — used as the vol_scalar denominator.
+  `intraday_stats` stores `intraday_low_pct_p50` (typical % drawdown) but not
+  a 30d ATR in price units. **v1 approximates**:
+  `baseline_atr ≈ today_open × intraday_low_pct_p50 / 100`. Captures cross-
+  stock variation + order of magnitude (a 6% typical drawdown produces a
+  much larger price-space baseline than a 1.5% drawdown), at the cost of
+  conflating "session drawdown" with "5-min bar TR." **Track-10 sharpening**:
+  add `atr_30d_5min` column to `intraday_stats`; `intradayStatsCron` computes
+  it during the nightly bar pull.
+- **`p50_high_fade_pct` + `p50_low_fade_pct`** — the typical up-leg and down-
+  leg fade sizes used in band publication (`stats.md` only carries the
+  intraday-low percentile, no symmetric up-leg fade). **v1 uses
+  `intraday_low_pct_p50` for both directions** as a symmetric proxy — the
+  typical session drawdown is a fair stand-in for "typical leg size" at the
+  population level, but it bakes in the assumption that up-legs and down-
+  legs are the same magnitude (often roughly true on mean-reversion days,
+  less true on trend days). **Track-10 sharpening**: extend
+  `computeIntradayStats` to also bucket per-leg fade %s and store
+  `leg_up_fade_pct_p50` + `leg_down_fade_pct_p50` separately.
+
+Sharpening is non-trivial — both items require schema migrations + cron
+extensions. The proxies preserve direction + magnitude; the band engine
+ships useful in v1 and gets more accurate when these baselines tighten.
+
 ### vol_regime_shift flag (slow companion)
 
 A daily-resolution version of the same idea: when the last 5 sessions' ATR
@@ -109,6 +139,13 @@ Stored on `band_state` (see `../schema.md`):
 - `anchor_high` — the most recent local-high pivot (last re-anchor high)
 - `running_max_since_low_anchor` — tracks running max since last low anchor
 - `running_min_since_high_anchor` — tracks running min since last high anchor
+- `leg_direction` — `'up' | 'down' | null`. Null at seed; set on the first
+  reversal that crosses threshold; flips on each subsequent anchor.
+  Required to prevent the same-side anchor from re-firing as price keeps
+  moving past it: after a low-anchor we're on an upward leg and only high-
+  anchors fire; after a high-anchor, the reverse. The conditional phrasing
+  below ("If tracking an upward leg from anchor_low") makes this implicit;
+  v1 implementation makes it an explicit state field on `band_state`.
 - `anchors jsonb` — chronological array of `{kind, price, ts}` for replay/debug
 
 ### Initial seed
