@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring engine). The screener track now sequences as **S3 → S4**, with **S3 the next claim** (band engine — adaptive layers on top of the static intraday-stats band). Orthogonal slice that can land in parallel: **Batch M1** (agent context efficiency — Read-counter hook + immediate splits of BUILD_QUEUE / CLAIMS). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **S3** is the most likely answer right now.
+> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Screener FE reshape: two ranked lists by composite score with rolling hit-rate columns, supersedes the three-trait-accordion shape originally specced for S4). Orthogonal slice that can land in parallel: **Batch M1** (agent context efficiency). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
 
 ---
 
@@ -281,7 +281,111 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
-## Batch S4: Virtual lists — Screener tab FE
+## Batch X1: Dip-bounce track — curated list + two-scorer alert + forward-tracking
+
+**Depends on:** Batch S2 (`trait_scores` for curated-list membership), Batch S3 (`band_state` for session_regime + vol_regime_shift), Batch B (`intraday_stats` for typical band check), Batch A+ (`entry_zones` for confluence + trend regime). All shipped.
+
+**Scope:** Materializes the dip-bounce design (2026-06-03 session). Three pieces ship as one batch because each is too small standalone and they share the same poll-cycle hook: (1) the **curated list** — auto-maintained ~200-300 high-potential pool replacing the 25-name manual watchlist as the alert pool, (2) two **dip-bounce scorers** (intraday + swing) firing into two new Discord channels with cooldowns, (3) **forward-tracking infrastructure** (`signal_fires` + `signal_outcomes` + `signal_hit_rate_30d` view) — durable backbone for *all* signal hit-rate measurement going forward, not just this batch.
+
+Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec/schema.md` (new tables).
+
+### Deliverables
+
+1. **Migration `02X_dip_bounce.sql`** — three new tables (`curated_list`, `signal_fires`, `signal_outcomes`) per `spec/schema.md`. Realtime enabled on `curated_list` only. Includes the `signal_hit_rate_30d` SQL view.
+
+2. **`server/src/config/curatedList.ts`** — named constants: `TARGET_SIZE = 250`, `MIN_AVG_VOLUME = 1_000_000`, `MIN_DAILY_ATR_PCT = 1.5`.
+
+3. **`server/src/services/curatedList/buildCuratedList.ts`** — pure function: read `trait_scores` for today's `intraday_range_trader`, join `universe.real_conid` + `universe.last_avg_volume`, compute daily ATR% from the nightly bar pull, apply gates, sort by score desc, cap at `TARGET_SIZE`. Vitest fixtures (size cap, liquidity gate, ATR gate, fewer-than-target survivors).
+
+4. **`server/src/cron/curatedListCron.ts`** — runs at **09:10 IDT nightly** (after S2's trait scoring at 09:00) + **15:30 IDT pre-market** (incremental refresh). Writes today's `curated_list` rows. Reuses S0.3's job queue (`compute` worker pool).
+
+5. **`server/src/config/dipBounceScorer.ts`** — named weight + threshold constants for both scorers (see `spec/signals/dip-bounce-scorer.md` for the formulas). All tunable from outcome data; no magic numbers in the scorer functions themselves.
+
+6. **`server/src/services/dipBounce/intradayScorer.ts`** — pure function `computeIntradayDipBounceScore(conid, asof_ts) → { score, components, fired }`. Reads `quotes`, `intraday_stats`, `band_state`, `entry_zones`. Critical guard: `IN_TYPICAL_BAND = 0` when drop is past p75 (deep is worse than typical). Vitest fixtures for all 5 components + the `deep` veto + the threshold-cross logic.
+
+7. **`server/src/services/dipBounce/swingScorer.ts`** — pure function `computeSwingDipBounceScore(conid, asof_ts) → { score, components, fired }`. Reads daily indicators (RSI, ATR, trend regime) via `technicals.ts` + the same tables as the intraday scorer. Vitest fixtures.
+
+8. **`server/src/services/dipBounce/dipBounceCron.ts`** OR poll-cycle hook in `upsertQuote` — fires both scorers on every `quotes.canonical_price` write for any `(conid in curated_list where asof_date = today)`. Cooldown checks read `signal_fires` for last fire timestamp per `(conid, signal_kind)`. On fire: write `signal_fires` row, fire Discord ping. Wire choice: pick whichever keeps the existing poll-cycle path clean — the user has been bitten by alert checks bloating the poll cycle.
+
+9. **`server/src/services/notify.ts`** extensions — `notifyIntradayDipBounce(payload)` and `notifySwingDipBounce(payload)` routing to the two new channels. Embed format per `spec/signals/dip-bounce-scorer.md` → Discord message format.
+
+10. **`server/src/cron/signalOutcomesCron.ts`** — runs every 5 minutes. Selects `signal_fires` rows whose next-due outcome offset (+30m / +2h / +1d / +3d) has elapsed without a corresponding `signal_outcomes` row, looks up `quotes.canonical_price`, writes the outcome row + `return_pct`. Generic — works for any future `signal_kind`.
+
+11. **`server/scripts/dip-bounce-backtest.mjs`** — **throwaway calibration script, NOT maintained, NOT in the cron set**. Runs the proposed scorer constants against the last 60 sessions of bar data for the curated list, prints fire counts per day + naive hit-rate. Used once to set v1 weights to roughly 1–3 fires/day per channel, then discarded. Add a comment at the top: "Throwaway — see spec/signals/dip-bounce-scorer.md → Throwaway calibration. Do not extend; rebuild from forward-tracker data after a month of real fires."
+
+12. **`.env.example`** — add `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` and `DISCORD_WEBHOOK_SWING_SUGGESTIONS`.
+
+13. **Boot wiring** in `server/src/index.ts` — start `curatedListCron` + `signalOutcomesCron`. Scorers hook into the existing poll cycle (no separate cron).
+
+### Files this batch creates/edits
+- `supabase/migrations/02X_dip_bounce.sql` (new)
+- `server/src/config/curatedList.ts` (new)
+- `server/src/config/dipBounceScorer.ts` (new)
+- `server/src/services/curatedList/buildCuratedList.ts` (new + vitest)
+- `server/src/services/dipBounce/intradayScorer.ts` (new + vitest)
+- `server/src/services/dipBounce/swingScorer.ts` (new + vitest)
+- `server/src/services/dipBounce/dipBounceCron.ts` (new) OR extend `services/quotes/upsertQuote.ts`
+- `server/src/cron/curatedListCron.ts` (new)
+- `server/src/cron/signalOutcomesCron.ts` (new)
+- `server/src/services/notify.ts` (two new functions)
+- `server/scripts/dip-bounce-backtest.mjs` (new, throwaway — NOT maintained)
+- `server/src/index.ts` (boot wiring)
+- `.env.example` (two new env vars)
+
+### Does NOT touch
+- The Screener FE (X2 owns that).
+- Universe (S1), trait scoring (S2), band engine (S3) — pure data consumer.
+- `markers.md` (separate alert primitive; the dip-bounce scorer doesn't replace it).
+
+### Manual prereqs
+- Create `#upside-intraday-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` to VPS `.env`.
+- Create `#upside-swing-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SWING_SUGGESTIONS` to VPS `.env`.
+
+### Pre-ship calibration (throwaway-script use)
+- Run `node server/scripts/dip-bounce-backtest.mjs` on the dev VPS. Inspect fire rate per scorer over the last 60 sessions. Target combined fire rate: **1–3 fires/day** across both channels. If fires/day > 5 → raise scoring thresholds; if < 0.5 → lower thresholds. Commit the tuned constants, then ship the live scorer.
+
+### Verification
+- Migration applied.
+- After first `curatedListCron` run: `bin/upside-psql -c "select count(*) from curated_list where asof_date = current_date;"` returns a number in `[180, 250]`.
+- Spot-check membership: `bin/upside-psql -c "select c.conid, u.symbol, c.intraday_range_trader_score, c.avg_daily_volume, c.daily_atr_pct from curated_list c join universe u on u.real_conid = c.conid where c.asof_date = current_date order by c.rank limit 20;"` returns 20 names that pass the gates.
+- Live: within a regular session day, observe at least one fire in each channel; confirm `signal_fires` row written + `signal_outcomes` rows accumulate at +30m / +2h / +1d / +3d.
+- Hit-rate view: `bin/upside-psql -c "select * from signal_hit_rate_30d;"` returns per-kind aggregate rows once fires + outcomes have accumulated (≥1 week of data needed for a meaningful number).
+- Cooldown: same ticker firing twice within 4h on intraday (or 24h on swing) → second fire is silently skipped (no Discord ping, no `signal_fires` row).
+
+### Out of scope (X2 follow-up)
+- Any FE surface — the Screener tab reshape that renders these scorers as two ranked lists with rolling hit-rate columns lands in X2 below.
+- Porting band-touch and marker fires onto the same `signal_fires` backbone — easy follow-up once X1's tables exist; queued as part of Batch C remainder.
+
+---
+
+## Batch X2: Screener FE reshape — two ranked lists by composite score
+
+**Depends on:** Batch X1 (`curated_list`, `signal_fires`, `signal_outcomes`, hit-rate view).
+
+**Scope:** Supersedes the originally-specced shape of Batch S4 (three trait accordions). The Screener tab renders as **two ranked lists** ("Intraday suggestions" / "Swing suggestions") sorted by the composite scores from `dip-bounce-scorer.md`, each row showing a rolling 30d hit-rate column from `signal_outcomes`. Same promote-to-watchlist + marker affordances. The Screener tab becomes the FE surface for the dip-bounce track, with the original three-trait accordions demoted to an optional drawer (or dropped — to be decided at claim time based on whether the user finds the trait views useful in practice).
+
+Spec lives in `spec/screens/screener.md` (will be revised at claim time per the spec-edit skill — current file still reflects the S4 three-accordion shape).
+
+### Open questions (settle at claim time)
+- Do the three trait accordions stay as a secondary drawer, or get dropped entirely?
+- Hit-rate column shape: rolling 30d %, or rolling 30d % + sample size + tooltip with the +30m / +2h / +1d / +3d breakdown?
+- Does the Watchlist row gain a `OnCuratedList` chip so the user can see which of their manually-watched names also appear on the auto-curated list? (Probably yes, but it's a Watchlist-row change, not a Screener change.)
+- Does promote-to-watchlist make sense in this shape, given the curated list largely replaces the manual-watchlist purpose for dip-bounce?
+
+### Files this batch creates/edits (rough)
+- `spec/screens/screener.md` (revise at claim — two-list shape replacing accordions)
+- `client/src/pages/Screener.tsx`
+- `client/src/components/Screener/*` (mostly rewrites of the S4-shape components)
+- `client/src/hooks/useScreenerData.ts` (subscribe to `curated_list` + `signal_fires` + hit-rate view)
+
+### Does NOT touch
+- Any signal-engine code, any cron, any schema — pure FE consumer of X1's outputs.
+
+---
+
+## Batch S4 *(superseded by X2 above — left for reference only)*: Virtual lists — Screener tab FE
+
+> **Heads-up (2026-06-03):** The dip-bounce track design supersedes this batch's original "three trait accordions" shape with the two-ranked-list shape of X2 above. **Do not claim S4 in isolation** — claim X2 instead. This entry is preserved for the file lists + verification steps that may still partially apply to X2; the spec content (vertical accordions per trait) is the part that changed.
 
 **Depends on:** Batch S2 (`trait_scores`), Batch S3 (`band_state`).
 
