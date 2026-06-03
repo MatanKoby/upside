@@ -11,6 +11,8 @@ One file per signal concern. When two sections always change in tandem, they bel
 - **`stats.md`** — Intraday-stats engine (nightly cron over 5-min bars; typical-intraday-low band alerts; Batch B).
 - **`screener-universe.md`** — **Post-MVP screener track:** universe (Ring 0/1) + trait scoring (intraday_range_trader / catalyst_reversal / post_earnings_drift), sweep schedule, dynamic universe inclusion. The "what makes a ticker eligible + what kind of opportunity it is" file.
 - **`band-engine.md`** — **Post-MVP screener track:** three adaptive band layers (session_regime classifier, today's vol scalar, walking band-state machine). Turns surfaced screener tickers + held positions into walking buy/sell bands.
+- **`curated-list.md`** — **Dip-bounce track:** auto-maintained ~200-300-name high-potential pool; membership = top-N by `intraday_range_trader` + liquidity + ATR floor. The alert pool + Screener tab source data. Closes the membership gap `band-engine.md` flagged.
+- **`dip-bounce-scorer.md`** — **Dip-bounce track:** two pure-function scorers (intraday + swing), two Discord channels, forward-tracking infra (`signal_fires` + `signal_outcomes`) + hit-rate definitions. Composes inputs from `stats.md` / `entry-zones.md` / `band-engine.md`.
 - **`llm-provider.md`** — Provider abstraction (Groq / Mistral / OpenAI / Gemini), runtime selection, failure classification.
 - **`data-sources.md`** — IB / Finnhub / computed feature pack (current); SEC EDGAR / FDA RSS / PR wires / Nasdaq Trader (planned, screener track).
 

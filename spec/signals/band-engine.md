@@ -244,9 +244,10 @@ sequenced detail.
   `markers.md` stay as the only auto-created watchlist-marker rows; band
   touches notify but don't write markers). Auto-marker creation is a
   potential roadmap item — see `roadmap.md` → Screener deferred items.
-- It doesn't drive the screener's curated-list membership — that's the
-  trait scoring (`screener-universe.md`). The band engine reads the curated
-  list; it doesn't decide it.
-- It doesn't run for *every* universe ticker — only the curated subset
-  (~100 names) gets the Layer-3 walking. Layer 1+2 + static bands can run
-  more broadly if needed but the user-facing live publication is curated-only.
+- It doesn't drive curated-list membership — see `curated-list.md` for the
+  rule (top-N by `intraday_range_trader` + liquidity + ATR floor, ~200-300
+  names). The band engine reads the list; it doesn't decide it.
+- It doesn't run for *every* universe ticker — only the curated list
+  (~200-300 names) gets the Layer-3 walking. Layer 1+2 + static bands can
+  run more broadly if needed but the user-facing live publication is
+  curated-only.
