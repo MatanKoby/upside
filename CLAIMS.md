@@ -8,6 +8,11 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch R1 — Risk-flags engine (data + LLM integration)
+- Owner: claude
+- Started: 2026-06-05 14:20
+- Scope per `BUILD_QUEUE.md` → Batch R1 + `spec/signals/risk-flags.md`: the daily-grain danger-flag engine (price_surge / volume_spike / rsi_overbought / near_52w_high_surge / micro_cap / earnings_imminent), persisted to a new `risk_flags` table, with WARNING/CRITICAL tiers, the LLM RISK-FLAGS prompt block + deterministic CRITICAL `signalQuality ≤ 35` clamp, `user_preferences.risk_flag_config` tunables, and a throwaway calibration script. Data + signal layer only; FE badge/section/gate is R2.
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
