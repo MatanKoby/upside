@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Screener FE reshape: two ranked lists by composite score with rolling hit-rate columns, supersedes the three-trait-accordion shape originally specced for S4). Orthogonal slice that can land in parallel: **Batch M1** (agent context efficiency). Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
+> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Screener FE reshape: two ranked lists by composite score with rolling hit-rate columns, supersedes the three-trait-accordion shape originally specced for S4). Orthogonal slices that can land in parallel: **Batch M1** (agent context efficiency) and the **risk-flags track** added 2026-06-05 — **Batch R1** (daily-grain danger-flag engine + LLM pump-downgrade clamp) then **Batch R2** (FE badge / Risk-flags section / pre-analysis gate); pure consumer of the existing feature pack + Finnhub data, no screener dependency. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
 
 ---
 
@@ -380,6 +380,72 @@ Spec lives in `spec/screens/screener.md` (will be revised at claim time per the 
 
 ### Does NOT touch
 - Any signal-engine code, any cron, any schema — pure FE consumer of X1's outputs.
+
+---
+
+## Batch R1: Risk-flags engine (data + LLM integration)
+
+**Depends on:** existing feature pack (`technicals.ts`), Finnhub `basicFinancials` + `/calendar/earnings`, `positions` + `watchlist_items`. **Optional:** `curated_list` (X1) to widen the working set — not a hard dep (held + active-watchlist covers v1).
+
+**Scope:** Materializes the risk-flags v1 design (2026-06-05 session). The daily-grain danger-flag engine per **`spec/signals/risk-flags.md`** — six zero/low-infra flags computed nightly + on-demand, persisted to `risk_flags`, plus the LLM prompt refine + CRITICAL confidence clamp. Pump / momentum detection (SPCE / RGTI / MNTS cases) is the flagship. Data layer + signal integration only; the FE surface is R2.
+
+### Deliverables
+
+1. **Migration `02X_risk_flags.sql`** — `risk_flags` table per `spec/schema.md` → `risk_flags` (Realtime enabled, 7-day retention). Adds `risk_flag_config jsonb` to `user_preferences` with the seed defaults.
+2. **`server/src/config/riskFlags.ts`** — named threshold seeds (surge X%/N, vol Y×, RSI Z, near-52w W%, micro-cap $C, earnings D days) + the WARNING/CRITICAL combination rule as one named block (no magic numbers in the function).
+3. **`server/src/services/riskFlags/computeRiskFlags.ts`** — pure function `(conid, inputs, prevRow) → RiskFlagRow | null`. Inputs: feature pack (`rsi14`, `relativeVolume30d`, `pctFrom52wHigh`), trailing-N-session return from daily bars, Finnhub `marketCapitalization` + avg vol, earnings-calendar days. Computes each flag, the row severity, and `since`-inheritance from `prevRow`. Returns null when no flag is active. Vitest fixtures: each flag in isolation, the CRITICAL pump combo, micro-cap escalation, `since` inheritance, clean-ticker → null.
+4. **`server/src/cron/riskFlagsCron.ts`** — nightly pass over held + active-watchlist conids: upsert flagged rows, **delete** rows whose conditions no longer hold. Plus an exported `topUpRiskFlags(conid)` used on-demand.
+5. **`signalEngine` wiring** — call `topUpRiskFlags` before analysis; populate `contextualTriggers.riskFlags`; after schema validation, **clamp `signalQuality ≤ 35` when severity is CRITICAL** (`spec/signals/playbook.md` → Risk-flag context + confidence cap).
+6. **`server/src/services/llm.ts:buildPrompt`** — inject the **RISK FLAGS** block + the explicit pump instruction (rationale MUST address surge flags; signal MUST downgrade) — the REFINE that counter-weights the existing "favour patience / weigh structure" framing.
+7. **`user_preferences.risk_flag_config`** read/write via `PUT /api/user/preferences` (validation in the existing prefs route).
+8. **`server/scripts/risk-flags-calibrate.mjs`** — **throwaway, NOT maintained, NOT in the cron set**. Runs the proposed thresholds against the SPCE / RGTI / MNTS dangerous-peak windows (retro-validation) + a clean-breakout sample; prints flag counts. Used once to seed the v1 defaults, then discarded. Header comment: "Throwaway — see `spec/signals/risk-flags.md` → Calibration. Do not extend."
+
+### Files this batch creates/edits
+- `supabase/migrations/02X_risk_flags.sql` (new)
+- `server/src/config/riskFlags.ts` (new)
+- `server/src/services/riskFlags/computeRiskFlags.ts` (new + vitest)
+- `server/src/cron/riskFlagsCron.ts` (new)
+- `server/src/services/signalEngine.ts` (wire riskFlags trigger + clamp)
+- `server/src/services/llm.ts` (RISK FLAGS prompt block)
+- `server/src/routes/*` (prefs route — accept `risk_flag_config`)
+- `server/src/index.ts` (boot wiring — start `riskFlagsCron`)
+- `server/scripts/risk-flags-calibrate.mjs` (new, throwaway — NOT maintained)
+
+### Does NOT touch
+- Any FE surface (R2 owns the badge / section / gate / settings controls).
+- Screener (S*) or dip-bounce (X*) engines — pure consumer of the existing feature pack + Finnhub data.
+
+### Verification
+- Migration applied.
+- After a nightly run: `bin/upside-psql -c "select conid, severity, jsonb_array_length(flags) from risk_flags where asof_date = current_date order by severity;"` shows rows for any held/watched name meeting a threshold; clean names have no row.
+- A CRITICAL ticker analyzed → persisted `signal_quality ≤ 35` regardless of model output.
+- Calibration script flags SPCE / RGTI / MNTS at their dangerous peaks without drowning a clean-breakout sample.
+- `since` on a flag persists across consecutive nightly runs while the condition holds; resets after the row is deleted and later re-raised.
+
+---
+
+## Batch R2: Risk-flags FE
+
+**Depends on:** Batch R1 (`risk_flags` table + `risk_flag_config`).
+
+**Scope:** The user-facing surface for risk flags per `spec/screens/portfolio.md` → Danger badge, `spec/screens/ticker-detail.md` → Risk flags + Pre-analysis gate, `spec/screens/settings.md` → Risk flags. Pure FE consumer of R1's outputs.
+
+### Deliverables
+1. **`client/src/hooks/useRiskFlags.ts`** — `risk_flags` single-row (today, by conid) + Realtime sub.
+2. **`DangerBadge`** — red (CRITICAL) / amber (WARNING) pill on `TickerCard` (Portfolio + Watchlist variants), separate from the signal pill, renders first in the signal+badge row, never truncated, "+N" when flags stack. Tap → opens the Risk-flags section in TickerDetail.
+3. **`RiskFlagsSection`** — collapsible in TickerDetail (expanded by default on CRITICAL): one row per flag with plain-language explanation + `since` + the threshold that fired.
+4. **`PreAnalysisGateModal`** — DANGER modal fronting Analyze / Refine on a CRITICAL ticker; explicit confirm before the normal two-step friction.
+5. **Settings → Risk flags** controls — the six tunable thresholds, persisted to `user_preferences.risk_flag_config`.
+6. **CSS** for badge + section + modal in `client/src/styles/components.css`.
+
+### Does NOT touch
+- Any signal-engine code, cron, or schema — pure FE consumer of R1.
+
+### Verification
+- A flagged card shows the danger badge at a glance (no detail open needed); badge color matches severity.
+- TickerDetail shows the Risk-flags section listing each active flag; absent on a clean ticker.
+- Analyze on a CRITICAL ticker opens the gate modal before the two-step friction; WARNING does not gate.
+- Editing a threshold in Settings persists; the next nightly pass reflects it.
 
 ---
 
