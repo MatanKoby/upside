@@ -3,8 +3,9 @@
 Auto-maintained pool of ~200-300 "high-potential dip-bounce" names. Decides
 membership of the alert pool that `dip-bounce-scorer.md` fires on and the
 walking-band pool that `band-engine.md` runs Layer 3 against. Also the
-source data for the Screener tab's ranked lists (`screens/screener.md`,
-reshaping with Batch X2).
+character-pool source for the Intraday / Swing virtual lists
+(`../screens/watchlist.md` → Upside-curated virtual lists; reshaped from the
+retired Screener tab with Batch X2).
 
 Sibling files:
 - `screener-universe.md` — Ring-1 filter (~3,000 names) that this curates
@@ -47,9 +48,17 @@ would double-count.
 The curated list is the always-on character pool; event-driven additions
 ride through the universe layer.
 
-A composite-rank variant (blending all three traits into the membership
-rule) is deferred — see `../roadmap.md` → "Curated list — composite
-ranking" once the v1 hit-rate data warrants the change.
+**Virtual-list rendering unions the two (2026-06-05).** Pool membership stays
+pure-character, but the Intraday / Swing virtual lists
+(`../screens/watchlist.md`) render `curated_list ∪ universe.auto_promoted`
+event names — so `catalyst_reversal` / `post_earnings_drift` names appear with
+a `catalyst` / `post-earnings` reason chip. List *ranking* is therefore a
+composite (dip-bounce score for character names + the trait's own score for
+event names) — see `dip-bounce-scorer.md` → Feeding the virtual lists.
+
+Blending the three traits into the **pool membership** rule stays deferred (the
+always-on pool is character-only); only the **virtual-list ranking** goes
+composite now. Revisit membership-level blending from v1 hit-rate data.
 
 ## Refresh cadence
 
@@ -73,16 +82,17 @@ Stale rows (older than 7 days) dropped by daily retention task.
 ## Consumers
 
 - **`dip-bounce-scorer.md`** — runs both scorers on every poll write to
-  any curated-list ticker; fires Discord pings to
+  any ticker in `curated ∪ active-watchlist ∪ held`; fires Discord pings to
   `#upside-intraday-suggestions` / `#upside-swing-suggestions`.
-- **`band-engine.md`** — runs Layer 3 (walking-band state machine) on
-  this list only. Layers 1 & 2 (session regime classifier + vol scalar)
-  also restrict to this pool to stay within the IB usage budget
-  documented in `screener-universe.md` → Caching + staggering.
-- **`../screens/screener.md`** — renders the list as two ranked lists
-  ("Intraday suggestions" / "Swing suggestions") sorted by the composite
-  scores from `dip-bounce-scorer.md`. Reshape ships with Batch X2 in
-  `BUILD_QUEUE.md`.
+- **`band-engine.md`** — runs the walking-band engine on
+  `curated ∪ active-watchlist ∪ held` (2026-06-05: widened from curated-only
+  so every ticker on a *visible* imported list gets a band —
+  `../screens/watchlist.md` → Engine coverage). The active-watchlist set is
+  bounded by the user's visibility choices, so the IB-budget impact stays
+  small.
+- **`../screens/watchlist.md`** — renders the Intraday / Swing virtual lists
+  (union with event-promoted names, composite rank, reason chips). Reshaped
+  from the retired Screener tab with Batch X2 in `BUILD_QUEUE.md`.
 
 ## Cross-references
 

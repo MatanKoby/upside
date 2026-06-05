@@ -1,7 +1,9 @@
 # Dip-Bounce Scorer
 
-Two pure-function scorers (intraday + swing) that rank curated-list tickers
-by likelihood of bouncing from a current dip. Each fires Discord pings on
+Two pure-function scorers (intraday + swing) that rank tickers by likelihood
+of bouncing from a current dip — run on `curated ∪ active-watchlist ∪ held`
+(`curated-list.md` → Consumers), so every ticker on a visible imported list is
+covered, not just curated names. Each fires Discord pings on
 threshold cross and forward-tracks outcomes for rolling hit-rate
 measurement. The character-signal counterpart to the manual `markers.md`
 + continuous `entry-zones.md` engines — composes their outputs into a
@@ -26,6 +28,25 @@ The two scorers are deliberately separate: their attention models differ
 (intraday ping → react in seconds; swing ping → think over hours), and
 their outcomes are measured at different horizons. A ticker can fire both
 on the same day — independent events, independent cooldown clocks.
+
+## Feeding the virtual lists
+
+The two scorers rank the **`dip`** reason on the Intraday / Swing virtual lists
+(`../screens/watchlist.md`). Those lists also include event names the scorers
+don't score — `catalyst_reversal` and `post_earnings_drift` (via
+`universe.auto_promoted`) — so the **list rank is a composite**: the dip-bounce
+score for character names plus the trait's own score for event names. Horizon
+mapping:
+
+- `intraday_range_trader` (`dip`) → **Intraday**
+- `catalyst_reversal` → **BOTH** (intraday volume-spike volatility *and*
+  multi-day reversal)
+- `post_earnings_drift` → **Swing**
+
+Each row shows a `why` chip per qualifying reason (`dip` / `catalyst` /
+`post-earnings`). The composite weights are calibration — set the same
+throwaway way as the scorer weights below; don't hard-code them in the rank
+function.
 
 ## Intraday scorer
 
@@ -89,8 +110,8 @@ real forward-tracked outcome data after a month of fires.
 ## Cadence
 
 Both scorers run on the same poll cycle that updates `quotes.canonical_price`
-for curated-list tickers (~10s during IB-on regular session, ~5min Finnhub
-fallback). The scoring step is cheap — pure table reads, no IB / Finnhub
+for tickers in `curated ∪ active-watchlist ∪ held` (~10s during IB-on regular
+session, ~5min Finnhub fallback). The scoring step is cheap — pure table reads, no IB / Finnhub
 calls.
 
 ## Forward-tracking (durable hit-rate infrastructure)
@@ -110,9 +131,9 @@ events plug into the same tables once ported, as do `markers.md` fires.
   `swing_dip_bounce` reads `+3d` outcomes against the +5% threshold.
 - Schema: `../schema.md` → `signal_fires`, `signal_outcomes`.
 
-The FE surface for hit-rate is a rolling-30d column on each Screener row
-(Batch X2). Until X2 lands the data is queryable via `bin/upside-psql` for
-calibration.
+The FE surface for hit-rate is a rolling-30d column on each virtual-list row
+in the Watchlist screen (`../screens/watchlist.md`, Batch X2). Until X2 lands
+the data is queryable via `bin/upside-psql` for calibration.
 
 ## Throwaway calibration (one-off, not maintained)
 
@@ -152,4 +173,4 @@ Embed accent color matches the existing dip-buy channel's green.
   (confluence + trend regime)
 - Pool: `curated-list.md`
 - FE surface (rolling hit-rate column, two ranked lists):
-  `../screens/screener.md` (Batch X2 reshape)
+  `../screens/watchlist.md` → Upside-curated virtual lists (Batch X2 reshape)

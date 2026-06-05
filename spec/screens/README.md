@@ -8,7 +8,7 @@ One file per screen + a shared design system. When two sections always change in
 - **`portfolio.md`** — Portfolio Home (held positions).
 - **`ticker-detail.md`** — Ticker Detail (works for held AND watchlist tickers).
 - **`watchlist.md`** — Watchlist tab (Track 1, moved into MVP via the 2026-05-28 pivot).
-- **`screener.md`** — **Post-MVP screener track:** Screener tab — virtual lists per trait (vertical accordions), promote-to-watchlist, walking-band chips.
+- **`screener.md`** — **Retired 2026-06-05** (redirect). The Screener tab folded into the Watchlist screen as Upside-curated virtual lists (Intraday / Swing) — see `watchlist.md` → Upside-curated virtual lists.
 - **`alerts.md`** — Alerts feed.
 - **`settings.md`** — App-level Settings.
 
