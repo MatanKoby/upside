@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X1 — Dip-bounce track (curated list + two-scorer alert + forward-tracking)
-- Owner: claude
-- Started: 2026-06-05 18:27
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,46 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X1 — Dip-bounce track (curated list + two-scorer alert + forward-tracking) (2026-06-05)
+- Owner: claude
+- Started: 2026-06-05 18:27 · Finished: 2026-06-05 19:06
+- Commit: ef300a2
+- **What shipped:** the 2026-06-03 dip-bounce design as one batch — the curated alert pool, two dip-bounce scorers firing to two Discord channels, and the durable forward-tracking backbone.
+  - **Migration `028_dip_bounce.sql`** — `curated_list` (conid, asof_date, rank, score, avg vol, daily_atr_pct), `signal_fires` (generic across signal kinds — `intraday_dip_bounce`/`swing_dip_bounce`/`band_touch_*`; components jsonb), `signal_outcomes` (+30m/+2h/+1d/+3d snapshots, FK cascade), and the **`signal_hit_rate_30d` view** (intraday reads +2h vs +1%, swing reads +3d vs +5%). Realtime on `curated_list` only; service-role write + authenticated select (view resolves security-invoker).
+  - **`config/curatedList.ts`** (TARGET_SIZE 250, MIN_AVG_VOLUME 1M, MIN_DAILY_ATR_PCT 1.5) + **`config/dipBounceScorer.ts`** (both scorers' named weights/thresholds/cooldowns + OUTCOME_OFFSETS).
+  - **`services/curatedList/buildCuratedList.ts`** (pure: volume + daily-ATR gates → sort by trait score → cap) + 5 vitest.
+  - **`services/dipBounce/intradayScorer.ts`** (pure table composition; deep-veto guard on IN_TYPICAL_BAND) + 7 vitest. **`swingScorer.ts`** (technicals daily RSI/ATR/trend + band_state + entry_zones; near-confluent-zone within 1·ATR) + 7 vitest.
+  - **`services/dipBounce/computeSet.ts`** — `loadComputeSet` = curated ∪ active-watchlist ∪ held (shared by the dip cron + the band engine).
+  - **`services/dipBounce/dipBounceCron.ts`** — 60s cadence (regular + AH); batch table loads, per-session in-memory daily-pack cache (IB) for the swing scorer, per-(conid,kind) cooldown read off `signal_fires`, fires → `signal_fires` row + Discord.
+  - **`cron/curatedListCron.ts`** — IB-gated, 12h cadence; trait_scores ⨝ universe (volume gate) → daily-bar ATR% probe in score order (bounded) → `buildCuratedList` → upsert + stale-drop + 7-day retention.
+  - **`cron/signalOutcomesCron.ts`** — 5-min; fills each due offset's price snapshot + return_pct (generic over signal_kind).
+  - **`notify.ts`** — `notifyIntradayDipBounce` + `notifySwingDipBounce` (two channels). **`env.ts` + `.env.example`** — `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` / `_SWING_SUGGESTIONS`.
+  - **Compute-set widening (deliverable 14)** — `bandEngineCron` now walks `loadComputeSet` (curated ∪ active-watchlist ∪ held), not curated-only; `loadCuratedList`/`loadHeldConids` removed in favor of the shared helper.
+  - **`scripts/dip-bounce-backtest.mjs`** (throwaway) — swing fire-rate sanity check.
+  - **Boot wiring** — `startCuratedListCron` + `startDipBounceCron` + `startSignalOutcomesCron` in `index.ts`.
+- **Implementation forks (deviations from the batch sketch):**
+  - **Separate `dipBounceCron` (not an `upsertQuote` hook)** — per deliverable 8's "keep the poll-cycle path clean" guidance; the user has been bitten by alert checks bloating the poll cycle. 60s cadence approximates the ~10s poll intent without touching the hot write path.
+  - **Swing daily indicators via an IB daily-bar pull + technicals.ts** (per deliverable 7), cached per session in memory — the spec's "pure table reads, no IB" cadence note holds for the **intraday** scorer (which keeps firing on Finnhub quotes when IB is off); swing only scores names whose pack is cached (IB up ≥ once this session). No daily-indicator table was added.
+  - **Confluence derived from `entry_zones.reasoning`** (`/confluence/i`) — the engine writes "confluence — …" when ≥2 sources cluster; no boolean column exists.
+  - **curatedListCron is 12h-from-boot, not wall-clock-pinned** to 09:00/15:30 IDT, and **full-rebuilds** on each run (premarket isn't incremental) — matches the codebase's interval-from-boot cron infrastructure; "rebuild whenever IB is up, a couple times a day."
+  - **Date keys:** `curated_list`/`trait_scores` keyed by UTC date (matching how trait_scores is written/read elsewhere); `band_state` by ET session date. computeSet/dipBounceCron/bandEngineCron all read each table with its own convention.
+- **Verification:** `pnpm typecheck` clean (+ scripts tsconfig); `vitest run` **169/169** (19 new: 5 buildCuratedList + 7 intraday + 7 swing). Backtest ran: crude swing proxy ~0.2 fires/day across a 10-name sample (~5/day scaled to 250); the stricter live gates (confluence-required near-zone + vol-regime veto + band_state) pull it toward the 1-3/day target. v1 thresholds kept — real calibration comes from `signal_outcomes` after a month (per spec).
+- **Manual prereqs for live-flip:**
+  1. **Apply `028_dip_bounce.sql`** in the Supabase SQL editor.
+  2. Create Discord channels `#upside-intraday-suggestions` + `#upside-swing-suggestions`, set `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` + `DISCORD_WEBHOOK_SWING_SUGGESTIONS` in VPS `.env` (without them, fires still log to stdout + write `signal_fires`, just no Discord ping).
+  3. `./bin/upside rebuild` on the VPS.
+  4. IB connected (curatedListCron + swing daily-pack + bandEngine all need daily bars).
+- **Verification post-live-flip:**
+  - Boot logs show `[curatedListCron]`, `[dipBounceCron]`, `[signalOutcomesCron]` starting.
+  - `bin/upside-psql -c "select count(*) from curated_list where asof_date = (now() at time zone 'utc')::date;"` returns `[1, 250]` after the first IB-up `curatedListCron` tick.
+  - During a session, at least one fire per channel; `bin/upside-psql -c "select signal_kind, count(*) from signal_fires where fire_ts > now() - interval '1 day' group by 1;"`; `signal_outcomes` accumulate at the four offsets; `select * from signal_hit_rate_30d;` aggregates once ≥1wk of data exists.
+  - Cooldown: same ticker firing twice within 4h (intraday) / 24h (swing) → second skipped.
+- **Out of scope / follow-up:**
+  - **X2** (Watchlist virtual lists) renders these as two ranked leaderboards + the rolling hit-rate column; X1's compute-set widening + union data feed it. Until X2, the data is `bin/upside-psql`-queryable.
+  - Porting band-touch + marker fires onto `signal_fires` (queued under Batch C remainder).
+  - A persisted daily-indicator cache (RSI/ATR) would make the swing scorer fully table-only + IB-independent — deferred; not needed for v1.
+- **What's next:** **Batch X2** (Watchlist virtual lists — Intraday/Swing leaderboards, retires the Screener tab). Depends on X1 (done) + soft-dep R2 (done — shared `DangerBadge`).
 
 ### Batch R2 — Risk-flags FE (2026-06-05)
 - Owner: claude
