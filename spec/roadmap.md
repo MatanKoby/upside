@@ -314,6 +314,28 @@ Batch S3 ships two intentional proxies in the band engine (see `signals/band-eng
 
 ---
 
+## Risk flags v2 — new-data flags
+
+Forward-spec for the risk-flag layer's second cohort (`signals/risk-flags.md` ships v1 — the six zero/low-infra flags — as Batches R1 + R2). Each item here needs a **new data source**, so each is its own data-plumbing slice. Deferred, not dropped: build each when a v1 flag in actual use proves it wants the extra signal. Same enter-risk mechanism (badge / section / gate / LLM clamp); only the input is new.
+
+### Short interest / % of float
+
+Squeeze risk: high short interest + a price spike is a setup that reverses violently; low float amplifies. **New source:** we are not using the `yahoo-finance2` library (`universeQuote.ts` hits Yahoo's bare `v8/chart`, OHLCV-only). Short interest / float would come from `yahoo-finance2`'s `quoteSummary → defaultKeyStatistics` (`sharesShort`, `shortPercentOfFloat`, `floatShares`, `sharesOutstanding`) — a new dependency + endpoint — or a paid Finnhub tier. **Flags:** `high_short_interest` (short % of float > threshold, ~20%) and `low_float` (float below threshold). **Revisit when** a pump case slips through that short interest would have escalated.
+
+### Spread / liquidity
+
+Wide bid-ask = high slippage; the fill is worse than the quote. **New data (cheap-ish):** bid/ask are IB CP fields **84 / 86**; today's snapshot (`marketdata.ts:getIntraday`) only requests 31/70/71/87/7295/7296. So this is *one field-list change, not a separate call* — but it does add fields to the snapshot path + a daily-grain spread read. **Flag:** `wide_spread` (spread > ~1% of price for liquid names, > ~3% for small caps). **Revisit when** the user reports a fill materially worse than the displayed quote, or alongside any other change to the snapshot field set.
+
+### Binary catalyst calendar
+
+FDA PDUFA dates + trial readouts on biotech/pharma names — binary 50%+ moves that normal signal logic can't manage. **New source:** FDA Drug Approvals RSS + a PDUFA/readout calendar feed (overlaps the Track-10 RSS catalyst firehose — share the `news_events` ingestion if that ships first). **Flag:** `binary_catalyst` (ticker is biotech ∧ a PDUFA/readout date is within N days). **Revisit when** the Track-10 RSS firehose lands (it provides the ingestion path) **or** a biotech binary burns a held/watched position.
+
+### News-narrative spike
+
+The move is headline-driven hype with no fundamental anchor (the SPCE / RGTI / MNTS pattern) — distinct from `price_surge`, which is price-only. **New data:** an LLM (or keyword) judgment over recent news that the narrative *is* the sole driver. Cheapest as a small dedicated LLM pass, not the main analysis. **Flag:** `news_narrative` (recent move attributable to headline hype, not fundamentals). **Revisit when** v1's price/volume flags prove they fire but miss the "why" — i.e. the user wants the *reason* a surge is dangerous, not just that it surged.
+
+---
+
 ## Tech debt + low-priority cleanups
 
 A holding pen for known inefficiencies, minor bugs, and small architectural cleanups that aren't worth their own batch right now. Items move out of here either when their cost grows enough to matter or when a related batch picks them up "while we're touching that file." Distinct from the deferred-feature tracks above (those are forward functionality; this is hygiene on what already ships).

@@ -62,6 +62,7 @@ What's stored where, in what shape, with what semantics.
   - `suppressed_symbols` (text list)
   - `profit_zone_threshold_pct` (default 2.0)
   - `stat_config` (for the TickerDetail MarketStats panel customization — applies to all ticker screens)
+  - `risk_flag_config` (jsonb — tunable risk-flag thresholds: surge `x_pct`/`n_sessions`, `vol_mult`, `rsi_z`, `near_high_w_pct`, `micro_cap_usd`, `earnings_d_days`; defaults seeded by calibration — see `signals/risk-flags.md` + `screens/settings.md`)
 
 - **`analysis_locks`** — concurrency control for signal analysis. Row per active analysis: `{ id, symbol, user_id, started_at, status: 'running' | 'failed' }`. 5-min TTL — `lockCleanup` cron deletes rows older than 5 min (assumed crashed). Realtime enabled.
 
@@ -95,13 +96,15 @@ What's stored where, in what shape, with what semantics.
 
 - **`signal_outcomes`** *(dip-bounce track; see `signals/dip-bounce-scorer.md`)* — price snapshots at fixed offsets after each fire. `{ fire_id uuid references signal_fires(id) on delete cascade, t_offset text check in ('+30m','+2h','+1d','+3d'), snapshot_ts timestamptz, price numeric, return_pct numeric, primary key (fire_id, t_offset) }`. `signalOutcomesCron` looks up `quotes.canonical_price` at each due offset and writes the row; `return_pct = (price − signal_fires.price_at_fire) / signal_fires.price_at_fire × 100`. A SQL view `signal_hit_rate_30d` aggregates per `signal_kind`: `intraday_dip_bounce` reads `+2h` outcomes against +1% threshold; `swing_dip_bounce` reads `+3d` outcomes against +5%.
 
+- **`risk_flags`** *(risk-flags track; see `signals/risk-flags.md`)* — daily-grain enter-risk flags per `(conid, asof_date)`. `{ conid bigint, asof_date date, flags jsonb, severity text check in ('warning','critical'), computed_at timestamptz, primary key (conid, asof_date) }`. `flags` is an array of `{ key, severity, since, payload }`, one entry per **active** flag (absent key = condition not met). **A row exists only when ≥1 flag is active** — absence of a row = clean; the nightly pass deletes the row when conditions no longer hold. `conid` is the IB conid (held / watchlist → joins `positions` / `watchlist_items` / `quotes`); for curated-list names it's `universe.real_conid`. Rewritten nightly for the working set (held + active-watchlist conids; `curated_list` once X1 ships) + topped-up on-demand at Analyze. `severity` is the max over active flags. `since` is inherited from the prior day's row when the flag was already raised, so it reads "flagged since <date>" rather than resetting daily. Realtime enabled (card badge + Risk-flags section subscribe). Retention drops rows older than 7 days.
+
 - **`app_config`** — key/value runtime config: `{ key text primary key, value text not null, updated_at timestamptz default now() }`. RLS: public `select` (anon + authenticated), service-role only for write. Realtime enabled. Generic home for app-level runtime flags. Current keys:
   - `api_url` — current Cloudflare Quick Tunnel URL, written by the tunnel watcher; read by the FE on bootstrap and via Realtime subscription. See `architecture.md` → Public URL Discovery.
   - `llm_provider` / `llm_model` — active LLM selection (app-level, since API keys are global), written by `POST /api/config/llm`, read by the signal engine per analysis and by the Settings picker via Realtime. Keys themselves stay in `.env` — only the choice is here. See `signals/playbook.md` → LLM Provider Abstraction.
 
 ### Realtime publications
 
-Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pivot tables also: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`, `intraday_stats`. Screener-track tables also: `trait_scores`, `band_state`. Dip-bounce track also: `curated_list` (Screener tab + Watchlist chips subscribe to all). `signal_fires` and `signal_outcomes` are NOT published — internal infra; FE reads aggregated hit-rate via the `signal_hit_rate_30d` view.
+Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pivot tables also: `quotes`, `watchlist_lists`, `watchlist_items`, `watchlist_markers`, `entry_zones`, `intraday_stats`. Screener-track tables also: `trait_scores`, `band_state`. Dip-bounce track also: `curated_list` (Screener tab + Watchlist chips subscribe to all). Risk-flags track also: `risk_flags` (card badge + TickerDetail Risk-flags section subscribe). `signal_fires` and `signal_outcomes` are NOT published — internal infra; FE reads aggregated hit-rate via the `signal_hit_rate_30d` view.
 
 ### Row Level Security
 

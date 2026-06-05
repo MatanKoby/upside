@@ -62,6 +62,12 @@ While TickerDetail is open, the FE polls `/api/marketdata/history` and `/api/mar
 
 ## Collapsible sections (using shared `CollapsibleSection` component)
 
+**Risk flags** (any ticker with an active `risk_flags` row — see `../signals/risk-flags.md`):
+- Icon: ti-alert-triangle (red for CRITICAL, amber for WARNING).
+- Header: severity + count ("⚠ 2 risk flags · CRITICAL"). Renders **expanded by default** when CRITICAL.
+- Body: one row per active flag — flag name · one-line plain-language explanation (e.g. "Up 31% over 5 sessions — momentum, no fundamental anchor") · "since <date>". The threshold that fired is shown inline so it's legible against the user's tunable settings.
+- Section absent when no `risk_flags` row exists (clean ticker). Data wiring: `useRiskFlags(conid)` — single-row `maybeSingle` on `risk_flags` for today + a Realtime sub.
+
 **Signal Section** — single-direction **playbook** (see `../signals/playbook.md`):
 - Icon: ti-alert-triangle (colored by direction).
 - Header: direction + Quality + horizon (e.g. "Sell · 78% · ⏱ Intraday"). The one signal pill renders in the collapsed header so the immediate action stays visible.
@@ -72,6 +78,7 @@ While TickerDetail is open, the FE polls `/api/marketdata/history` and `/api/mar
   - **Indicator readings table** — see Indicators section below.
   - "View history" expands prior analyses chronologically.
 - **Actions:** when no active signal → one **Analyze** button. When an active signal exists → **Refine** + **Re-analyze (fresh)**. Both use the two-step friction + soft-block + daily ceiling + freshness guard (see `../signals/playbook.md`).
+- **Pre-analysis gate (CRITICAL risk flag):** when the ticker has a CRITICAL `risk_flags` row, tapping Analyze / Refine first opens a DANGER modal — *"⚠ {SYMBOL} is up {X}% in {N} days with {flags}. Momentum plays have high reversal risk. Proceed?"* — requiring an explicit confirm before the normal two-step friction runs. Friction, not a silent override; the BE confidence clamp (`../signals/playbook.md` → Risk-flag context + confidence cap) is the backstop for when the user proceeds. WARNING flags do not gate — they surface in the Risk-flags section only.
 
 **Markers** (non-held tickers / watchlist) — see `../signals/markers.md`:
 - Icon: ti-tag.

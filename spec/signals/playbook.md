@@ -171,7 +171,18 @@ Earnings-date proximity, dividends, insider transactions, unusual volume, materi
 `signalEngine` passes `contextualTriggers` on every analysis:
 ```ts
 { inProfitTakingZone: { thresholdPct, currentPnlPct, viaGap } | null,
+  riskFlags: { severity: 'warning' | 'critical', flags: Array<{ key, since, payload }> } | null,
   // post-MVP: imminentEarnings, recentInsiderTransaction, unusualVolume, … }
 ```
 
 The zone trigger is surfaced to the LLM as **neutral context, not a directive**: states the fact ("P&L crossed +2%"), explicitly tells the model holding / waiting / no_signal are all valid. (An earlier leading framing biased the model toward an immediate sell.) See `zone.md` for the detection mechanism.
+
+## Risk-flag context + confidence cap
+
+When `contextualTriggers.riskFlags` is non-null, the engine injects a **RISK FLAGS** block into the prompt (one line per active flag, plain language) with an explicit instruction: *if pump / surge flags are present, the rationale MUST address them and the signal MUST downgrade — do not rationalise a momentum pump as a breakout.* This is the counter-weight to the prompt's existing "favour patience over selling into a base" / "weigh trend structure before mean-reversion" framing, which on a real pump would otherwise lean the model toward a BUY.
+
+Because a model can ignore an instruction, the engine **also clamps deterministically** after schema validation:
+- **CRITICAL** → `signalQuality` hard-capped at **≤ 35** (the "low" band), regardless of the model's number. Leg confidences are not rewritten, but a capped headline is recorded.
+- **WARNING** → no clamp; the prompt requirement (rationale must address the flag) stands on its own.
+
+The clamp makes "a pump cannot emit a high-confidence BUY" a structural guarantee rather than a prompt we hope holds. The **pre-analysis gate** that fronts a CRITICAL ticker is FE-side friction (see `../screens/ticker-detail.md` → Pre-analysis gate); this clamp is the BE-side backstop for when analysis does proceed. Flag definitions, tiers, and the working set live in `risk-flags.md`.

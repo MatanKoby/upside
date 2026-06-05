@@ -38,13 +38,14 @@ Each card represents one held position. See `_design-system.md` → TickerCard f
 
 **Background tint** scales with P&L magnitude — see `_design-system.md` → P&L Tint Opacity.
 
-**Signal + badge row** (conditional — only when at least one signal or badge exists):
+**Signal + badge row** (conditional — only when at least one signal, badge, or **risk flag** exists):
 - Separated by a thin border-top (0.5px).
-- Trading signal pills render FIRST in priority order. Then info badges.
-- Pill row policy: fit comfortably, wrap to second line, never truncate a signal pill. Info badges get truncated to a "+N" overflow pill.
+- **Danger badge** renders FIRST when ≥1 risk flag is active (`../signals/risk-flags.md`) — a distinct pill **separate from the signal pill**: red for CRITICAL, amber for WARNING, labelled with the dominant flag (e.g. "⚠ Pump" / "⚠ Earnings 3d") and a "+N" when multiple flags stack. Never truncated (same policy as signal pills). Reads `risk_flags` via Realtime. Tapping it opens the Risk-flags section in TickerDetail.
+- Trading signal pills render next in priority order. Then info badges.
+- Pill row policy: fit comfortably, wrap to second line, never truncate a signal pill or the danger badge. Info badges get truncated to a "+N" overflow pill.
 - Chevron-right at far right indicates tap-to-expand. Tapping a signal pill opens the Signal section in TickerDetail.
 
-Cards without any signal or badge have no signal row — clean, compact.
+Cards without any signal, badge, or risk flag have no signal row — clean, compact.
 
 ## Bottom Navigation Bar
 
