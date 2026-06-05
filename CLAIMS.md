@@ -8,11 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch R1 — Risk-flags engine (data + LLM integration)
-- Owner: claude
-- Started: 2026-06-05 14:20
-- Scope per `BUILD_QUEUE.md` → Batch R1 + `spec/signals/risk-flags.md`: the daily-grain danger-flag engine (price_surge / volume_spike / rsi_overbought / near_52w_high_surge / micro_cap / earnings_imminent), persisted to a new `risk_flags` table, with WARNING/CRITICAL tiers, the LLM RISK-FLAGS prompt block + deterministic CRITICAL `signalQuality ≤ 35` clamp, `user_preferences.risk_flag_config` tunables, and a throwaway calibration script. Data + signal layer only; FE badge/section/gate is R2.
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -43,6 +38,31 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch R1 — Risk-flags engine (data + LLM integration) (2026-06-05)
+- Owner: claude
+- Started: 2026-06-05 14:20 · Finished: 2026-06-05 18:05
+- Commit: 84ea4d1
+- **What shipped:** the daily-grain danger-flag engine per `spec/signals/risk-flags.md` — six v1 flags + WARNING/CRITICAL tiers + LLM integration. Data/signal layer only; the FE badge/section/gate is Batch R2.
+  - **Migration `027_risk_flags.sql`** — `risk_flags(conid, asof_date, flags jsonb, severity, computed_at)` PK `(conid, asof_date)`; a row exists only when ≥1 flag is active (absence = clean). Realtime + service-role-write/authenticated-read grants (instrument-keyed, band_state pattern). Adds nullable `user_preferences.risk_flag_config jsonb` (null = seed defaults).
+  - **`config/riskFlags.ts`** — `RISK_FLAG_DEFAULTS` (surge 25%/5d, vol 3×, RSI 78, near-52w 5%, micro-cap $500M, earnings 5d), `resolveRiskFlagConfig` (partial-override merge), `severityFor` (CRITICAL = price_surge ∧ corroborating, or micro_cap escalated by one corroborating flag), `CRITICAL_QUALITY_CAP = 35`.
+  - **`services/riskFlags/`** — `computeRiskFlags.ts` (pure: inputs → `RiskFlagRow | null`, since-inheritance), `inputs.ts` (surgePct / relVol / marketCap / earningsDays assemblers from bars + Finnhub), `engine.ts` (`loadPrevSince` + persist/delete + `evaluateAndStore` + `riskFlagAsofDate`). 17 vitest fixtures.
+  - **`cron/riskFlagsCron.ts`** — 60min IB-gated pass over held + active-watchlist conids; upserts flagged rows, deletes cleared ones.
+  - **`signalEngine` wiring** — on-demand top-up at Analyze: reuses the daily bars + earnings already pulled, adds one `basicFinancials` call for market cap, persists the row, sets `contextualTriggers.riskFlags`, and clamps `signalQuality ≤ 35` post-validation when severity is CRITICAL. **`llm.ts`** — RISK FLAGS prompt block (pump-downgrade instruction) + the trigger type. **`index.ts`** — boot wiring.
+  - **`scripts/risk-flags-calibrate.mjs`** (throwaway, not maintained) — retro-validated the seed defaults: SPCE/RGTI/MNTS fire (max trailing-5d surge 132/60/236%, surge-days 12/28/26) while AAPL/MSFT/KO stay at 0 surge-days (≤14%). Defaults kept.
+- **Implementation forks (deviations from the batch sketch):**
+  - **No `PUT /api/user/preferences` route** — none exists today, and the threshold-tunables UI is R2 (Settings). R1 only *reads* `risk_flag_config` (defaults when null); the write lands with R2's Settings controls.
+  - Cron cadence is 60min IB-gated rather than a single nightly tick — inputs are daily-grain, so the cadence is only about catching whatever window IB happens to be connected in; this tracks the on-demand IB sessions better than a fixed nightly time.
+- **Verification:** server `pnpm typecheck` clean (incl. scripts tsconfig); `pnpm exec vitest run` **150/150** (17 new riskFlags fixtures). Calibration script run locally — clean pump-vs-clean separation.
+- **Manual prereqs for live-flip:**
+  1. Apply `027_risk_flags.sql` in the Supabase SQL editor.
+  2. `./bin/upside rebuild` on the VPS.
+  3. Connect IB so the cron can pull daily bars (IB-gated, like `intradayStatsCron`).
+- **Verification post-live-flip:**
+  - Boot logs show `[riskFlagsCron] starting, 60min cadence (IB-gated)`.
+  - With IB connected, after a tick: `bin/upside-psql -c "select conid, severity, jsonb_array_length(flags) from risk_flags where asof_date = current_date order by severity;"` shows rows for any held/watched name meeting a threshold; clean names have no row.
+  - Analyze a pumped held/watchlist name → persisted `signal_quality ≤ 35` (CRITICAL clamp) regardless of model output; the analysis prompt carried the RISK FLAGS line.
+- **What's next:** **Batch R2** (FE) renders these — danger badge on the card, Risk-flags section + CRITICAL pre-analysis gate in TickerDetail, Settings threshold controls (which adds the `risk_flag_config` write). R2 is the visual test surface.
 
 ### Batch S3 — Improved entry engine: adaptive band layers (2026-06-03)
 - Owner: claude
