@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch R2 — Risk-flags FE
-- Owner: claude
-- Started: 2026-06-05 15:17
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,35 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch R2 — Risk-flags FE (2026-06-05)
+- Owner: claude
+- Started: 2026-06-05 15:17 · Finished: 2026-06-05 18:06
+- Commit: 77c1a89
+- **What shipped:** the user-facing surface for R1's risk flags — danger badge, TickerDetail section, CRITICAL pre-analysis gate, Settings threshold controls — plus the first `user_preferences` FE→BE write path. Pure FE consumer of R1's `risk_flags` table; one new BE route (no new migration, no schema/cron/signal-engine change).
+  - **`utils/riskFlags.ts`** (new) — pure presentation layer: `RiskFlagRow`/`ActiveFlag` types, priority order, `dominantFlag`, `flagBadgeLabel`, `flagName`, `flagExplanation` (plain-language, payload-filled), `flagThreshold`, `orderedFlags`. All the copy lives here so components stay dumb.
+  - **`hooks/useRiskFlags.ts`** (new) — `useRiskFlags(conid)` (single-row, latest asof_date, Realtime) for TickerDetail + gate; `useAllRiskFlags()` (conid→row map, one Realtime sub, mirrors `useAllSignals`) for the list badges. Both reduce to latest-asof-per-conid and drop empty rows.
+  - **`components/primitives/DangerBadge.tsx`** (new) — the shared pill (red CRITICAL / amber WARNING, ⚠ icon + dominant-flag label + "+N", `compact` variant for the watchlist chip). Renders **first** in the Portfolio card's signal+badge row, separate from the signal pill; also lands in the Watchlist row chip cluster. X2's soft-dep on a shared `TickerCard` danger badge is satisfied by this primitive.
+  - **`components/TickerDetail/RiskFlagsSection.tsx`** (new) — section body (one row per flag: name · explanation · threshold · `since`) + `RiskFlagsAccessory` (severity+count header chip). Wired into TickerDetail as a `CollapsibleSection`, `defaultOpen` when CRITICAL, rendered above the Signal section per `ticker-detail.md` ordering.
+  - **`components/TickerDetail/PreAnalysisGateModal.tsx`** (new) — DANGER modal fronting Analyze/Refine on CRITICAL tickers. SignalSection gates the primary Analyze **and** the soft-block "re-analyze anyway" path (one confirm per mount) *before* the existing two-step friction; WARNING never gates. The BE `signalQuality ≤ 35` clamp (R1) is the backstop when the user proceeds.
+  - **Settings → Risk flags** — `RiskFlagsSettingsSection` (six tunables: surge X%/N, vol Y×, RSI Z, near-52w W%, micro-cap $C edited in $M, earnings D days) + Save/Reset, backed by **`hooks/useRiskFlagConfig.ts`** (new) over the new route.
+  - **`server/src/routes/user.ts`** (new) + `index.ts` mount — `GET/PUT /api/user/preferences`. GET returns the resolved effective config + defaults + `isCustom`; PUT validates each field against per-field bounds, merges over current (partial PUT = partial override), upserts `user_preferences` via service-role (onConflict `user_id`), reuses `resolveRiskFlagConfig`. This is the **first FE write into `user_preferences`** — RLS has owner-read/update but no INSERT policy, so the service-role BE path is required (matches `settings.md`).
+  - **conid threading** — `Position.conid` + `TickerDetailData.conid` added; `usePositions` + `useTickerDetail` (both held + watchlist branches) populate them so the conid-keyed `risk_flags` rows join to the symbol-keyed FE.
+- **Implementation forks (deviations from the batch sketch):**
+  - **Added the BE prefs route** (the batch listed it implicitly via Settings deliverable 5; R1's note deferred the write to R2). It's the first `user_preferences` write path, so it ships here with bounds-validation rather than letting the client write Supabase directly (no INSERT RLS policy exists).
+  - **`useAllRiskFlags()`** added alongside the spec's single-row `useRiskFlags(conid)` — the Portfolio/Watchlist lists need one shared subscription, not one per card.
+  - **Latest-asof-per-conid** (not strict `asof_date = today`) so a flag raised on a prior IB-connected day still shows until the engine clears it.
+- **Verification:** server `pnpm typecheck` clean (incl. scripts tsconfig); client `pnpm build` (tsc --noEmit + vite) clean; server `vitest run` **150/150** (no FE test runner — tsc + build is the FE gate, per prior FE batches). UI behavior is user-driven (per `feedback_user_drives_ui_testing`).
+- **Manual prereqs for live-flip:**
+  1. R1's `027_risk_flags.sql` applied (same migration — no new one for R2).
+  2. `./bin/upside rebuild` on the VPS so `/api/user/preferences` is served.
+  3. IB connected so `riskFlagsCron` populates rows (otherwise badges/sections won't appear — there's nothing flagged yet).
+- **Verification post-live-flip:**
+  - A flagged held/watched name shows the danger badge on its card at a glance; color matches severity.
+  - Opening it → Risk-flags section lists each active flag (expanded when CRITICAL); absent on a clean ticker.
+  - Analyze on a CRITICAL ticker opens the gate modal before the two-step friction; WARNING does not gate.
+  - Settings → Risk flags: edit a threshold → Save persists; reopen reflects it; the next nightly/on-demand pass uses it.
+- **What's next:** **Batch X1** (dip-bounce track) is the top remaining pick per the BUILD_QUEUE pointer. **Batch X2** (Watchlist virtual lists) reuses this `DangerBadge` primitive — its R2 soft-dep is now satisfied.
 
 ### Batch R1 — Risk-flags engine (data + LLM integration) (2026-06-05)
 - Owner: claude
