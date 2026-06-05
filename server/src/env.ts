@@ -101,4 +101,9 @@ export const env = {
   // mutable independently). Low-touch on curated-not-held still routes to
   // DISCORD_WEBHOOK_DIP_BUYS — the existing dip-buys channel.
   discordSellZonesWebhookUrl: optional('DISCORD_WEBHOOK_SELL_ZONES'),
+  // DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS / _SWING_SUGGESTIONS — Batch X1. The
+  // two dip-bounce scorers fire here (separate channels: intraday → react in
+  // seconds, swing → think over hours; independent cooldowns + hit-rate horizons).
+  discordIntradaySuggestionsWebhookUrl: optional('DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS'),
+  discordSwingSuggestionsWebhookUrl: optional('DISCORD_WEBHOOK_SWING_SUGGESTIONS'),
 };

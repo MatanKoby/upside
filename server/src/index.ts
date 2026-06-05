@@ -26,6 +26,9 @@ import { startIntradayRangeTraderProducer } from './cron/intradayRangeTraderProd
 import { startCatalystReversalProducer } from './cron/catalystReversalProducer.js';
 import { startPostEarningsDriftProducer } from './cron/postEarningsDriftProducer.js';
 import { startBandEngineCron } from './cron/bandEngineCron.js';
+import { startCuratedListCron } from './cron/curatedListCron.js';
+import { startSignalOutcomesCron } from './cron/signalOutcomesCron.js';
+import { startDipBounceCron } from './services/dipBounce/dipBounceCron.js';
 import { startMarketCapRefreshCron } from './cron/marketCapRefreshCron.js';
 import { startTraitScoresRetention } from './cron/traitScoresRetention.js';
 import { startJobsReaper } from './cron/jobsReaper.js';
@@ -100,6 +103,11 @@ app.listen(env.port, () => {
   startTraitScoresRetention();
   // Adaptive band engine (Batch S3) — 5-min cadence during regular + AH.
   startBandEngineCron();
+  // Dip-bounce track (Batch X1) — curated-list builder + two-scorer alert +
+  // forward-tracking outcome snapshots.
+  startCuratedListCron();
+  startDipBounceCron();
+  startSignalOutcomesCron();
   // Job-queue infrastructure (Batch S0.3) — three worker pools + reaper + retention.
   createIbWorker().start();
   createFinnhubWorker().start();

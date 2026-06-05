@@ -30,6 +30,7 @@ import {
   notifyBandTouchHigh,
 } from '../services/notify.js';
 import { marketPeriodAt, etDateString } from '../utils/marketHours.js';
+import { loadComputeSet } from '../services/dipBounce/computeSet.js';
 import { classifySessionRegime, type SessionRegime } from '../services/bandEngine/sessionRegime.js';
 import { atr, computeVolScalar } from '../services/bandEngine/volScalar.js';
 import { computeVolRegimeShift, type SessionBar } from '../services/bandEngine/volRegimeShift.js';
@@ -107,40 +108,6 @@ function aggregateToDailyBars(bars: RawIbHistoryBar[]): SessionBar[] {
       const c = list[list.length - 1]?.c ?? 0;
       return { date, h, l, c };
     });
-}
-
-async function loadCuratedList(asof: string): Promise<Array<{ conid: number; symbol: string }>> {
-  // intraday_range_trader survivors for today's asof — joined to universe.symbol.
-  const { data, error } = await supabase()
-    .from('trait_scores')
-    .select('conid')
-    .eq('trait', 'intraday_range_trader')
-    .eq('asof_date', asof);
-  if (error) {
-    void notifyError('bandEngineCron.loadCurated', error.message);
-    return [];
-  }
-  const conids = (data ?? []).map((r: { conid: number }) => r.conid).filter(Boolean);
-  if (conids.length === 0) return [];
-  // Symbol comes from universe (keyed on real_conid).
-  const out: Array<{ conid: number; symbol: string }> = [];
-  for (let i = 0; i < conids.length; i += 900) {
-    const chunk = conids.slice(i, i + 900);
-    const { data: u } = await supabase()
-      .from('universe')
-      .select('real_conid, symbol')
-      .in('real_conid', chunk);
-    for (const row of (u ?? []) as Array<{ real_conid: number; symbol: string }>) {
-      if (row.real_conid != null) out.push({ conid: row.real_conid, symbol: row.symbol });
-    }
-  }
-  return out;
-}
-
-async function loadHeldConids(): Promise<Set<number>> {
-  const { data, error } = await supabase().from('positions').select('conid');
-  if (error) return new Set();
-  return new Set((data ?? []).map((r: { conid: number }) => r.conid).filter(Boolean));
 }
 
 async function loadIntradayStatsFor(conids: number[]): Promise<Map<number, { p50: number | null }>> {
@@ -460,21 +427,22 @@ async function tickAll(): Promise<void> {
   const sessionDate = etDateString();
   const isRegular = period === 'regular';
 
+  // Compute set widened (Batch X1): curated ∪ active-watchlist ∪ held, so every
+  // ticker on a visible imported list gets a walking band, not just curated names.
   const asof = new Date().toISOString().slice(0, 10);
-  const curatedList = await loadCuratedList(asof);
-  if (curatedList.length === 0) {
-    console.log('[bandEngineCron] no curated tickers for today; nothing to walk');
+  const members = await loadComputeSet(asof);
+  if (members.length === 0) {
+    console.log('[bandEngineCron] no compute-set tickers; nothing to walk');
     return;
   }
 
-  const heldConids = await loadHeldConids();
-  const statsByConid = await loadIntradayStatsFor(curatedList.map((c) => c.conid));
-  const stateByConid = await loadBandStateFor(curatedList.map((c) => c.conid), sessionDate);
+  const statsByConid = await loadIntradayStatsFor(members.map((c) => c.conid));
+  const stateByConid = await loadBandStateFor(members.map((c) => c.conid), sessionDate);
   const fireClassifier = shouldFireClassifier();
 
   let ok = 0;
   let fail = 0;
-  for (const { conid, symbol } of curatedList) {
+  for (const { conid, symbol, isHeld } of members) {
     try {
       // ~60d 5min bars give us today + yesterday close + 30d-aggregated history
       // for vol_regime_shift in one call. Same period as intradayStatsCron uses.
@@ -484,7 +452,7 @@ async function tickAll(): Promise<void> {
         continue;
       }
       const stats = statsByConid.get(conid);
-      const curated = deriveCuratedRow(conid, symbol, hist.data, heldConids.has(conid), stats?.p50 ?? null);
+      const curated = deriveCuratedRow(conid, symbol, hist.data, isHeld, stats?.p50 ?? null);
       if (!curated) {
         fail++;
         continue;
@@ -492,7 +460,7 @@ async function tickAll(): Promise<void> {
       await processOne({
         conid,
         symbol,
-        isHeld: heldConids.has(conid),
+        isHeld,
         isRegular,
         sessionDate,
         curated,
@@ -505,7 +473,7 @@ async function tickAll(): Promise<void> {
       void notifyError(`bandEngineCron.${symbol}`, (e as Error).message, e);
     }
   }
-  console.log(`[bandEngineCron] period=${period} curated=${curatedList.length} ok=${ok} fail=${fail}`);
+  console.log(`[bandEngineCron] period=${period} members=${members.length} ok=${ok} fail=${fail}`);
 }
 
 export function startBandEngineCron(): void {

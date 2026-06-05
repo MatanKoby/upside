@@ -424,6 +424,82 @@ export function notifyBandTouchHigh(args: {
   });
 }
 
+/**
+ * Intraday dip-bounce scorer fire (Batch X1). Posts to
+ * DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS. 4h cooldown owned by the caller (read
+ * off the latest `signal_fires` row for this conid + kind). No-ops when the
+ * channel isn't configured.
+ */
+export function notifyIntradayDipBounce(args: {
+  symbol: string;
+  score: number;
+  currentPrice: number | null;
+  dropPct: number | null;
+  sessionRegime: string | null;
+  entryZonePrice: number | null;
+  hasConfluence: boolean;
+}): Promise<void> {
+  const { symbol, score, currentPrice, dropPct, sessionRegime, entryZonePrice, hasConfluence } = args;
+  const px = currentPrice != null ? `$${currentPrice.toFixed(2)}` : '—';
+  const drop = dropPct != null ? `${dropPct.toFixed(1)}%` : '—';
+  const zone = entryZonePrice != null
+    ? ` · Entry-zone $${entryZonePrice.toFixed(2)}${hasConfluence ? ' (confluence)' : ''}`
+    : '';
+  const line =
+    `🟢 ${symbol} — intraday dip-bounce (score ${Math.round(score)})\n` +
+    `Current ${px} · drop from open ${drop} · session ${sessionRegime ?? 'n/a'}${zone}`;
+  console.log(`[dip-bounce] ${line.replace('\n', ' ')}`);
+  const url = env.discordIntradaySuggestionsWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🟢 ${symbol} · intraday dip-bounce`,
+      description: line,
+      color: 0x639922,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
+/**
+ * Swing dip-bounce scorer fire (Batch X1). Posts to
+ * DISCORD_WEBHOOK_SWING_SUGGESTIONS. 24h cooldown owned by the caller.
+ */
+export function notifySwingDipBounce(args: {
+  symbol: string;
+  score: number;
+  currentPrice: number | null;
+  trend: string | null;
+  rsi14: number | null;
+  overnightZonePrice: number | null;
+  multidayZonePrice: number | null;
+}): Promise<void> {
+  const { symbol, score, currentPrice, trend, rsi14, overnightZonePrice, multidayZonePrice } = args;
+  const px = currentPrice != null ? `$${currentPrice.toFixed(2)}` : '—';
+  const rsiNote = rsi14 != null ? ` · RSI(14) ${Math.round(rsi14)}` : '';
+  const zones = [
+    overnightZonePrice != null ? `Overnight $${overnightZonePrice.toFixed(2)}` : null,
+    multidayZonePrice != null ? `Multiday $${multidayZonePrice.toFixed(2)}` : null,
+  ].filter(Boolean).join(' · ');
+  const line =
+    `🟢 ${symbol} — swing dip-bounce (score ${Math.round(score)})\n` +
+    `Current ${px} · daily trend ${trend ?? 'n/a'}${rsiNote}` +
+    (zones ? `\n${zones}` : '');
+  console.log(`[dip-bounce] ${line.replace(/\n/g, ' ')}`);
+  const url = env.discordSwingSuggestionsWebhookUrl;
+  if (!url) return Promise.resolve();
+  return postWebhook(url, {
+    username: 'upside',
+    embeds: [{
+      title: `🟢 ${symbol} · swing dip-bounce`,
+      description: line,
+      color: 0x639922,
+      timestamp: new Date().toISOString(),
+    }],
+  });
+}
+
 export function notifyDipBuyMarkerHit(args: {
   symbol: string;
   markerPrice: number;
