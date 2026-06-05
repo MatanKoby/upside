@@ -15,8 +15,11 @@
 import { supabase } from './supabase.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
-import { companyNews, earningsCalendar, insiderTransactions } from './finnhub.js';
+import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
 import { buildFeaturePack, type Bars, type FeaturePack } from './technicals.js';
+import { buildRiskFlagInputs } from './riskFlags/inputs.js';
+import { evaluateAndStore, riskFlagAsofDate } from './riskFlags/engine.js';
+import { resolveRiskFlagConfig, CRITICAL_QUALITY_CAP } from '../config/riskFlags.js';
 import { incrLlmCallsToday } from './redis.js';
 import {
   LlmError,
@@ -94,7 +97,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
 
     const { data: prefs } = await db
       .from('user_preferences')
-      .select('signal_min_market_value, suppressed_symbols, profit_zone_threshold_pct')
+      .select('signal_min_market_value, suppressed_symbols, profit_zone_threshold_pct, risk_flag_config')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -173,8 +176,9 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     const daily = await ibHistory(conid, '1y', '1d');
     const intraday = await ibHistory(conid, '1d', '5min');
     const avgCost = isHeld ? num(position.avg_cost) : null;
+    const dailyBars = toBars(daily);
     const featurePack = buildFeaturePack({
-      daily: toBars(daily),
+      daily: dailyBars,
       intraday: intraday ? toBars(intraday) : null,
       currentPrice,
       avgCost,
@@ -183,11 +187,28 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // --- Finnhub context (each source isolated) --------------------------
     const to = new Date().toISOString().slice(0, 10);
     const from = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
-    const [news, earnings, insider] = await Promise.all([
+    const [news, earnings, insider, metric] = await Promise.all([
       companyNews(sym, from, to).catch(() => [] as unknown[]),
       earningsCalendar(sym).catch(() => null),
       insiderTransactions(sym).catch(() => null),
+      basicFinancials(sym).catch(() => null),
     ]);
+
+    // --- Risk flags (daily-grain; on-demand top-up + LLM clamp) ----------
+    // Reuses the bars + earnings + market cap we already pulled. Persists the
+    // row (Realtime → card badge / Risk-flags section, Batch R2) and feeds the
+    // LLM both as prompt context and, on CRITICAL, a hard quality clamp.
+    const riskConfig = resolveRiskFlagConfig(prefs?.risk_flag_config);
+    const riskInputs = buildRiskFlagInputs({
+      closes: dailyBars.c,
+      volumes: dailyBars.v,
+      high52w: featurePack.levels.high52w,
+      currentPrice,
+      metric,
+      earningsRaw: earnings,
+      config: riskConfig,
+    });
+    const riskRow = await evaluateAndStore(conid, riskInputs, riskConfig, riskFlagAsofDate());
 
     // --- Contextual triggers (profit-taking zone) ------------------------
     const thresholdPct = Number(prefs?.profit_zone_threshold_pct ?? 2.0);
@@ -217,7 +238,10 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       news,
       earnings,
       insider,
-      contextualTriggers: { inProfitTakingZone },
+      contextualTriggers: {
+        inProfitTakingZone,
+        riskFlags: riskRow ? { severity: riskRow.severity, flags: riskRow.flags } : null,
+      },
     };
 
     // --- LLM (one call counts once; retry once on malformed) -------------
@@ -249,6 +273,12 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       }
     }
 
+    // CRITICAL risk flags hard-cap the headline quality regardless of the
+    // model's number — a momentum pump can't emit a high-confidence BUY (spec:
+    // playbook.md → Risk-flag context + confidence cap).
+    if (riskRow?.severity === 'critical' && output.signal) {
+      output.signal.signalQuality = Math.min(output.signal.signalQuality, CRITICAL_QUALITY_CAP);
+    }
     await persistAnalysis(userId, sym, conid, featurePack, output);
   } catch (err) {
     void notifyError('signalEngine.run', `${sym}: ${(err as Error).message}`, err);

@@ -35,6 +35,13 @@ export interface LlmAnalysisInput {
   insider: unknown;
   contextualTriggers: {
     inProfitTakingZone: { thresholdPct: number; currentPnlPct: number; viaGap: boolean } | null;
+    // Active daily-grain risk flags (Batch R1). Surfaced to the model as an
+    // explicit pump/overextension warning; severity 'critical' also clamps the
+    // headline quality engine-side (see signalEngine). null when no flag fires.
+    riskFlags?: {
+      severity: 'warning' | 'critical';
+      flags: Array<{ key: string; since: string; payload: Record<string, number | null> }>;
+    } | null;
   };
 }
 
@@ -190,6 +197,19 @@ function buildPrompt(input: LlmAnalysisInput, direction: SignalDirection, strict
       ' Treat this as context, NOT a directive: do not sell at the current price merely because of it. Holding, waiting for a better level, or returning no signal are all valid — only act if the levels and indicators justify it.'
     : 'None.';
 
+  // Risk flags (Batch R1) — surfaced as an explicit pump/overextension warning.
+  // This is the counter-weight to the "favour patience / weigh structure"
+  // framing below, which on a real momentum pump would otherwise lean toward a
+  // BUY. A CRITICAL severity is additionally clamped engine-side.
+  const rf = input.contextualTriggers.riskFlags;
+  const riskLine =
+    rf && rf.flags.length
+      ? `${rf.severity.toUpperCase()} — ${rf.flags.map((f) => f.key).join(', ')}. ` +
+        'If these indicate a momentum pump / overextension (recent surge, overbought RSI, ' +
+        'near-52w-high after a run, abnormal volume, micro-cap), your reasoning MUST address it ' +
+        'and the signal MUST be downgraded — do NOT rationalise a pump as a breakout.'
+      : 'None.';
+
   const strictPreamble = strict
     ? 'Your previous response was not valid JSON in the required shape. Respond with ONLY a single JSON ' +
       'object — no markdown, no code fences, no commentary. '
@@ -209,6 +229,7 @@ EARNINGS (Finnhub): ${JSON.stringify(input.earnings ?? null)}
 INSIDER ACTIVITY (Finnhub): ${JSON.stringify(input.insider ?? null)}
 CONTEXTUAL TRIGGERS:
 - Profit-taking zone: ${zoneLine}
+- Risk flags: ${riskLine}
 
 A "playbook" is an ordered list of legs. Leg 1 is the first action in the plan; later legs are the round-trip continuation (e.g. ${
     isSell ? 'sell into strength → rebuy on a pullback → resell higher' : 'buy the pullback → add on confirmation → trim into resistance'

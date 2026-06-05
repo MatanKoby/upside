@@ -16,6 +16,7 @@ import { startIbPricePoller } from './cron/ibPricePoller.js';
 import { startFinnhubPricePoller } from './cron/finnhubPricePoller.js';
 import { startWatchlistQuotePoller } from './cron/watchlistQuotePoller.js';
 import { startEntryZonesCron } from './cron/entryZonesCron.js';
+import { startRiskFlagsCron } from './cron/riskFlagsCron.js';
 import { startIntradayStatsCron } from './cron/intradayStatsCron.js';
 import { startUniverseCron } from './cron/universeCron.js';
 import { startUniverseQuoteProducer } from './cron/universeQuoteProducer.js';
@@ -84,6 +85,7 @@ app.listen(env.port, () => {
   startFinnhubPricePoller();
   startWatchlistQuotePoller();
   startEntryZonesCron();
+  startRiskFlagsCron();
   startIntradayStatsCron();
   startUniverseCron();
   startUniverseQuoteProducer();
