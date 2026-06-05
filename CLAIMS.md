@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch R2 — Risk-flags FE
+- Owner: claude
+- Started: 2026-06-05 15:17
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
