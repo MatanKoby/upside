@@ -6,6 +6,7 @@ import { SortBar } from '../components/PortfolioHome/SortBar';
 import { PositionList } from '../components/PortfolioHome/PositionList';
 import { usePositions } from '../hooks/usePositions';
 import { useAllSignals } from '../hooks/useSignals';
+import { useAllRiskFlags } from '../hooks/useRiskFlags';
 import type { MarketSessionState } from '../hooks/useMarketSession';
 import type { SortKey } from '../types';
 
@@ -14,6 +15,7 @@ export default function PortfolioHome() {
   const session = useOutletContext<MarketSessionState>();
   const { positions, isLoading } = usePositions();
   const { signalsBySymbol } = useAllSignals();
+  const { byConid: riskByConid } = useAllRiskFlags();
 
   // Portfolio value is computed FE-side from the live `positions` rows so it
   // ticks instantly on Realtime updates. MTD card was removed 2026-05-29
@@ -42,6 +44,7 @@ export default function PortfolioHome() {
           sort={sort}
           totalPortfolioValue={portfolioValue}
           signalsBySymbol={signalsBySymbol}
+          riskByConid={riskByConid}
         />
       )}
     </div>

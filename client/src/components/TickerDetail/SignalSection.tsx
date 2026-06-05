@@ -3,6 +3,8 @@ import { apiFetch } from '../../services/supabase';
 import { type ActiveSignal, type UseSignalsResult } from '../../hooks/useSignals';
 import { useAnalysisLock } from '../../hooks/useAnalysisLock';
 import { SignalPill } from '../primitives/SignalPill';
+import { PreAnalysisGateModal } from './PreAnalysisGateModal';
+import type { RiskFlagRow } from '../../utils/riskFlags';
 
 // Relative "Last analyzed" label.
 function timeAgo(iso: string): string {
@@ -99,7 +101,15 @@ function PlaybookView({ signal }: { signal: ActiveSignal }) {
   );
 }
 
-export function SignalSection({ symbol, signalsResult }: { symbol: string; signalsResult: UseSignalsResult }) {
+export function SignalSection({
+  symbol,
+  signalsResult,
+  riskRow = null,
+}: {
+  symbol: string;
+  signalsResult: UseSignalsResult;
+  riskRow?: RiskFlagRow | null;
+}) {
   const { analysis, signals, previousCount, isLoading } = signalsResult;
   const { isLocked } = useAnalysisLock(symbol);
 
@@ -108,6 +118,13 @@ export function SignalSection({ symbol, signalsResult }: { symbol: string; signa
   const [dailyLimit, setDailyLimit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // CRITICAL risk flags front Analyze/Refine with a DANGER gate (one confirm
+  // per mount), BEFORE the normal two-step friction. WARNING never gates.
+  const [gateOpen, setGateOpen] = useState(false);
+  const [gatePassed, setGatePassed] = useState(false);
+  const pendingAction = useRef<'primary' | 'reanalyze' | null>(null);
+  const requireGate = riskRow?.severity === 'critical' && !gatePassed;
 
   useEffect(() => () => {
     if (armTimer.current) clearTimeout(armTimer.current);
@@ -138,14 +155,48 @@ export function SignalSection({ symbol, signalsResult }: { symbol: string; signa
     }
   }
 
+  function startArming() {
+    setBtn('arming');
+    armTimer.current = setTimeout(() => setBtn('confirm'), 1000);
+  }
+
   // Two-step intentional friction: tap → grey 1s → "Confirm analyze" → tap.
+  // CRITICAL tickers open the DANGER gate first; confirming it then runs the
+  // same two-step.
   function onPrimaryClick() {
     if (btn === 'idle') {
-      setBtn('arming');
-      armTimer.current = setTimeout(() => setBtn('confirm'), 1000);
+      if (requireGate) {
+        pendingAction.current = 'primary';
+        setGateOpen(true);
+        return;
+      }
+      startArming();
     } else if (btn === 'confirm') {
       void submit(false);
     }
+  }
+
+  function onReanalyze() {
+    if (requireGate) {
+      pendingAction.current = 'reanalyze';
+      setGateOpen(true);
+      return;
+    }
+    void submit(true);
+  }
+
+  function onGateConfirm() {
+    setGateOpen(false);
+    setGatePassed(true);
+    const action = pendingAction.current;
+    pendingAction.current = null;
+    if (action === 'primary') startArming();
+    else if (action === 'reanalyze') void submit(true);
+  }
+
+  function onGateCancel() {
+    setGateOpen(false);
+    pendingAction.current = null;
   }
 
   const disabled = isLocked || btn === 'arming' || btn === 'submitting' || dailyLimit;
@@ -194,7 +245,7 @@ export function SignalSection({ symbol, signalsResult }: { symbol: string; signa
           <span className="td-signal-meta">
             {softBlock.lastAnalyzedAt ? `Last analyzed ${timeAgo(softBlock.lastAnalyzedAt)} — ` : ''}re-analyze anyway?
           </span>
-          <button type="button" className="btn btn-primary" disabled={btn === 'submitting'} onClick={() => void submit(true)}>
+          <button type="button" className="btn btn-primary" disabled={btn === 'submitting'} onClick={onReanalyze}>
             Yes, re-analyze
           </button>
           <button type="button" className="btn" onClick={() => setSoftBlock(null)}>
@@ -210,6 +261,15 @@ export function SignalSection({ symbol, signalsResult }: { symbol: string; signa
       )}
 
       {error && <p className="td-signal-warn">{error}</p>}
+
+      {gateOpen && riskRow && (
+        <PreAnalysisGateModal
+          symbol={symbol}
+          row={riskRow}
+          onConfirm={onGateConfirm}
+          onCancel={onGateCancel}
+        />
+      )}
     </div>
   );
 }

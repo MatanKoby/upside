@@ -4,8 +4,10 @@ import { Sparkline } from '../common/Sparkline';
 import { Tooltip } from '../common/Tooltip';
 import { PriceFlicker } from '../common/PriceFlicker';
 import { SignalPill } from '../primitives/SignalPill';
+import { DangerBadge } from '../primitives/DangerBadge';
 import { useSparkline } from '../../hooks/useSparkline';
 import type { ActiveSignal } from '../../hooks/useSignals';
+import type { RiskFlagRow } from '../../utils/riskFlags';
 import {
   formatCurrency,
   formatSignedCurrency,
@@ -24,10 +26,12 @@ export function PositionCard({
   position,
   totalPortfolioValue,
   signals = [],
+  riskRow = null,
 }: {
   position: Position;
   totalPortfolioValue: number;
   signals?: ActiveSignal[];
+  riskRow?: RiskFlagRow | null;
 }) {
   const navigate = useNavigate();
   // Prefer real sparkline closes from the BE; fall back to whatever's on the
@@ -100,9 +104,11 @@ export function PositionCard({
         </div>
         <div className="weight-bar" style={weightBarStyle} aria-hidden="true" />
       </button>
-      {actionable.length > 0 && (
+      {(actionable.length > 0 || riskRow) && (
         <button className="position-card-signal" onClick={goToDetail} type="button">
           <span className="position-card-pills">
+            {/* Danger badge renders FIRST, separate from the signal pills. */}
+            {riskRow && <DangerBadge row={riskRow} />}
             {actionable.map((s) => (
               <SignalPill
                 key={s.id}

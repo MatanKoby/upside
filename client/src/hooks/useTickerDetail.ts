@@ -112,6 +112,7 @@ function ratioInRange(price: number, low: number | null, high: number | null): n
 }
 
 interface DbPosition {
+  conid: number | null;
   symbol: string;
   company_name: string | null;
   shares: number | string;
@@ -150,6 +151,7 @@ function rowToTickerDetail(r: DbPosition, totalPortfolioValue: number): TickerDe
   const contributionPct = num(r.portfolio_contribution) * 100;
 
   return {
+    conid: r.conid ?? null,
     symbol: r.symbol,
     company: r.company_name ?? r.symbol,
     price: num(r.current_price),
@@ -271,6 +273,7 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
       setResult({
         state: 'loaded',
         detail: {
+          conid: typeof wlItem.data.conid === 'number' ? wlItem.data.conid : Number(wlItem.data.conid),
           symbol: sym,
           company: sym,                   // no company name on watchlist_items yet
           price: num(quote.data?.canonical_price as number | null | undefined),

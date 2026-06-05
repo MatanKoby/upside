@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useLlmConfig } from '../hooks/useLlmConfig';
+import { useRiskFlagConfig, type RiskFlagConfig } from '../hooks/useRiskFlagConfig';
 
 // Minimal Settings screen. For now it carries the account identity + a
 // developer tool to copy the current access token (JWT) for API debugging.
@@ -59,6 +60,8 @@ export default function Settings() {
       </section>
 
       <AnalysisEngineSection />
+
+      <RiskFlagsSettingsSection />
 
       <section className="settings-section">
         <h2 className="settings-section-title">Developer</h2>
@@ -183,6 +186,114 @@ function AnalysisEngineSection() {
           </button>
         </>
       )}
+      {error && <p className="settings-error">{error}</p>}
+    </section>
+  );
+}
+
+// Risk-flag thresholds (Batch R2) — the six tunables persisted to
+// user_preferences.risk_flag_config via PUT /api/user/preferences. The engine
+// re-reads them on the next nightly pass + at Analyze. Market-cap is edited in
+// $M for legibility and stored back in raw USD.
+function RiskField({
+  label,
+  value,
+  step,
+  min,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  min: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="settings-row">
+      <span className="settings-label">{label}</span>
+      <input
+        className="settings-input"
+        type="number"
+        inputMode="decimal"
+        value={Number.isFinite(value) ? value : ''}
+        step={step}
+        min={min}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+}
+
+function RiskFlagsSettingsSection() {
+  const { config, defaults, loading, saving, error, save } = useRiskFlagConfig();
+  const [draft, setDraft] = useState<RiskFlagConfig | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    if (config && !draft) setDraft(config);
+  }, [config, draft]);
+
+  if (loading || !draft) {
+    return (
+      <section className="settings-section">
+        <h2 className="settings-section-title">Risk flags</h2>
+        <p className="settings-hint">Loading…</p>
+      </section>
+    );
+  }
+
+  const set = (k: keyof RiskFlagConfig, v: number) =>
+    setDraft((d) => (d ? { ...d, [k]: v } : d));
+
+  const dirty =
+    config != null &&
+    (Object.keys(draft) as (keyof RiskFlagConfig)[]).some((k) => draft[k] !== config[k]);
+
+  async function onSave() {
+    const ok = await save(draft!);
+    if (ok) {
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">Risk flags</h2>
+      <p className="settings-hint">
+        Thresholds for the danger flags shown on cards + ticker detail. Applied on the next
+        nightly pass and at Analyze.
+      </p>
+
+      <RiskField label="Price surge ≥ (%)" value={draft.surgePct} step={1} min={1} onChange={(v) => set('surgePct', v)} />
+      <RiskField label="…over (sessions)" value={draft.surgeWindowSessions} step={1} min={1} onChange={(v) => set('surgeWindowSessions', v)} />
+      <RiskField label="Volume spike ≥ (× avg)" value={draft.volMult} step={0.5} min={1} onChange={(v) => set('volMult', v)} />
+      <RiskField label="RSI overbought > " value={draft.rsiZ} step={1} min={50} onChange={(v) => set('rsiZ', v)} />
+      <RiskField label="Near 52w-high within (%)" value={draft.near52wHighPct} step={1} min={0} onChange={(v) => set('near52wHighPct', v)} />
+      <RiskField
+        label="Micro-cap under ($M)"
+        value={Math.round(draft.microCapUsd / 1_000_000)}
+        step={50}
+        min={1}
+        onChange={(v) => set('microCapUsd', v * 1_000_000)}
+      />
+      <RiskField label="Earnings within (days)" value={draft.earningsDays} step={1} min={0} onChange={(v) => set('earningsDays', v)} />
+
+      <div className="settings-actions">
+        <button className="settings-button" onClick={() => void onSave()} disabled={saving || !dirty}>
+          {saving ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
+        </button>
+        {defaults && (
+          <button
+            className="settings-button"
+            onClick={() => setDraft({ ...defaults })}
+            disabled={saving}
+            type="button"
+          >
+            Reset to defaults
+          </button>
+        )}
+      </div>
       {error && <p className="settings-error">{error}</p>}
     </section>
   );

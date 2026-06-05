@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { PositionCard } from './PositionCard';
 import type { ActiveSignal } from '../../hooks/useSignals';
+import type { RiskFlagRow } from '../../utils/riskFlags';
 import type { Position, SortKey } from '../../types';
 
 export function PositionList({
@@ -8,11 +9,13 @@ export function PositionList({
   sort,
   totalPortfolioValue,
   signalsBySymbol,
+  riskByConid,
 }: {
   positions: Position[];
   sort: SortKey;
   totalPortfolioValue: number;
   signalsBySymbol: Record<string, ActiveSignal[]>;
+  riskByConid: Map<number, RiskFlagRow>;
 }) {
   const sorted = useMemo(() => {
     const copy = [...positions];
@@ -43,6 +46,7 @@ export function PositionList({
           position={p}
           totalPortfolioValue={totalPortfolioValue}
           signals={signalsBySymbol[p.symbol]}
+          riskRow={p.conid != null ? riskByConid.get(p.conid) ?? null : null}
         />
       ))}
     </div>

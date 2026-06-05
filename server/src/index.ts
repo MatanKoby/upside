@@ -10,6 +10,7 @@ import healthRoutes from './routes/health.js';
 import debugRoutes from './routes/debug.js';
 import watchlistsRoutes from './routes/watchlists.js';
 import watchlistMarkersRoutes from './routes/watchlist-markers.js';
+import userRoutes from './routes/user.js';
 import { startLockCleanup } from './cron/lockCleanup.js';
 import { startKeepalive } from './cron/keepalive.js';
 import { startIbPricePoller } from './cron/ibPricePoller.js';
@@ -71,6 +72,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/debug', debugRoutes);
 app.use('/api/watchlists', watchlistsRoutes);
 app.use('/api/watchlist-markers', watchlistMarkersRoutes);
+app.use('/api/user', userRoutes);
 
 app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   void notifyError(`http.${req.method}.${req.path}`, err.message ?? 'internal error', err);

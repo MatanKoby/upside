@@ -16,8 +16,10 @@ import { PriceFlicker } from '../common/PriceFlicker';
 import { PriceChart } from './PriceChart';
 import { useSignals } from '../../hooks/useSignals';
 import { useIntradayStats } from '../../hooks/useIntradayStats';
+import { useRiskFlags } from '../../hooks/useRiskFlags';
 import { SignalPill } from '../primitives/SignalPill';
 import { IntradayStatsPanel } from './IntradayStatsPanel';
+import { RiskFlagsSection, RiskFlagsAccessory } from './RiskFlagsSection';
 
 export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   const navigate = useNavigate();
@@ -34,6 +36,8 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
   // feeds both the section body and the collapsed-header pill row.
   const signalsResult = useSignals(detail.symbol);
   const statsResult = useIntradayStats(detail.symbol);
+  const riskResult = useRiskFlags(detail.conid);
+  const riskRow = riskResult.row;
   const actionableSignals = signalsResult.signals.filter((s) => s.type !== 'no_signal');
   const signalAccessory =
     actionableSignals.length > 0 ? (
@@ -97,8 +101,18 @@ export function TickerDetail({ detail }: { detail: TickerDetailData }) {
         <TimeframeBar active={timeframe} onChange={setTimeframe} />
       </section>
 
+      {riskRow && (
+        <CollapsibleSection
+          title="Risk flags"
+          defaultOpen={riskRow.severity === 'critical'}
+          headerAccessory={<RiskFlagsAccessory row={riskRow} />}
+        >
+          <RiskFlagsSection row={riskRow} />
+        </CollapsibleSection>
+      )}
+
       <CollapsibleSection title="Signal" headerAccessory={signalAccessory}>
-        <SignalSection symbol={detail.symbol} signalsResult={signalsResult} />
+        <SignalSection symbol={detail.symbol} signalsResult={signalsResult} riskRow={riskRow} />
       </CollapsibleSection>
 
       {detail.positionStats && (

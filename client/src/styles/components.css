@@ -1473,3 +1473,99 @@
 }
 .td-state-body p { margin: 0; }
 .td-state-error p { color: rgb(var(--loss-rgb)); }
+
+/* ========== Risk flags (Batch R2) ========== */
+/* Danger badge — distinct from the signal pill, renders first in the
+   signal+badge row. Red = CRITICAL, amber = WARNING. Never truncated. */
+.danger-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.danger-badge-critical { background: var(--pill-sell-bg);  color: var(--pill-sell-text); }
+.danger-badge-warning  { background: var(--pill-watch-bg); color: var(--pill-watch-text); }
+.danger-badge-compact { padding: 1px 6px; }
+.danger-badge-extra { opacity: 0.7; }
+
+/* Section header severity chip (right-aligned accessory). */
+.risk-sev {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.risk-sev-critical { background: var(--pill-sell-bg);  color: var(--pill-sell-text); }
+.risk-sev-warning  { background: var(--pill-watch-bg); color: var(--pill-watch-text); }
+
+/* Risk-flags section body — one row per active flag. */
+.risk-flags-list {
+  list-style: none;
+  margin: var(--sp-10) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+}
+.risk-flag-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.risk-flag-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-8);
+}
+.risk-flag-name { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text-primary); }
+.risk-flag-since { font-size: var(--fs-10); color: var(--text-tertiary); white-space: nowrap; }
+.risk-flag-explain { margin: 0; font-size: var(--fs-11); color: var(--text-secondary); line-height: 1.4; }
+.risk-flag-threshold { font-size: var(--fs-10); color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* Pre-analysis DANGER gate modal — reuses the .sheet-backdrop overlay. */
+.danger-gate {
+  position: relative;
+  width: min(420px, calc(100% - 32px));
+  margin: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-14);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+}
+.danger-gate-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  color: var(--pill-sell-text);
+}
+.danger-gate-head h2 { margin: 0; font-size: var(--fs-14); font-weight: var(--fw-medium); }
+.danger-gate-lead { margin: 0; font-size: var(--fs-12); color: var(--text-primary); line-height: 1.4; }
+.danger-gate-flags {
+  list-style: disc;
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+.danger-gate-note { margin: 0; font-size: var(--fs-11); color: var(--text-tertiary); line-height: 1.4; }
+.danger-gate-actions { display: flex; justify-content: flex-end; gap: var(--sp-8); margin-top: var(--sp-4); }
+.btn-danger-solid {
+  background: var(--pill-sell-text);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Settings — Risk-flags action row (Save + Reset). */
+.settings-actions { display: flex; gap: var(--sp-8); align-items: center; flex-wrap: wrap; }

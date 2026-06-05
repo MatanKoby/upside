@@ -30,6 +30,7 @@ function n(v: number | string | null | undefined): number {
 
 function rowToPosition(r: DbPosition): Position {
   return {
+    conid: r.conid ?? null,
     symbol: r.symbol,
     name: r.company_name ?? r.symbol,
     shares: n(r.shares),

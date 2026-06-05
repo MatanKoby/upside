@@ -8,6 +8,9 @@ import { EntryZoneCluster } from '../components/Watchlist/EntryZoneCluster';
 import { IntradayStatsChip } from '../components/Watchlist/IntradayStatsChip';
 import { Glossary } from '../components/Watchlist/Glossary';
 import { PriceFlicker } from '../components/common/PriceFlicker';
+import { DangerBadge } from '../components/primitives/DangerBadge';
+import { useAllRiskFlags } from '../hooks/useRiskFlags';
+import type { RiskFlagRow } from '../utils/riskFlags';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency, formatSignedPercent } from '../utils/formatters';
 
@@ -54,6 +57,7 @@ async function patchActive(listId: string, active: boolean): Promise<boolean> {
 
 export default function Watchlist() {
   const { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, statsByConid, isLoading } = useWatchlistData();
+  const { byConid: riskByConid } = useAllRiskFlags();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
@@ -129,6 +133,7 @@ export default function Watchlist() {
             markersByConid={markersByConid}
             entryZonesByConid={entryZonesByConid}
             statsByConid={statsByConid}
+            riskByConid={riskByConid}
             onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid) })}
             onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid), marker })}
             onPromoteZone={(item, zone) =>
@@ -233,6 +238,7 @@ function ItemList({
   markersByConid,
   entryZonesByConid,
   statsByConid,
+  riskByConid,
   onAddMarker,
   onEditMarker,
   onPromoteZone,
@@ -242,6 +248,7 @@ function ItemList({
   markersByConid: Record<number, Marker[]>;
   entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
   statsByConid: Record<number, IntradayStatsRow>;
+  riskByConid: Map<number, RiskFlagRow>;
   onAddMarker: (item: WatchlistItem) => void;
   onEditMarker: (item: WatchlistItem, marker: Marker) => void;
   onPromoteZone: (item: WatchlistItem, zone: EntryZoneRow & { horizon: Horizon }) => void;
@@ -259,6 +266,7 @@ function ItemList({
         const markers = markersByConid[Number(it.conid)] ?? [];
         const zones = entryZonesByConid[Number(it.conid)] ?? {};
         const stats = statsByConid[Number(it.conid)];
+        const risk = riskByConid.get(Number(it.conid)) ?? null;
         return (
           <li key={it.id}>
             <ItemRow
@@ -271,6 +279,7 @@ function ItemList({
               markers={markers}
               zones={zones}
               stats={stats}
+              risk={risk}
               onTap={() => navigate(`/ticker/${encodeURIComponent(it.symbol)}`)}
               onLongPress={() => onAddMarker(it)}
               onEditMarker={(m) => onEditMarker(it, m)}
@@ -295,6 +304,7 @@ function ItemRow({
   markers,
   zones,
   stats,
+  risk,
   onTap,
   onLongPress,
   onEditMarker,
@@ -309,6 +319,7 @@ function ItemRow({
   markers: Marker[];
   zones: Partial<Record<Horizon, EntryZoneRow>>;
   stats: IntradayStatsRow | undefined;
+  risk: RiskFlagRow | null;
   onTap: () => void;
   onLongPress: () => void;
   onEditMarker: (m: Marker) => void;
@@ -373,6 +384,7 @@ function ItemRow({
             column's reserved space). flex-wrap allows graceful overflow if a
             row has many markers. */}
         <div className="watchlist-item-chip-cluster">
+          {risk && <DangerBadge row={risk} compact />}
           {markers.map((m) => (
             <button
               key={m.id}

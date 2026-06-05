@@ -8,6 +8,9 @@ export type Signal = {
 };
 
 export type Position = {
+  // IBKR conid — the join key for instrument-scoped tables (risk_flags,
+  // band_state, …). Nullable until the position's contract resolves.
+  conid: number | null;
   symbol: string;
   name: string;
   shares: number;
@@ -141,6 +144,9 @@ export type HistoryBundle = {
 };
 
 export type TickerDetailData = {
+  // IBKR conid — joins instrument-scoped tables (risk_flags). Null when the
+  // ticker has no resolved contract yet.
+  conid: number | null;
   symbol: string;
   company: string;
   price: number;
