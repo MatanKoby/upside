@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X1 — Dip-bounce track (curated list + two-scorer alert + forward-tracking)
+- Owner: claude
+- Started: 2026-06-05 18:27
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
