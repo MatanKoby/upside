@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Screener FE reshape: two ranked lists by composite score with rolling hit-rate columns, supersedes the three-trait-accordion shape originally specced for S4). Orthogonal slices that can land in parallel: **Batch M1** (agent context efficiency) and the **risk-flags track** added 2026-06-05 — **Batch R1** (daily-grain danger-flag engine + LLM pump-downgrade clamp) then **Batch R2** (FE badge / Risk-flags section / pre-analysis gate); pure consumer of the existing feature pack + Finnhub data, no screener dependency. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
+> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Watchlist virtual lists: the Intraday/Swing leaderboards render *inside the Watchlist screen* and the standalone Screener tab is retired; supersedes the S4 three-accordion shape). Orthogonal slices that can land in parallel: **Batch M1** (agent context efficiency) and the **risk-flags track** added 2026-06-05 — **Batch R1** (daily-grain danger-flag engine + LLM pump-downgrade clamp) then **Batch R2** (FE badge / Risk-flags section / pre-analysis gate); pure consumer of the existing feature pack + Finnhub data, no screener dependency. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
 
 ---
 
@@ -305,7 +305,7 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 
 7. **`server/src/services/dipBounce/swingScorer.ts`** — pure function `computeSwingDipBounceScore(conid, asof_ts) → { score, components, fired }`. Reads daily indicators (RSI, ATR, trend regime) via `technicals.ts` + the same tables as the intraday scorer. Vitest fixtures.
 
-8. **`server/src/services/dipBounce/dipBounceCron.ts`** OR poll-cycle hook in `upsertQuote` — fires both scorers on every `quotes.canonical_price` write for any `(conid in curated_list where asof_date = today)`. Cooldown checks read `signal_fires` for last fire timestamp per `(conid, signal_kind)`. On fire: write `signal_fires` row, fire Discord ping. Wire choice: pick whichever keeps the existing poll-cycle path clean — the user has been bitten by alert checks bloating the poll cycle.
+8. **`server/src/services/dipBounce/dipBounceCron.ts`** OR poll-cycle hook in `upsertQuote` — fires both scorers on every `quotes.canonical_price` write for any conid in `curated ∪ active-watchlist ∪ held` (the visibility-opt-in compute set — see `spec/screens/watchlist.md` → Engine coverage). Cooldown checks read `signal_fires` for last fire timestamp per `(conid, signal_kind)`. On fire: write `signal_fires` row, fire Discord ping. Wire choice: pick whichever keeps the existing poll-cycle path clean — the user has been bitten by alert checks bloating the poll cycle.
 
 9. **`server/src/services/notify.ts`** extensions — `notifyIntradayDipBounce(payload)` and `notifySwingDipBounce(payload)` routing to the two new channels. Embed format per `spec/signals/dip-bounce-scorer.md` → Discord message format.
 
@@ -316,6 +316,8 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 12. **`.env.example`** — add `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` and `DISCORD_WEBHOOK_SWING_SUGGESTIONS`.
 
 13. **Boot wiring** in `server/src/index.ts` — start `curatedListCron` + `signalOutcomesCron`. Scorers hook into the existing poll cycle (no separate cron).
+
+14. **Compute-set widening** — the dip-bounce poll hook and `bandEngineCron` (shipped S3) target `curated ∪ active-watchlist ∪ held`, not curated-only, so every ticker on a *visible* imported list gets a walking band + dip-bounce score (`spec/signals/curated-list.md` → Consumers). Bounded by the user's visibility choices; small IB-budget delta. Thin names with insufficient `intraday_stats` history surface a "needs more history" state rather than a fabricated band.
 
 ### Files this batch creates/edits
 - `supabase/migrations/02X_dip_bounce.sql` (new)
@@ -333,8 +335,8 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 - `.env.example` (two new env vars)
 
 ### Does NOT touch
-- The Screener FE (X2 owns that).
-- Universe (S1), trait scoring (S2), band engine (S3) — pure data consumer.
+- The Watchlist virtual-list FE (X2 owns that).
+- Universe (S1), trait scoring (S2) — pure data consumer. (Does widen `bandEngineCron`'s target list per deliverable 14.)
 - `markers.md` (separate alert primitive; the dip-bounce scorer doesn't replace it).
 
 ### Manual prereqs
@@ -353,33 +355,39 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 - Cooldown: same ticker firing twice within 4h on intraday (or 24h on swing) → second fire is silently skipped (no Discord ping, no `signal_fires` row).
 
 ### Out of scope (X2 follow-up)
-- Any FE surface — the Screener tab reshape that renders these scorers as two ranked lists with rolling hit-rate columns lands in X2 below.
+- Any FE surface — the Watchlist virtual lists that render these scorers as two ranked leaderboards land in X2 below.
 - Porting band-touch and marker fires onto the same `signal_fires` backbone — easy follow-up once X1's tables exist; queued as part of Batch C remainder.
 
 ---
 
-## Batch X2: Screener FE reshape — two ranked lists by composite score
+## Batch X2: Watchlist virtual lists — Intraday / Swing (retires the Screener tab)
 
-**Depends on:** Batch X1 (`curated_list`, `signal_fires`, `signal_outcomes`, hit-rate view).
+**Depends on:** Batch X1 (`curated_list`, `signal_fires`, `signal_outcomes`, hit-rate view, compute-set widening). Soft dep on Batch R2 (shared `TickerCard` danger badge — either order).
 
-**Scope:** Supersedes the originally-specced shape of Batch S4 (three trait accordions). The Screener tab renders as **two ranked lists** ("Intraday suggestions" / "Swing suggestions") sorted by the composite scores from `dip-bounce-scorer.md`, each row showing a rolling 30d hit-rate column from `signal_outcomes`. Same promote-to-watchlist + marker affordances. The Screener tab becomes the FE surface for the dip-bounce track, with the original three-trait accordions demoted to an optional drawer (or dropped — to be decided at claim time based on whether the user finds the trait views useful in practice).
+**Scope:** Supersedes both the S4 three-accordion shape *and* the standalone Screener tab (2026-06-05 milestone). The two ranked lists ("Intraday" / "Swing") render as **Upside-curated virtual lists inside the Watchlist screen** — two always-present virtual sub-tabs ahead of the imported lists. Spec already revised: `spec/screens/watchlist.md` → Upside-curated virtual lists; `spec/screens/screener.md` is now a retirement redirect.
 
-Spec lives in `spec/screens/screener.md` (will be revised at claim time per the spec-edit skill — current file still reflects the S4 three-accordion shape).
+Each virtual list is a **living leaderboard**: top-N by a **composite** opportunity score, re-ranking on the poll cycle, each row showing a rolling-30d hit-rate column, a walking-band chip, the danger badge, and one or more **reason chips** (`dip` / `catalyst` / `post-earnings`). The list source is the **union** `curated_list ∪ universe.auto_promoted` event names — so `catalyst_reversal` (→ both lists) and `post_earnings_drift` (→ Swing) appear alongside the dip-scored character names. A **⚡ just-fired** marker flags names that recently crossed their dip-bounce threshold.
+
+### Deliverables
+- Watchlist sub-tab strip gains the two virtual tabs (Intraday ✨ / Swing ✨) ahead of imported lists.
+- `useVirtualList(kind)` hook — query `curated_list ∪ auto_promoted`, join `trait_scores` + `signal_fires` + `band_state` + the hit-rate view, compute the composite rank (weights as named constants, calibration-tuned), Realtime subscribe.
+- Virtual-list row = the shared `TickerCard` + reason chips + hit-rate column + walking-band chip + ⚡ fired marker.
+- Long-press affordances: Add to one of my watchlists / Set marker (prefilled at band p50).
+- Retire `client/src/pages/Screener.tsx` + the Screener bottom-nav tab (nav stays Portfolio · Watchlist · Settings).
 
 ### Open questions (settle at claim time)
-- Do the three trait accordions stay as a secondary drawer, or get dropped entirely?
-- Hit-rate column shape: rolling 30d %, or rolling 30d % + sample size + tooltip with the +30m / +2h / +1d / +3d breakdown?
-- Does the Watchlist row gain a `OnCuratedList` chip so the user can see which of their manually-watched names also appear on the auto-curated list? (Probably yes, but it's a Watchlist-row change, not a Screener change.)
-- Does promote-to-watchlist make sense in this shape, given the curated list largely replaces the manual-watchlist purpose for dip-bounce?
+- Composite-rank weights between the dip-bounce score and the event-trait scores — seed by calibration, like the scorer weights.
+- Hit-rate column shape: rolling 30d %, or % + sample size + a +30m/+2h/+1d/+3d tooltip.
+- Does an imported-list row gain an "on a virtual list" chip so the user sees overlap? (Cheap Watchlist-row tweak.)
 
 ### Files this batch creates/edits (rough)
-- `spec/screens/screener.md` (revise at claim — two-list shape replacing accordions)
-- `client/src/pages/Screener.tsx`
-- `client/src/components/Screener/*` (mostly rewrites of the S4-shape components)
-- `client/src/hooks/useScreenerData.ts` (subscribe to `curated_list` + `signal_fires` + hit-rate view)
+- `client/src/pages/Watchlist.tsx` + `client/src/components/Watchlist/*` (virtual tabs + virtual-list rows; reuse the imported-row `TickerCard`)
+- `client/src/hooks/useVirtualList.ts` (new)
+- remove `client/src/pages/Screener.tsx` + its nav entry / route
+- `client/src/styles/components.css` (reason chips, ⚡ marker, hit-rate column)
 
 ### Does NOT touch
-- Any signal-engine code, any cron, any schema — pure FE consumer of X1's outputs.
+- Any signal-engine code or schema — pure FE consumer of X1's outputs (the compute-set widening + union data come from X1).
 
 ---
 
