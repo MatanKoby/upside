@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X4 — daily_bars layer (Polygon-primary daily-grain SSOT)
-- Owner: claude
-- Started: 2026-06-06 11:20
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,31 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X4 — daily_bars layer: Polygon-primary daily-grain SSOT (2026-06-06)
+- Owner: claude
+- Started: 2026-06-06 11:20 · Finished: 2026-06-06 11:35
+- Commit: f344d70 (code) · 0089fb1 (spec)
+- **What shipped:** daily OHLCV bars were the only data type with no non-IB fallback, so the curated list / swing pack / sparkline all died when IB `/iserver/marketdata/history` 503'd (weekends, off-hours). This makes **Polygon grouped-daily the daily-grain SSOT** (`daily_bars` table) and demotes IB to live-only for daily grain. Subsumes the old "volume-only precompute" X4 — `universe.last_avg_volume` is now one derived column of this layer.
+  - **Migration `029_daily_bars.sql`** — `daily_bars(conid, date, o/h/l/c numeric, v bigint, source text default 'polygon', computed_at)` PK `(conid, date)` + `(date)` index. `conid` = `universe.real_conid`. NOT Realtime-published (server-side consumers only). Grants: service_role write + authenticated/anon select (instrument-table convention). **`universe.last_avg_volume` widened `integer → bigint`** (high-volume sub-dollar names overflow int). **`refresh_universe_avg_volume()`** SQL function — recomputes `last_avg_volume` = 30d median daily volume per conid (`percentile_cont`) in one statement.
+  - **`services/dailyBars.ts`** (new) — `loadDailyBars(conid, lookbackDays=90)` reads the SSOT oldest→newest (matches `RawIbHistory.data` order so consumers swap in cleanly) + pure `recentWeekdays(n, asof)` (weekend-skipping date list) + `buildDailyBarRows(date, grouped, symbolToConid, source, computedAt)`. `dailyBars.test.ts` (6 cases — weekday math incl. Monday→Friday, conid mapping + volume rounding).
+  - **`cron/universeQuoteProducer.ts`** (extended) — now does two jobs off the same Polygon pulls: (1) the original `universe.last_price/last_volume` refresh, (2) `daily_bars` — appends the **most-recent weekday's** bar each run (weekend-safe: a Monday run targets Friday) + a **30-day bootstrap** on missing dates (rate-limited 13s/call for the free 5/min tier, ~30 calls one-time, ~1 steady-state since the primary pull is reused). Yahoo gap-fill writes `daily_bars` too (`source='yahoo'`, `real_conid` threaded into the job payload). After writing bars: `refresh_universe_avg_volume()` RPC + 45-day retention delete. **Universe load paginated** (`.range()`) so the whole ~3-5k IN universe is covered regardless of the PostgREST max-rows cap. Date-coverage checked via cheap per-date `head:true` count queries.
+  - **Repointed consumers off IB history → `daily_bars`:** `curatedListCron.dailyMetrics` (and **dropped its IB gate** — the headline weekend fix); `dipBounceCron.refreshPacks` (swing feature pack, no longer needs IB up mid-session); `routes/marketdata` sparkline (reads `daily_bars` first, **IB fallback** for held names outside the universe / pre-first-run).
+- **Implementation forks / decisions:**
+  - **Date-driven backfill, not per-conid** — coverage is tracked at the trading-date grain (grouped-daily is per-date), so a missing date triggers one grouped pull that writes all universe matches. Holidays (Polygon returns empty) get cheaply re-checked each run (≤1-2 wasted calls); no persistence of "empty dates" needed. **Known limitation:** a *newly-added* universe ticker only gets forward coverage (already-fetched dates are skipped), so it reaches 30 bars in ~6 weeks — fine for the stable bulk of the universe; a periodic full re-bootstrap is a deferred option.
+  - **`band engine` + `entry-zone cron` NOT repointed** — both need intraday 5-min bars (Polygon free is daily-only), so they stay inherently IB-gated. `entryZonesCron`'s sparkline-piggyback write to `quotes.sparkline_closes` also stays (it's a side effect of an already-IB-gated cron). Documented in `data/sources.md`.
+  - **`last_avg_volume` = 30d median** (despite the "avg" name) — one definition of "average daily volume" across the system (matches the X3 curated gate). Widened to bigint to avoid overflow.
+- **Verification:** `pnpm typecheck` clean (incl. scripts tsconfig); `vitest run` **178/178** (6 new dailyBars). Live verification is **weekend-testable** (the point of the batch): Polygon serves historical data with IB down.
+- **Manual prereqs for live-flip:**
+  1. **Apply `029_daily_bars.sql`** in the Supabase SQL editor. ⚠️ migration needed.
+  2. Ensure `POLYGON_API_KEY` is set on the VPS `.env` (already required by the existing producer; without it the producer skips).
+  3. `./bin/upside rebuild api` on the VPS.
+- **Verification post-live-flip (works on a weekend, IB down):**
+  - `bin/upside-psql -c "select source, count(*), count(distinct conid), count(distinct date) from daily_bars group by source;"` — Polygon rows accumulate; ~30 distinct dates after the first bootstrap run (~6.5 min), 1 new date/day after.
+  - `bin/upside-psql -c "select count(*) from universe where last_avg_volume is not null;"` climbs toward the IN count after `refresh_universe_avg_volume`.
+  - `bin/upside-psql -c "select count(*) from curated_list where asof_date=(now() at time zone 'utc')::date;"` builds **without IB** once `daily_bars` + today's `trait_scores` exist (the weekend-gap fix). Boot logs: `[curatedListCron] starting, 12h cadence (daily_bars-backed)`.
+  - TickerDetail sparkline renders for held universe names with IB off.
+- **Follow-ups deferred:** periodic full daily_bars re-bootstrap for newly-added tickers; X5 (price SSOT — `quotes` only); X7 (news-as-signal). The intraday-grain IB dependency (band engine / entry zones / live snapshot) is inherent to Polygon-free and not a gap to close here.
 
 ### Batch X6 — Earnings calendar: single shared daily pull (2026-06-06)
 - Owner: claude
