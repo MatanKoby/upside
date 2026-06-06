@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X4 — daily_bars layer (Polygon-primary daily-grain SSOT)
+- Owner: claude
+- Started: 2026-06-06 11:20
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
