@@ -8,6 +8,13 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X5 — Price SSOT (quotes is the only price table)
+- Owner: claude
+- Started: 2026-06-06 11:40
+- Scope decision (with user, 2026-06-06): **drop price AND P&L** from `positions`
+  — recompute market_value + unrealized_pnl from `quotes.canonical_price`. positions
+  holds holding facts (conid/qty/cost/zone-state) only.
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
