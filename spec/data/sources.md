@@ -35,16 +35,17 @@ and the only source for **intraday-depth OHLCV bars** today.
 | `GET /pa/transactions` | cost-basis / entry reconstruction | `positions` (entry fields) | `ibPricePoller` (`entryFromTransactions`) |
 | `GET /iserver/account/trades` | recent fills / entry | `positions` (entry) | `ibPricePoller` (`entryFromTrades`) |
 | `GET /iserver/marketdata/snapshot` | live intraday quote (last, bid/ask, change) | `positions.current_price`, `quotes` | pollers, `routes/marketdata` |
-| `GET /iserver/marketdata/history` | **OHLCV bars** (any interval) → ATR, ADV, feature pack, sparkline, intraday-stats | **ephemeral → computed** | `curatedListCron`, `dipBounce` swing pack, `bandEngine`, `intradayStatsCron`, `signalEngine` feature pack, `routes/marketdata` (history/sparkline) |
+| `GET /iserver/marketdata/history` | **OHLCV bars** (any interval) → intraday-stats, band engine, entry zones, feature pack, chart, sparkline-fallback | **ephemeral → computed** | `intradayStatsCron`, `bandEngine`, `entryZonesCron`, `signalEngine` feature pack, `routes/marketdata` (history; sparkline fallback only). **Daily-grain readers moved to `daily_bars` (Batch X4):** `curatedListCron` + `dipBounce` swing pack no longer call this. |
 | `GET /iserver/contract/{conid}/info` | contract metadata | `contracts` | `ibPricePoller`, `signalEngine` |
 | `GET /iserver/secdef/search` | symbol → `real_conid` | `universe.real_conid`, `contracts` | `conidResolutionProducer` |
 | `GET /iserver/watchlists` + `/iserver/watchlist` | IB-side watchlists (import) | `watchlist_lists`, `watchlist_items` | `services/watchlists` (sync) |
 | `ibRawGet` / `ibRawPost` (allowlisted) | debug passthrough | — | `routes/debug` |
 
 **Reliability caveat:** `/iserver/marketdata/history` returns **HTTP 503 during
-US off-hours / weekends** (the market-data farm isn't serving) — see the daily-bar
-gap in *Observations*. This is the single biggest source-availability risk because
-nothing else currently supplies bars.
+US off-hours / weekends** (the market-data farm isn't serving). Batch X4's
+`daily_bars` layer closed the daily-grain exposure (Polygon-primary, weekend-safe);
+the remaining IB-only readers are **intraday-grain** — band engine + entry-zone cron
+(5-min bars) + the live snapshot path — which Polygon free can't supply.
 
 ---
 
@@ -79,15 +80,16 @@ IB is connected, which is why it owns fundamentals + the price fallback.
 
 | Request | What we use | Stored in | Consumers |
 | --- | --- | --- | --- |
-| `GET /v2/aggs/grouped/locale/us/market/stocks/{date}` | every US stock's daily O/H/L/C/V for one date | `universe.last_price` (close), `universe.last_volume` (single-day) | `universeQuoteProducer` |
+| `GET /v2/aggs/grouped/locale/us/market/stocks/{date}` | every US stock's daily O/H/L/C/V for one date | `daily_bars` (full OHLCV, Batch X4), `universe.last_price` (close), `universe.last_volume` (single-day) | `universeQuoteProducer` |
 
-**Specced but not implemented:** the 30-day median ADV bootstrap
-(`universe.last_avg_volume`, planned in the cadence table below) was never built —
-the producer only writes `last_price` + single-day `last_volume`. This is the root
-cause of the empty curated list (Batch X3 routed around it; Batch X4 is the proper
-fix). The bigger opportunity: 30 trailing grouped-daily calls = full 30-day OHLCV
-for the entire universe, enough to compute **both ATR% and ADV with no IB calls** —
-the basis of the planned `daily_bars` layer (see *Reliability posture*).
+**`daily_bars` (Batch X4):** `universeQuoteProducer` now appends the most-recent
+weekday's grouped-daily bar per universe row into `daily_bars` each run, with a
+30-day bootstrap on gaps (30 trailing grouped-daily calls = full 30-day OHLCV for
+the entire universe, rate-limited to the free 5/min). This is the **daily-grain
+SSOT** — enough to compute **both ATR% and ADV with no IB calls**, weekend-safe.
+`universe.last_avg_volume` (the 30d median ADV, never previously written — root
+cause of the empty curated list, Batch X3 routed around it) is now derived from
+`daily_bars` in one SQL statement (`refresh_universe_avg_volume`).
 
 ---
 
@@ -99,7 +101,7 @@ Polygon writes (so it stays a single source of truth, not a parallel pipeline).
 
 | Request | What we use | Stored in | Consumers |
 | --- | --- | --- | --- |
-| `GET /v8/finance/chart/{symbol}` | O/H/L/C/V for tickers Polygon's grouped response misses (IPOs, halts) | `universe.last_price`, `universe.last_volume` | `universeQuoteProducer` (`fallback_yahoo_quote` job) |
+| `GET /v8/finance/chart/{symbol}` | O/H/L/C/V for tickers Polygon's grouped response misses (IPOs, halts) | `universe.last_price`, `universe.last_volume`, `daily_bars` (`source='yahoo'`, when the row's `real_conid` is known) | `universeQuoteProducer` (`fallback_yahoo_quote` job) |
 
 ---
 
@@ -134,9 +136,10 @@ has no volume; IB is rate-limited + on-demand. Evaluation:
 
 | Field | Source | Cadence | Daily call cost |
 | --- | --- | --- | --- |
-| `universe.last_price` | Polygon grouped-daily | nightly | 1 call |
+| `daily_bars` (full OHLCV) | Polygon grouped-daily | nightly append + 30d bootstrap on gaps | 1 call steady-state; ~30 on first run (rate-limited) |
+| `universe.last_price` | Polygon grouped-daily | nightly | (same primary call) |
 | `universe.last_volume` | Polygon grouped-daily | nightly | (same call) |
-| `universe.last_avg_volume` (30d median) | Polygon grouped-daily ×30, aggregated client-side | weekly | ~30 bootstrap / ~7 rolling — **NOT YET IMPLEMENTED** |
+| `universe.last_avg_volume` (30d median) | `daily_bars` → `refresh_universe_avg_volume()` | nightly (after bars written) | 0 (one SQL statement) |
 | per-ticker gap-fills | Yahoo v8/chart | nightly, gaps only | ~tens |
 
 ### Interface
@@ -159,20 +162,22 @@ export async function yahooChart(symbol: string): Promise<DailyOhlcv | null>;
 | Earnings calendar | Finnhub | — | ✅ wired (single-source) |
 | News / catalyst | Finnhub | SEC/PR/FDA RSS (planned) | ⚠️ thin |
 | Universe daily price+volume | Polygon | Yahoo (gap-fill) | ✅ wired |
-| **Daily OHLCV bars → ATR / ADV / swing packs / bands** | **IB history** | **— none —** | ❌ **single point of failure** |
+| Daily OHLCV bars → ATR / ADV / swing packs / sparkline | **Polygon → `daily_bars`** (Batch X4) | Yahoo (gap-fill) | ✅ wired |
 
-The **daily-bars gap** is the active work: the plan is a cached **`daily_bars`
-layer** sourced from Polygon grouped-daily (primary) → Yahoo (gap-fill), refreshed
-nightly + a 30-day bootstrap, that the curated-list probe / band engine / swing
-packs read instead of IB history. That makes Polygon the SSOT for daily grain,
-demotes IB to **live-only** (where it's genuinely best), and closes the weekend
-outage. It subsumes Batch X4. Pre-market intraday snapshot volume for
-`catalyst_reversal` Stage-1 stays IB (daily grain can't cover it).
+The **daily-bars gap is closed (Batch X4):** the `daily_bars` table is sourced from
+Polygon grouped-daily (primary) → Yahoo (gap-fill), appended nightly + a 30-day
+bootstrap, and the curated-list probe / swing dip-bounce pack / sparkline route now
+read it instead of IB history. Polygon is the SSOT for daily grain; IB is demoted
+to **live-only** (snapshots + intraday 5-min bars, where it's genuinely best).
+Two daily-grain consumers still call IB directly and are *not* repointed: the
+**band engine** + **entry-zone cron** both need intraday 5-min bars (Polygon free
+is daily-only) and so remain inherently IB-gated. Pre-market intraday snapshot
+volume for `catalyst_reversal` Stage-1 stays IB for the same reason.
 
 ## Observations (for the table/pipeline audit)
 
-1. **Daily bars are the only un-fallback'd source** → the `daily_bars` layer above. Top priority.
-2. **`universe.last_avg_volume` specced but never written** → X3 (worked around) / X4 (proper). `marketCapRefreshCron` once claimed to bootstrap it but never did.
+1. ~~**Daily bars are the only un-fallback'd source**~~ — **RESOLVED (Batch X4):** the `daily_bars` table (Polygon-primary, Yahoo gap-fill) is the daily-grain SSOT; curated cron / swing pack / sparkline read it instead of IB history. Band engine + entry-zone cron stay IB (they need intraday 5-min bars).
+2. ~~**`universe.last_avg_volume` specced but never written**~~ — **RESOLVED (Batch X4):** derived from `daily_bars` via `refresh_universe_avg_volume()` (30d median per conid). Column widened `integer → bigint`.
 3. **`newsSentiment` is defined in `finnhub.ts` but called by nothing** — dead code or an unfinished `catalyst_reversal` input. Decide: wire it or delete it.
 4. **Current price has two homes** — `positions.current_price` (held, via `ibPricePoller`/`finnhubPricePoller`) and `quotes.canonical_price` (watchlist/curated, via `watchlistQuotePoller`→`services/quotes`). `architecture.md` claims one SSOT; verify a held-AND-watchlisted ticker isn't priced by two pollers into two columns.
 5. **Three price pollers** (`ibPricePoller`, `finnhubPricePoller`, `watchlistQuotePoller`) — confirm the held-vs-watchlist division is clean and not double-fetching.

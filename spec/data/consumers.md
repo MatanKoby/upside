@@ -21,16 +21,16 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 | --- | --- | --- | --- | --- |
 | `universeCron` | `universe` | `universe` | Finnhub `getSymbolList` / `getQuote` / `getProfile2` | nightly |
 | `conidResolutionProducer` | `universe` | `universe.real_conid` | IB `secdef/search` | continuous (queue) |
-| `universeQuoteProducer` | `universe` | `universe.last_price` / `last_volume` | Polygon grouped-daily + Yahoo gap-fill | daily |
+| `universeQuoteProducer` | `universe` | `daily_bars`, `universe.last_price` / `last_volume` / `last_avg_volume` | Polygon grouped-daily + Yahoo gap-fill | daily |
 | `marketCapRefreshCron` | `universe` | `universe.last_market_cap_m` | Finnhub `getProfile2` | weekly |
 | `intradayStatsCron` | `universe` | `intraday_stats` | IB history (5-min bars) | nightly |
 | `intradayRangeTraderProducer` | `universe`, `intraday_stats`, `quotes` | `trait_scores` (intraday_range_trader) | — (compute) | nightly |
 | `catalystReversalProducer` | `universe`, `trait_scores` | `trait_scores` (catalyst_reversal), `universe` (auto-promote) | Finnhub `earningsCalendarRange` + news | daily |
 | `postEarningsDriftProducer` | `universe` | `trait_scores` (post_earnings_drift) | Finnhub `earningsCalendarRange` | daily |
-| `curatedListCron` | `trait_scores` | `curated_list` | IB history (ATR% + median ADV) | 12h + boot-kick |
+| `curatedListCron` | `trait_scores`, `daily_bars` | `curated_list` | — (ATR% + median ADV from `daily_bars`; no longer IB-gated, Batch X4) | 12h + boot-kick |
 | `bandEngineCron` | `intraday_stats`, `band_state`, compute-set | `band_state` | (computed from stats) | per session |
 | `entryZonesCron` | `quotes` | `entry_zones` | — | per poll cycle |
-| `dipBounceCron` *(service)* | `quotes`, `intraday_stats`, `band_state`, `entry_zones`, `curated_list` (via `computeSet`) | `signal_fires` | Discord webhooks | 60s |
+| `dipBounceCron` *(service)* | `quotes`, `intraday_stats`, `band_state`, `entry_zones`, `curated_list` (via `computeSet`), `daily_bars` (swing pack) | `signal_fires` | Discord webhooks | 60s |
 | `signalOutcomesCron` | `signal_fires`, `quotes` | `signal_outcomes` | — | 5min |
 | `riskFlagsCron` | `user_preferences`, `positions`, `quotes` | `risk_flags` | Finnhub `basicFinancials` + `earningsCalendar` | daily |
 | `ibPricePoller` | `contracts`, `positions` | `contracts`, `positions` | IB positions + snapshot | poll loop (IB up) |
@@ -67,7 +67,7 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 | Route | Reads | Writes | External |
 | --- | --- | --- | --- |
 | `portfolio` | `positions` | — | — |
-| `marketdata` | `positions` | — | IB snapshot / history / sparkline (live pass-through) |
+| `marketdata` | `positions`, `daily_bars` (sparkline) | — | IB snapshot / history (live pass-through); sparkline reads `daily_bars` first, IB fallback (Batch X4) |
 | `signals` | `analyses`, `analysis_locks` | `analysis_locks` (+ triggers `signalEngine`) | — |
 | `watchlists` | `watchlist_*` | `watchlist_lists` / `items` | IB watchlists (sync) |
 | `watchlist-markers` | `watchlist_markers` | `watchlist_markers` | — |

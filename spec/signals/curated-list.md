@@ -38,20 +38,21 @@ tunable from outcome data:
 `TARGET_SIZE` is a cap, not a floor. If only 180 names pass the gates the
 list is 180. If 800 pass, the top 250 by trait score win.
 
-**Volume source (2026-06-06).** The volume gate reads the **30d median** of the
-daily bars the cron already pulls for ATR (`bars[].v`), *not*
-`universe.last_avg_volume`. That column is never populated — `universeCron`
-writes `null`, the `marketCapRefreshCron` "bootstrap" its header claims was never
-implemented, and Finnhub `profile2` carries no average volume — so the old
-pre-filter silently rejected every candidate and the list stayed empty. Deriving
-median ADV from the ATR bars is **zero-marginal-cost** (those bars are already
-fetched) and internally consistent with the ATR number. Median, not mean, so a
-single news-day volume spike can't sneak an illiquid name through. There is **no
-single-day-volume fallback**: on a day IB history is unavailable the list stays
-empty rather than admit low-quality-gated names. Precomputing
-`universe.last_avg_volume` from Polygon 30d aggregates — a cheap universe-wide
-pre-filter that also survives IB outages and feeds `catalystReversal` — is a
-deferred scale/robustness improvement (`BUILD_QUEUE.md` → Batch X4).
+**Volume + ATR source (Batch X3 → X4).** Both gates read the candidate's daily
+bars from the **`daily_bars` SSOT** (`loadDailyBars`) — the volume gate takes the
+**30d median** of `bars[].v`, the ATR gate takes ATR(14)/last-close. Neither reads
+`universe.last_avg_volume` for the per-candidate gate (that column, now derived
+*from* `daily_bars`, is for the universe-wide `catalystReversal` Stage-1
+pre-filter). Median, not mean, so a single news-day volume spike can't sneak an
+illiquid name through.
+
+The list was originally (X3) computed from an **IB history** pull per candidate;
+Batch X4 repointed it to `daily_bars` (Polygon-primary, weekend-safe), so the
+cron is **no longer IB-gated** and the list rebuilds when IB history is down.
+There is still **no single-day-volume fallback**: when a candidate has too few
+bars in `daily_bars` it fails the gates rather than being admitted low-quality.
+The history-context (why `universe.last_avg_volume` was never populated before X4)
+lives in `data/sources.md` → Observations.
 
 ## Why pure `intraday_range_trader`
 
