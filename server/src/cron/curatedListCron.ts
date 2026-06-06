@@ -1,16 +1,20 @@
 // curatedListCron — Batch X1.
 //
 // Rebuilds the curated list (the dip-bounce alert pool + walking-band pool).
-// Reads today's `intraday_range_trader` trait scores, joins `universe` for the
-// volume gate + symbol, then — in score order — pulls daily bars (IB) to compute
-// each candidate's daily ATR%, applies the gates via buildCuratedList, and
-// upserts the `curated_list` rows for today.
+// Reads today's `intraday_range_trader` trait scores, then — in score order —
+// pulls daily bars (IB) once per candidate to compute BOTH the daily ATR% and
+// the 30d median average daily volume (ADV) from the same bars, applies the
+// gates via buildCuratedList, and upserts the `curated_list` rows for today.
 //
-// IB-gated (daily ATR needs daily bars). 12h cadence from boot + a boot kick
+// The volume gate reads bar-derived median ADV, not `universe.last_avg_volume`
+// (that column is never populated — see spec/signals/curated-list.md → Volume
+// source; Batch X3). No new IB dependency: ATR already needs these bars.
+//
+// IB-gated (daily bars feed both ATR + ADV). 12h cadence from boot + a boot kick
 // (the codebase schedules crons by interval-from-boot, not wall-clock; the spec's
 // 09:00 / 15:30 IDT cadence is approximated by "rebuild whenever IB is up, a
-// couple times a day"). Bounded IB: only volume-passing candidates, top
-// MAX_CANDIDATES by score, are probed. Retention drops rows older than 7 days.
+// couple times a day"). Bounded IB: the top MAX_CANDIDATES seeds by trait score
+// are probed. Retention drops rows older than 7 days.
 
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { supabase } from '../services/supabase.js';
@@ -29,6 +33,12 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function median(nums: number[]): number {
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
 function utcDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -36,11 +46,12 @@ function utcDate(): string {
 interface Seed {
   conid: number;
   score: number;
-  avgDailyVolume: number | null;
 }
 
-// trait_scores (intraday_range_trader, today) ⨝ universe (real_conid) for the
-// volume gate. Returns score-desc, volume-passing seeds capped at MAX_CANDIDATES.
+// trait_scores (intraday_range_trader, today) → seeds, score-desc, capped at
+// MAX_CANDIDATES. No volume pre-filter here: ADV is computed per candidate from
+// the same daily bars as ATR (see dailyMetrics), so the volume gate lives in
+// buildCuratedList alongside the ATR gate.
 async function loadSeeds(asof: string): Promise<Seed[]> {
   const { data: ts, error } = await supabase()
     .from('trait_scores')
@@ -51,42 +62,33 @@ async function loadSeeds(asof: string): Promise<Seed[]> {
     void notifyError('curatedListCron.loadTraits', error.message);
     return [];
   }
-  const scoreByConid = new Map<number, number>();
+  const seeds: Seed[] = [];
   for (const r of ts ?? []) {
     const c = num((r as { conid: unknown }).conid);
     const sc = num((r as { score: unknown }).score);
-    if (c != null && sc != null) scoreByConid.set(c, sc);
+    if (c != null && sc != null) seeds.push({ conid: c, score: sc });
   }
-  const conids = [...scoreByConid.keys()];
-  if (conids.length === 0) return [];
-
-  const volByConid = new Map<number, number | null>();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data: u } = await supabase()
-      .from('universe')
-      .select('real_conid, last_avg_volume')
-      .in('real_conid', conids.slice(i, i + CHUNK));
-    for (const row of u ?? []) {
-      const c = num((row as { real_conid: unknown }).real_conid);
-      if (c != null) volByConid.set(c, num((row as { last_avg_volume: unknown }).last_avg_volume));
-    }
-  }
-
-  return conids
-    .map((c) => ({ conid: c, score: scoreByConid.get(c)!, avgDailyVolume: volByConid.get(c) ?? null }))
-    .filter((s) => s.avgDailyVolume != null && s.avgDailyVolume >= MIN_AVG_VOLUME)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CANDIDATES);
+  seeds.sort((a, b) => b.score - a.score);
+  return seeds.slice(0, MAX_CANDIDATES);
 }
 
-async function dailyAtrPct(conid: number): Promise<number | null> {
+// One daily-bar pull → both the daily ATR% and the 30d median ADV. Returns nulls
+// (which fail the gates in buildCuratedList) when bars are missing/too short.
+async function dailyMetrics(conid: number): Promise<{ atrPct: number | null; medAdv: number | null }> {
   const hist = await ibHistory(conid, '3m', '1d');
   const bars = hist?.data ?? [];
-  if (bars.length < 15) return null;
+  if (bars.length < 15) return { atrPct: null, medAdv: null };
   const a = atr({ o: bars.map((b) => b.o), h: bars.map((b) => b.h), l: bars.map((b) => b.l), c: bars.map((b) => b.c), v: bars.map((b) => b.v) });
   const lastClose = bars[bars.length - 1]?.c ?? null;
-  if (a == null || lastClose == null || lastClose <= 0) return null;
-  return (a / lastClose) * 100;
+  const atrPct = a != null && lastClose != null && lastClose > 0 ? (a / lastClose) * 100 : null;
+  // 30d median daily volume from the same bars — median, not mean, so a single
+  // news-day spike can't sneak an illiquid name past the volume gate.
+  const vols = bars
+    .slice(-30)
+    .map((b) => b.v)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  const medAdv = vols.length > 0 ? median(vols) : null;
+  return { atrPct, medAdv };
 }
 
 async function persist(asof: string, rows: ReturnType<typeof buildCuratedList>): Promise<void> {
@@ -129,24 +131,25 @@ async function tick(): Promise<void> {
     return;
   }
 
-  // Probe in score order; stop once we have TARGET_SIZE that pass the ATR gate.
+  // Probe in score order; stop once we have TARGET_SIZE that pass both gates.
   const candidates: CuratedCandidate[] = [];
   let passing = 0;
   for (const s of seeds) {
     if (passing >= TARGET_SIZE) break;
     let atrPct: number | null = null;
+    let medAdv: number | null = null;
     try {
-      atrPct = await dailyAtrPct(s.conid);
+      ({ atrPct, medAdv } = await dailyMetrics(s.conid));
     } catch (e) {
-      void notifyError(`curatedListCron.atr.${s.conid}`, (e as Error).message, e);
+      void notifyError(`curatedListCron.probe.${s.conid}`, (e as Error).message, e);
     }
     candidates.push({
       conid: s.conid,
       intradayRangeTraderScore: s.score,
-      avgDailyVolume: s.avgDailyVolume,
+      avgDailyVolume: medAdv,
       dailyAtrPct: atrPct,
     });
-    if (atrPct != null && atrPct >= MIN_DAILY_ATR_PCT && s.avgDailyVolume != null) passing++;
+    if (atrPct != null && atrPct >= MIN_DAILY_ATR_PCT && medAdv != null && medAdv >= MIN_AVG_VOLUME) passing++;
   }
 
   const rows = buildCuratedList(candidates);

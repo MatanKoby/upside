@@ -1,6 +1,6 @@
 // buildCuratedList (Batch X1) — pure membership + ranking. The cron assembles
-// candidates (trait_scores ⨝ universe + a daily-bar ATR pull); this applies the
-// gates, sorts by trait score desc, and caps at TARGET_SIZE. See
+// candidates (trait_scores + a daily-bar pull → ATR% + median ADV); this applies
+// the gates, sorts by trait score desc, and caps at TARGET_SIZE. See
 // spec/signals/curated-list.md → Membership rule.
 
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../../config/curatedList.js';

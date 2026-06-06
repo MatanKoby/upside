@@ -1,7 +1,8 @@
 // marketCapRefreshCron — Batch S2.
 //
-// Weekly refresh of universe.last_market_cap_m (+ last_avg_volume bootstrap)
-// for Ring-1 IN rows via Finnhub /stock/profile2. Per
+// Weekly refresh of universe.last_market_cap_m for Ring-1 IN rows via Finnhub
+// /stock/profile2. (Volume is NOT refreshed here — the curated-list gate derives
+// 30d median ADV from IB daily bars; see spec/signals/curated-list.md.) Per
 // spec/signals/screener-universe.md → Caching + staggering: cap doesn't
 // move on day-to-day scale, so a weekly refresh keeps the filter honest
 // without burning daily Finnhub budget on a slow-moving field. Filter
