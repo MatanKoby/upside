@@ -21,8 +21,8 @@ Sibling files:
 
 | scorer | channel | cooldown | hit-rate definition |
 | --- | --- | --- | --- |
-| `intraday_dip_bounce` | `#upside-intraday-suggestions` (env `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS`) | 4h per `conid` | `return_pct ≥ +1%` within 2h of fire |
-| `swing_dip_bounce`    | `#upside-swing-suggestions` (env `DISCORD_WEBHOOK_SWING_SUGGESTIONS`)     | 24h per `conid` | `return_pct ≥ +5%` within 3 trading days of fire |
+| `intraday_dip_bounce` | `#upside-intraday-suggestions` (env `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY`) | 4h per `conid` | `return_pct ≥ +1%` within 2h of fire |
+| `swing_dip_bounce`    | `#upside-swing-suggestions` (env `DISCORD_WEBHOOK_SUGGESTIONS_SWING`)     | 24h per `conid` | `return_pct ≥ +5%` within 3 trading days of fire |
 
 The two scorers are deliberately separate: their attention models differ
 (intraday ping → react in seconds; swing ping → think over hours), and

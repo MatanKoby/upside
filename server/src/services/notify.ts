@@ -426,7 +426,7 @@ export function notifyBandTouchHigh(args: {
 
 /**
  * Intraday dip-bounce scorer fire (Batch X1). Posts to
- * DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS. 4h cooldown owned by the caller (read
+ * DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY. 4h cooldown owned by the caller (read
  * off the latest `signal_fires` row for this conid + kind). No-ops when the
  * channel isn't configured.
  */
@@ -464,7 +464,7 @@ export function notifyIntradayDipBounce(args: {
 
 /**
  * Swing dip-bounce scorer fire (Batch X1). Posts to
- * DISCORD_WEBHOOK_SWING_SUGGESTIONS. 24h cooldown owned by the caller.
+ * DISCORD_WEBHOOK_SUGGESTIONS_SWING. 24h cooldown owned by the caller.
  */
 export function notifySwingDipBounce(args: {
   symbol: string;

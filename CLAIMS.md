@@ -81,7 +81,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
   - **`services/dipBounce/dipBounceCron.ts`** — 60s cadence (regular + AH); batch table loads, per-session in-memory daily-pack cache (IB) for the swing scorer, per-(conid,kind) cooldown read off `signal_fires`, fires → `signal_fires` row + Discord.
   - **`cron/curatedListCron.ts`** — IB-gated, 12h cadence; trait_scores ⨝ universe (volume gate) → daily-bar ATR% probe in score order (bounded) → `buildCuratedList` → upsert + stale-drop + 7-day retention.
   - **`cron/signalOutcomesCron.ts`** — 5-min; fills each due offset's price snapshot + return_pct (generic over signal_kind).
-  - **`notify.ts`** — `notifyIntradayDipBounce` + `notifySwingDipBounce` (two channels). **`env.ts` + `.env.example`** — `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` / `_SWING_SUGGESTIONS`.
+  - **`notify.ts`** — `notifyIntradayDipBounce` + `notifySwingDipBounce` (two channels). **`env.ts` + `.env.example`** — `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` / `_SWING`.
   - **Compute-set widening (deliverable 14)** — `bandEngineCron` now walks `loadComputeSet` (curated ∪ active-watchlist ∪ held), not curated-only; `loadCuratedList`/`loadHeldConids` removed in favor of the shared helper.
   - **`scripts/dip-bounce-backtest.mjs`** (throwaway) — swing fire-rate sanity check.
   - **Boot wiring** — `startCuratedListCron` + `startDipBounceCron` + `startSignalOutcomesCron` in `index.ts`.
@@ -94,7 +94,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **Verification:** `pnpm typecheck` clean (+ scripts tsconfig); `vitest run` **169/169** (19 new: 5 buildCuratedList + 7 intraday + 7 swing). Backtest ran: crude swing proxy ~0.2 fires/day across a 10-name sample (~5/day scaled to 250); the stricter live gates (confluence-required near-zone + vol-regime veto + band_state) pull it toward the 1-3/day target. v1 thresholds kept — real calibration comes from `signal_outcomes` after a month (per spec).
 - **Manual prereqs for live-flip:**
   1. **Apply `028_dip_bounce.sql`** in the Supabase SQL editor.
-  2. Create Discord channels `#upside-intraday-suggestions` + `#upside-swing-suggestions`, set `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` + `DISCORD_WEBHOOK_SWING_SUGGESTIONS` in VPS `.env` (without them, fires still log to stdout + write `signal_fires`, just no Discord ping).
+  2. Create Discord channels `#upside-intraday-suggestions` + `#upside-swing-suggestions`, set `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` + `DISCORD_WEBHOOK_SUGGESTIONS_SWING` in VPS `.env` (without them, fires still log to stdout + write `signal_fires`, just no Discord ping).
   3. `./bin/upside rebuild` on the VPS.
   4. IB connected (curatedListCron + swing daily-pack + bandEngine all need daily bars).
 - **Verification post-live-flip:**

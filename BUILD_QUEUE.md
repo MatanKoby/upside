@@ -313,7 +313,7 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 
 11. **`server/scripts/dip-bounce-backtest.mjs`** — **throwaway calibration script, NOT maintained, NOT in the cron set**. Runs the proposed scorer constants against the last 60 sessions of bar data for the curated list, prints fire counts per day + naive hit-rate. Used once to set v1 weights to roughly 1–3 fires/day per channel, then discarded. Add a comment at the top: "Throwaway — see spec/signals/dip-bounce-scorer.md → Throwaway calibration. Do not extend; rebuild from forward-tracker data after a month of real fires."
 
-12. **`.env.example`** — add `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` and `DISCORD_WEBHOOK_SWING_SUGGESTIONS`.
+12. **`.env.example`** — add `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` and `DISCORD_WEBHOOK_SUGGESTIONS_SWING`.
 
 13. **Boot wiring** in `server/src/index.ts` — start `curatedListCron` + `signalOutcomesCron`. Scorers hook into the existing poll cycle (no separate cron).
 
@@ -340,8 +340,8 @@ Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec
 - `markers.md` (separate alert primitive; the dip-bounce scorer doesn't replace it).
 
 ### Manual prereqs
-- Create `#upside-intraday-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_INTRADAY_SUGGESTIONS` to VPS `.env`.
-- Create `#upside-swing-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SWING_SUGGESTIONS` to VPS `.env`.
+- Create `#upside-intraday-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` to VPS `.env`.
+- Create `#upside-swing-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SUGGESTIONS_SWING` to VPS `.env`.
 
 ### Pre-ship calibration (throwaway-script use)
 - Run `node server/scripts/dip-bounce-backtest.mjs` on the dev VPS. Inspect fire rate per scorer over the last 60 sessions. Target combined fire rate: **1–3 fires/day** across both channels. If fires/day > 5 → raise scoring thresholds; if < 0.5 → lower thresholds. Commit the tuned constants, then ship the live scorer.
