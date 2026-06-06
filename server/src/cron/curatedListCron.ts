@@ -2,24 +2,25 @@
 //
 // Rebuilds the curated list (the dip-bounce alert pool + walking-band pool).
 // Reads today's `intraday_range_trader` trait scores, then — in score order —
-// pulls daily bars (IB) once per candidate to compute BOTH the daily ATR% and
-// the 30d median average daily volume (ADV) from the same bars, applies the
-// gates via buildCuratedList, and upserts the `curated_list` rows for today.
+// reads each candidate's daily bars from the `daily_bars` SSOT (Polygon-primary,
+// Batch X4) to compute BOTH the daily ATR% and the 30d median average daily
+// volume (ADV) from the same bars, applies the gates via buildCuratedList, and
+// upserts the `curated_list` rows for today.
 //
 // The volume gate reads bar-derived median ADV, not `universe.last_avg_volume`
-// (that column is never populated — see spec/signals/curated-list.md → Volume
-// source; Batch X3). No new IB dependency: ATR already needs these bars.
+// (see spec/signals/curated-list.md → Volume source; Batch X3).
 //
-// IB-gated (daily bars feed both ATR + ADV). 12h cadence from boot + a boot kick
-// (the codebase schedules crons by interval-from-boot, not wall-clock; the spec's
-// 09:00 / 15:30 IDT cadence is approximated by "rebuild whenever IB is up, a
-// couple times a day"). Bounded IB: the top MAX_CANDIDATES seeds by trait score
-// are probed. Retention drops rows older than 7 days.
+// No longer IB-gated (Batch X4): daily bars come from daily_bars, which Polygon
+// keeps fresh on weekends/off-hours, so the list rebuilds when IB history is
+// down. 12h cadence from boot + a boot kick (the codebase schedules crons by
+// interval-from-boot; the spec's 09:00 / 15:30 IDT cadence is approximated by
+// "rebuild a couple times a day"). Bounded: the top MAX_CANDIDATES seeds by
+// trait score are probed. Retention drops rows older than 7 days.
 
-import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { atr } from '../services/technicals.js';
+import { loadDailyBars } from '../services/dailyBars.js';
 import { buildCuratedList, type CuratedCandidate } from '../services/curatedList/buildCuratedList.js';
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../config/curatedList.js';
 
@@ -72,11 +73,10 @@ async function loadSeeds(asof: string): Promise<Seed[]> {
   return seeds.slice(0, MAX_CANDIDATES);
 }
 
-// One daily-bar pull → both the daily ATR% and the 30d median ADV. Returns nulls
-// (which fail the gates in buildCuratedList) when bars are missing/too short.
+// One daily_bars read → both the daily ATR% and the 30d median ADV. Returns
+// nulls (which fail the gates in buildCuratedList) when bars are missing/short.
 async function dailyMetrics(conid: number): Promise<{ atrPct: number | null; medAdv: number | null }> {
-  const hist = await ibHistory(conid, '3m', '1d');
-  const bars = hist?.data ?? [];
+  const bars = await loadDailyBars(conid, 90);
   if (bars.length < 15) return { atrPct: null, medAdv: null };
   const a = atr({ o: bars.map((b) => b.o), h: bars.map((b) => b.h), l: bars.map((b) => b.l), c: bars.map((b) => b.c), v: bars.map((b) => b.v) });
   const lastClose = bars[bars.length - 1]?.c ?? null;
@@ -121,9 +121,6 @@ async function retention(): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
-  if (!status.authenticated || !status.connected) return; // daily ATR needs IB
-
   const asof = utcDate();
   const seeds = await loadSeeds(asof);
   if (seeds.length === 0) {
@@ -159,7 +156,7 @@ async function tick(): Promise<void> {
 }
 
 export function startCuratedListCron(): void {
-  console.log('[curatedListCron] starting, 12h cadence (IB-gated)');
+  console.log('[curatedListCron] starting, 12h cadence (daily_bars-backed)');
   const loop = async (): Promise<void> => {
     try {
       await tick();

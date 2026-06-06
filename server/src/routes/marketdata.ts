@@ -11,6 +11,7 @@ import {
 import { supabase } from '../services/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
 import { atr } from '../services/technicals.js';
+import { loadDailyBars } from '../services/dailyBars.js';
 import type { RawIbSnapshot } from '../types/index.js';
 
 const router = Router();
@@ -79,6 +80,10 @@ router.get('/history/:symbol', async (req: Request, res: Response) => {
 
 // GET /api/marketdata/sparkline/:symbol — 7 daily closes for a held symbol.
 // Returns simple { closes: number[] } for the Sparkline component.
+//
+// Reads the daily_bars SSOT first (Polygon-primary, weekend-safe — Batch X4);
+// falls back to a live IB history pull for held names outside the universe (no
+// daily_bars row) or before the first producer run.
 router.get('/sparkline/:symbol', async (req: Request, res: Response) => {
   if (!req.user) {
     res.status(401).json({ error: 'unauthorized' });
@@ -92,6 +97,11 @@ router.get('/sparkline/:symbol', async (req: Request, res: Response) => {
   const conid = await resolveConid(req.user.id, symbol);
   if (!conid) {
     res.status(404).json({ error: 'symbol_not_held', symbol });
+    return;
+  }
+  const bars = await loadDailyBars(conid, 7);
+  if (bars.length >= 1) {
+    res.json({ closes: bars.map((b) => b.c) });
     return;
   }
   const raw = await ibHistory(conid, SPARKLINE_PERIOD, SPARKLINE_BAR);

@@ -6,16 +6,16 @@
 // it keeps firing on Finnhub-updated quotes even when IB is off. The swing
 // scorer additionally needs daily indicators (RSI / ATR / trend), which come
 // from the feature pack (technicals.ts) computed once per session per conid from
-// an IB daily-bar pull and cached in memory — so swing only scores names whose
-// pack is cached (IB was up at least once this session). Fires write a
+// the `daily_bars` SSOT (Polygon-primary, Batch X4) and cached in memory — so
+// the swing scorer no longer needs IB up mid-session. Fires write a
 // `signal_fires` row + a Discord ping with a per-(conid, kind) cooldown read
 // off the latest fire. Spec: spec/signals/dip-bounce-scorer.md.
 
-import { ibHistory, ibStatus } from '../ibGateway.js';
 import { supabase } from '../supabase.js';
 import { notifyError, notifyIntradayDipBounce, notifySwingDipBounce } from '../notify.js';
 import { marketPeriodAt, etDateString } from '../../utils/marketHours.js';
 import { buildFeaturePack, type FeaturePack } from '../technicals.js';
+import { loadDailyBars } from '../dailyBars.js';
 import { loadComputeSet, type ComputeMember } from './computeSet.js';
 import { computeIntradayDipBounceScore } from './intradayScorer.js';
 import { computeSwingDipBounceScore } from './swingScorer.js';
@@ -56,13 +56,10 @@ function resetCacheIfNewSession(sessionDate: string): void {
 }
 
 async function refreshPacks(members: ComputeMember[], quotes: Map<number, QuoteInput>): Promise<void> {
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
-  if (!status.authenticated || !status.connected) return; // IB off → leave cache as-is
   for (const m of members) {
     if (packCache.has(m.conid)) continue;
     try {
-      const hist = await ibHistory(m.conid, '3m', '1d');
-      const bars = hist?.data ?? [];
+      const bars = await loadDailyBars(m.conid, 90);
       if (bars.length === 0) continue;
       const daily = {
         o: bars.map((b) => b.o),

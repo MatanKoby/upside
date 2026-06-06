@@ -1,27 +1,30 @@
-// universeQuoteProducer — Batch S0.5.
+// universeQuoteProducer — Batch S0.5, extended Batch X4 (daily_bars layer).
 //
-// Daily producer that refreshes `universe.last_price` + `universe.last_volume`
-// for every Ring-1 IN ticker, using Polygon grouped-daily-bars (one call →
-// whole US universe) as primary + Yahoo v8/chart per gap as fallback.
+// Daily producer with two jobs, both off the same Polygon grouped-daily pulls:
 //
-// Per spec/job-queue.md producer/worker split:
-//   - Polygon call is producer-side direct work (one shot, cheap, no
-//     queue benefit).
-//   - Yahoo gap-fills are enqueued as `fallback_yahoo_quote` jobs on the
-//     `finnhub` worker pool (any HTTP-rate-limited pool would do; we
-//     reuse `finnhub` since it has the right gating semantics).
-//   - Drain completed `fallback_yahoo_quote` jobs at end of cycle, write
-//     results to universe rows, delete the job rows.
-//   - Failed gap-fills: producer's retry policy is "give up after 2
-//     attempts" — Yahoo data on a ticker missing from Polygon is
-//     low-value; not worth chasing for days.
+//   1. universe.last_price / last_volume refresh for every Ring-1 IN ticker
+//      (the original S0.5 job) — Polygon grouped-daily (one call → whole US
+//      universe) as primary + Yahoo v8/chart per gap as fallback.
 //
-// Cadence: 10:00 IDT (= 3 AM ET), after the 09:00 universeCron sweep so
-// new universe rows exist before we try to quote them.
+//   2. daily_bars SSOT (Batch X4) — append the most-recent trading day's bar
+//      per universe row (keyed by real_conid), 30-day bootstrap on first run /
+//      gaps, ~45-day retention. This is the weekend-safe daily-grain source the
+//      curated list / swing pack / sparkline read instead of IB history. After
+//      writing bars, recompute universe.last_avg_volume (30d median) in one SQL
+//      statement (refresh_universe_avg_volume). See spec/data/sources.md.
+//
+// Per spec/job-queue.md producer/worker split, Yahoo gap-fills are enqueued as
+// `fallback_yahoo_quote` jobs on the `finnhub` worker pool; drained next cycle.
+//
+// Cadence: 10:00 IDT (= 3 AM ET), after the 09:00 universeCron sweep so new
+// universe rows exist before we quote them. Weekend-safe: it targets the most
+// recent *weekday* (a Monday run fills Friday's bar), so the curated list
+// rebuilds over the weekend with no IB history.
 
 import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { polygonGroupedDaily, yahooChart, type DailyOhlcv } from '../services/universeQuote.js';
+import { recentWeekdays, buildDailyBarRows } from '../services/dailyBars.js';
 import { enqueue, drainDone, drainFailed, deleteJob, markRetry, finalizeFailure } from '../services/jobs/queue.js';
 import { makeKey } from '../services/jobs/keys.js';
 import { finnhubRegistry } from '../services/jobs/actions.js';
@@ -30,30 +33,40 @@ const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 5 * 60_000;
 const MAX_RETRY_ATTEMPTS = 2;
 
-// Pick the most recent COMPLETED trading day in YYYY-MM-DD form. Polygon
-// updates grouped-daily-bars for a date after the day's session closes
-// (~5 PM ET); to be safe we ask for "yesterday" which is reliably closed
-// regardless of when in IDT-time the cron runs.
-function yesterdayUtcDate(): string {
-  const d = new Date(Date.now() - 24 * 60 * 60_000);
-  return d.toISOString().slice(0, 10);
+const DAILY_BARS_LOOKBACK_DAYS = 30; // bootstrap depth (covers ATR(14) + 30d median ADV)
+const DAILY_BARS_RETENTION_DAYS = 45; // keep a little slack past the 30d window
+const POLYGON_MIN_INTERVAL_MS = 13_000; // free tier is 5 calls/min → ≥12s apart
+const BAR_CHUNK = 1000;
+const PAGE = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 interface UniverseRow {
-  conid: number;
   symbol: string;
+  real_conid: number | null;
 }
 
+// Paginated so we get the whole IN universe regardless of the PostgREST
+// max-rows cap (the universe is ~3-5k rows).
 async function loadRing1Tickers(): Promise<UniverseRow[]> {
-  const { data, error } = await supabase()
-    .from('universe')
-    .select('conid, symbol')
-    .eq('filter_result', 'in');
-  if (error) {
-    void notifyError('universeQuoteProducer.loadUniverse', error.message);
-    return [];
+  const out: UniverseRow[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase()
+      .from('universe')
+      .select('symbol, real_conid')
+      .eq('filter_result', 'in')
+      .range(from, from + PAGE - 1);
+    if (error) {
+      void notifyError('universeQuoteProducer.loadUniverse', error.message);
+      break;
+    }
+    const rows = (data ?? []) as UniverseRow[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
   }
-  return (data ?? []) as UniverseRow[];
+  return out;
 }
 
 async function writeOhlcvToUniverse(
@@ -72,6 +85,50 @@ async function writeOhlcvToUniverse(
   if (error) {
     void notifyError(`universeQuoteProducer.update.${symbol}`, error.message);
   }
+}
+
+// ── daily_bars writes ────────────────────────────────────────────────────────
+
+/** Does daily_bars already hold rows for this trading date? */
+async function dateHasBars(date: string): Promise<boolean> {
+  const { count, error } = await supabase()
+    .from('daily_bars')
+    .select('conid', { count: 'exact', head: true })
+    .eq('date', date);
+  if (error) {
+    void notifyError(`universeQuoteProducer.dateHasBars.${date}`, error.message);
+    return true; // assume present on error so we don't hammer Polygon
+  }
+  return (count ?? 0) > 0;
+}
+
+async function writeDailyBars(
+  date: string,
+  grouped: Record<string, DailyOhlcv>,
+  symbolToConid: Map<string, number>,
+  nowIso: string,
+): Promise<number> {
+  const rows = buildDailyBarRows(date, grouped, symbolToConid, 'polygon', nowIso);
+  for (let i = 0; i < rows.length; i += BAR_CHUNK) {
+    const { error } = await supabase()
+      .from('daily_bars')
+      .upsert(rows.slice(i, i + BAR_CHUNK), { onConflict: 'conid,date' });
+    if (error) void notifyError(`universeQuoteProducer.dailyBars.upsert.${date}`, error.message);
+  }
+  return rows.length;
+}
+
+async function retainDailyBars(): Promise<void> {
+  const cutoff = new Date(Date.now() - DAILY_BARS_RETENTION_DAYS * 24 * 60 * 60_000)
+    .toISOString()
+    .slice(0, 10);
+  const { error } = await supabase().from('daily_bars').delete().lt('date', cutoff);
+  if (error) void notifyError('universeQuoteProducer.dailyBars.retention', error.message);
+}
+
+async function refreshAvgVolume(): Promise<void> {
+  const { error } = await supabase().rpc('refresh_universe_avg_volume');
+  if (error) void notifyError('universeQuoteProducer.refreshAvgVolume', error.message);
 }
 
 async function drainFallbackResults(): Promise<{ done: number; failed: number }> {
@@ -116,46 +173,90 @@ async function tick(): Promise<void> {
     return;
   }
   const t0 = Date.now();
-  const date = yesterdayUtcDate();
-  console.log(`[universeQuoteProducer] start, target date=${date}`);
+  const targetDates = recentWeekdays(DAILY_BARS_LOOKBACK_DAYS); // most recent first
+  const primary = targetDates[0];
+  console.log(`[universeQuoteProducer] start, primary date=${primary}`);
 
   const tickers = await loadRing1Tickers();
   if (tickers.length === 0) {
     console.log('[universeQuoteProducer] no Ring-1 IN tickers; nothing to do');
     return;
   }
+  const symbolToConid = new Map<string, number>();
+  for (const t of tickers) {
+    if (t.real_conid != null) symbolToConid.set(t.symbol, t.real_conid);
+  }
 
-  // 1. Polygon primary: one call, write all matched tickers directly.
-  let polygonMap: Record<string, DailyOhlcv> = {};
+  // Which target dates still need a daily_bars fetch (cheap per-date existence
+  // check; ~30 tiny count queries).
+  const missing: string[] = [];
+  for (const d of targetDates) {
+    if (!(await dateHasBars(d))) missing.push(d);
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // 1. Primary Polygon pull (always — universe.last_price needs it). Reused for
+  //    daily_bars when the primary date is missing.
+  let primaryMap: Record<string, DailyOhlcv> = {};
   try {
-    polygonMap = await polygonGroupedDaily(date);
+    primaryMap = await polygonGroupedDaily(primary);
   } catch (e) {
     void notifyError('universeQuoteProducer.polygon', (e as Error).message, e);
-    // Don't return — drain fallback results from previous run anyway.
+    // Don't return — drain fallback results from the previous run anyway.
   }
-  const nowIso = new Date().toISOString();
+
+  // universe.last_price / last_volume for matched symbols.
   let written = 0;
   for (const t of tickers) {
-    const ohlcv = polygonMap[t.symbol];
+    const ohlcv = primaryMap[t.symbol];
     if (!ohlcv) continue;
     await writeOhlcvToUniverse(t.symbol, ohlcv, nowIso);
     written++;
   }
-  const gaps = tickers.filter((t) => !polygonMap[t.symbol]);
+  const gaps = tickers.filter((t) => !primaryMap[t.symbol]);
   console.log(
     `[universeQuoteProducer] polygon hit=${written}/${tickers.length} gaps=${gaps.length}`,
   );
 
-  // 2. Enqueue Yahoo fallback jobs for the gaps.
+  // 2a. daily_bars for the primary date (reusing the pull above).
+  let barRows = 0;
+  let barDates = 0;
+  if (missing.includes(primary)) {
+    barRows += await writeDailyBars(primary, primaryMap, symbolToConid, nowIso);
+    barDates++;
+  }
+
+  // 2b. daily_bars bootstrap — the remaining missing (older) dates, one
+  //     rate-limited Polygon call each. Steady state has zero of these.
+  for (const d of missing) {
+    if (d === primary) continue;
+    await sleep(POLYGON_MIN_INTERVAL_MS);
+    let map: Record<string, DailyOhlcv> = {};
+    try {
+      map = await polygonGroupedDaily(d);
+    } catch (e) {
+      void notifyError(`universeQuoteProducer.dailyBars.polygon.${d}`, (e as Error).message);
+      continue;
+    }
+    barRows += await writeDailyBars(d, map, symbolToConid, nowIso);
+    barDates++;
+  }
+  if (barDates > 0) {
+    console.log(`[universeQuoteProducer] daily_bars: dates=${barDates} rows=${barRows}`);
+  }
+
+  // 3. Enqueue Yahoo fallback jobs for the universe-price gaps (conid threaded
+  //    so the worker can also drop a daily_bars row for long-tail names).
   let enqueued = 0;
   let deduped = 0;
   for (const t of gaps) {
-    const jobKey = makeKey('fallback_yahoo_quote', t.symbol, date);
+    const jobKey = makeKey('fallback_yahoo_quote', t.symbol, primary);
     try {
-      // queue.ts enqueue signature: (jobKey, action, workerPool, payload, opts)
       const r = await enqueue(jobKey, 'fallback_yahoo_quote', 'finnhub', {
         symbol: t.symbol,
-        date,
+        date: primary,
+        conid: t.real_conid,
       });
       if (r === 'created') enqueued++;
       else deduped++;
@@ -165,8 +266,12 @@ async function tick(): Promise<void> {
   }
   console.log(`[universeQuoteProducer] yahoo enqueued=${enqueued} deduped=${deduped}`);
 
-  // 3. Drain previous-cycle yahoo fallback results.
+  // 4. Drain previous-cycle yahoo fallback results.
   await drainFallbackResults();
+
+  // 5. Recompute universe.last_avg_volume (30d median) + prune old bars.
+  if (barDates > 0) await refreshAvgVolume();
+  await retainDailyBars();
 
   const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[universeQuoteProducer] done in ${elapsedSec}s`);
@@ -189,12 +294,14 @@ export function startUniverseQuoteProducer(): void {
 // Worker-side action handler — registered on the finnhub pool so it
 // inherits the existing HTTP-pool gating. The producer enqueues per-gap
 // `fallback_yahoo_quote` jobs; the worker pulls them and writes the
-// fetched OHLCV directly to the universe row (same as Polygon's path).
+// fetched OHLCV to the universe row (same as Polygon's path) and, when the
+// real_conid is known, a daily_bars row for the primary date.
 // ---------------------------------------------------------------------------
 
 interface YahooQuoteJobPayload {
   symbol: string;
   date: string;
+  conid?: number | null;
 }
 
 finnhubRegistry['fallback_yahoo_quote'] = async (payloadIn) => {
@@ -204,5 +311,18 @@ finnhubRegistry['fallback_yahoo_quote'] = async (payloadIn) => {
   if (!ohlcv) {
     throw new Error(`yahoo had no data for ${payload.symbol}`);
   }
-  await writeOhlcvToUniverse(payload.symbol, ohlcv, new Date().toISOString());
+  const nowIso = new Date().toISOString();
+  await writeOhlcvToUniverse(payload.symbol, ohlcv, nowIso);
+  if (payload.conid != null && payload.date) {
+    const rows = buildDailyBarRows(
+      payload.date,
+      { [payload.symbol]: ohlcv },
+      new Map([[payload.symbol, payload.conid]]),
+      'yahoo',
+      nowIso,
+    );
+    if (rows.length > 0) {
+      await supabase().from('daily_bars').upsert(rows, { onConflict: 'conid,date' });
+    }
+  }
 };
