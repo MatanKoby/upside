@@ -1,6 +1,6 @@
 // Universe price + volume coverage (Batch S0.5).
 //
-// Spec: spec/signals/data-sources.md → Universe coverage.
+// Spec: spec/data/sources.md → S0.5 universe-coverage decision.
 //
 // Primary: Polygon `/v2/aggs/grouped/locale/us/market/stocks/{date}` — one
 // call returns ALL US stocks' OHLCV for one day. Fits comfortably in the

@@ -15,7 +15,8 @@ One file per signal concern. When two sections always change in tandem, they bel
 - **`curated-list.md`** — **Dip-bounce track:** auto-maintained ~200-300-name high-potential pool; membership = top-N by `intraday_range_trader` + liquidity + ATR floor. The alert pool + character-source for the Intraday / Swing virtual lists (`../screens/watchlist.md`). Closes the membership gap `band-engine.md` flagged.
 - **`dip-bounce-scorer.md`** — **Dip-bounce track:** two pure-function scorers (intraday + swing), two Discord channels, forward-tracking infra (`signal_fires` + `signal_outcomes`) + hit-rate definitions. Composes inputs from `stats.md` / `entry-zones.md` / `band-engine.md`.
 - **`llm-provider.md`** — Provider abstraction (Groq / Mistral / OpenAI / Gemini), runtime selection, failure classification.
-- **`data-sources.md`** — IB / Finnhub / computed feature pack (current); SEC EDGAR / FDA RSS / PR wires / Nasdaq Trader (planned, screener track).
+
+> Data sources moved to [`../data/sources.md`](../data/sources.md) (2026-06-06) — the catalog spans the whole app (UI + portfolio), not just signals. See also [`../data/consumers.md`](../data/consumers.md).
 
 ## Cross-references
 

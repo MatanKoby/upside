@@ -1,6 +1,6 @@
 # LLM Playbook Engine
 
-How Upside reasons about positions and tickers via the LLM. What the analysis produces, how it's persisted, how it ages. Sibling files: `zone.md` (profit-taking zone detection), `markers.md` (user-defined price markers), `entry-zones.md` (dynamic entry-zone engine), `llm-provider.md` (provider abstraction), `data-sources.md`.
+How Upside reasons about positions and tickers via the LLM. What the analysis produces, how it's persisted, how it ages. Sibling files: `zone.md` (profit-taking zone detection), `markers.md` (user-defined price markers), `entry-zones.md` (dynamic entry-zone engine), `llm-provider.md` (provider abstraction), `../data/sources.md`.
 
 > **Status (2026-05-28):** the playbook engine (Batch 14g) is validated — well-formed, level-anchored, structurally correct. Signal *quality* still depends on model strength and the structure-feature work (deferred). Active product focus has pivoted to watchlists + LLM-free signals (`markers.md`, `entry-zones.md`); LLM-engine refinements are deferred behind that.
 

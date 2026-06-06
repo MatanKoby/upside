@@ -15,8 +15,9 @@ The spec is split across concern-focused folders. Each file is small and edited 
 
 ## Sub-folders (one README per folder — open it first, not every file)
 
-- **`signals/`** → see [`signals/README.md`](signals/README.md). LLM playbook, profit-taking zone, markers, entry-zones, intraday-stats, screener-universe, band-engine, LLM-provider, data-sources.
+- **`signals/`** → see [`signals/README.md`](signals/README.md). LLM playbook, profit-taking zone, markers, entry-zones, intraday-stats, screener-universe, band-engine, curated-list, dip-bounce-scorer, risk-flags, LLM-provider.
 - **`screens/`** → see [`screens/README.md`](screens/README.md). Design system + Portfolio / Ticker Detail / Watchlist / Screener / Alerts / Settings.
+- **`data/`** → see [`data/README.md`](data/README.md). Data-flow catalog: `sources.md` (external sources → requests → storage) + `consumers.md` (crons/engines/UI → reads). The SSOT / pipeline map.
 
 ## Reading order
 

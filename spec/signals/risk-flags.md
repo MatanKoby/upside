@@ -2,7 +2,7 @@
 
 Daily-grain danger flags that mark a ticker as risky to **enter** (or hold into). Pump / momentum detection is the flagship; broader liquidity + event risks share the same mechanism. A flag answers "is there an obvious reason to be careful here?" — surfaced four ways: a badge on the card, a section in TickerDetail, a hard gate before LLM analysis, and explicit context (plus a confidence cap) inside the LLM prompt.
 
-Sibling files: `playbook.md` (consumes flags as context + confidence cap), `data-sources.md` (where each input comes from), `entry-zones.md` (shares the overbought primitive). Schema: `../schema.md` → `risk_flags`.
+Sibling files: `playbook.md` (consumes flags as context + confidence cap), `../data/sources.md` (where each input comes from), `entry-zones.md` (shares the overbought primitive). Schema: `../schema.md` → `risk_flags`.
 
 ## Why daily-grain (not per-poll, not analysis-time-only)
 

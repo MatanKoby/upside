@@ -58,7 +58,7 @@ export const env = {
   // Polygon free-tier API key (Batch S0.5) — primary daily price+volume
   // source for the screener universe. Grouped-daily-bars endpoint returns
   // ALL US stocks in one call, well within the 5/min free cap.
-  // See spec/signals/data-sources.md → Universe coverage.
+  // See spec/data/sources.md → S0.5 universe-coverage decision.
   polygonApiKey: optional('POLYGON_API_KEY'),
 
   ibGatewayUrl: optional('IB_GATEWAY_URL', 'http://ib-gateway:5000'),
