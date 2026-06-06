@@ -6,7 +6,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## How this works
 
-- This file lists only **un-done batches** (in full); completed batches collapse to summaries in `BUILD_QUEUE_DONE.md` (git log has the implementation history).
+- This file lists only **un-done batches** (in full); completed batches collapse to summaries in `BUILD_QUEUE_DONE.md` (git log + `CLAIMS_DONE.md` have the implementation history).
 - Dependencies are listed where they exist — the agent decides execution order.
 - Agents claim and track completion in `CLAIMS.md`.
 - Batches are designed so two agents can work on different batches simultaneously without file conflicts.
@@ -15,454 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** S0.3 / S0.5 / S1.5 / S2 / S3 have all landed (job queue + universe price+volume + real conid resolution + three-trait scoring + band engine). 2026-06-03 design session added the **dip-bounce track** on top of the screener track: **Batch X1** (curated list + two-scorer alert + forward-tracking infra — likely the next claim) and **Batch X2** (Watchlist virtual lists: the Intraday/Swing leaderboards render *inside the Watchlist screen* and the standalone Screener tab is retired; supersedes the S4 three-accordion shape). Orthogonal slices that can land in parallel: **Batch M1** (agent context efficiency) and the **risk-flags track** added 2026-06-05 — **Batch R1** (daily-grain danger-flag engine + LLM pump-downgrade clamp) then **Batch R2** (FE badge / Risk-flags section / pre-analysis gate); pure consumer of the existing feature pack + Finnhub data, no screener dependency. Other un-done items in rough priority order: **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim — but **X1** is the most likely answer right now.
-
----
-
-## Batch S0.3: Async job queue (`screener_jobs`)
-
-**Depends on:** none (it's the foundation downstream batches migrate onto).
-
-**Scope:** Implement the Postgres-backed async job queue per **`spec/job-queue.md`**. Producers (cron schedulers) enqueue deduplicated jobs; workers (per-pool: `ib` / `finnhub` / `compute`) drain via atomic claims. Without this, S0.5 / S1.5 / S2 / S3's IB-touching crons each have to re-invent their own connection-window handling and stale-data avoidance — and the user would lose work whenever IB is offline. Pure infrastructure batch; no user-facing change.
-
-### Deliverables
-
-1. **Migration `021_screener_jobs.sql`** — `screener_jobs` table per `spec/schema.md` → `screener_jobs`, including the **partial unique index** on `job_key` filtered to `status IN ('queued','claimed')` (the dedup mechanism). Index on `(worker_pool, status, scheduled_for, priority)` for the worker's claim query.
-
-2. **`server/src/services/jobs/queue.ts`** — producer-facing helpers (pure functions over Supabase):
-   - `enqueue(action, payload, opts)` → builds deterministic `job_key`, runs `INSERT ON CONFLICT DO NOTHING`. Returns `'created' | 'deduped'`.
-   - `drainCompleted(action)` → returns the `done` + `failed` rows for the action (so the producer can act on them in its cycle).
-   - `markRetry(jobRow)` → inserts a fresh row with the same `job_key` (the failed row is outside the partial index, so insert succeeds); deletes the failed row.
-   - `finalizeFailure(jobRow, reason)` → deletes the failed row, fires a Discord notification through the existing `notifyApiFailure` policy.
-   - `makeKey(action, parts)` → canonical key constructor used by every producer.
-   - Vitest: dedup-against-active, success-then-re-enqueue-tomorrow, failed-then-retry, race-safety smoke (insert N concurrent same-key, expect 1 created).
-
-3. **`server/src/services/jobs/worker.ts`** — worker-pool framework:
-   - `createWorker(pool, opts)` → returns a loop runner: `start()`, `stop()`.
-   - `atomicClaim(pool)` → `SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` followed by the claim UPDATE in one tx. Sets `lease_expires_at = now() + LEASE_DURATION` (default 5 min).
-   - `executeJob(job, registry)` → look up the action's handler in the worker's `registry`, call it, catch errors, persist outcome (`done` + result write, or `failed` + last_error + attempts++).
-   - **Pool gating** is `opts.poolGateOk()` — a per-pool predicate the framework calls before each claim. For `ib`, gates on `ibStatus().connected && .authenticated`. For `finnhub`, always true (the queue limiter inside Finnhub handlers handles backpressure). For `compute`, always true.
-   - No retry logic in the worker — pure execute-and-report per spec.
-
-4. **`server/src/services/jobs/actions.ts`** (or a registry pattern, your call) — typed registry of action handlers. S0.3 ships **two placeholder no-op actions** for the framework smoke test: `'noop:ok'` (always succeeds) and `'noop:fail'` (always throws). Real actions (resolve_conid, refresh_intraday_stats, etc.) land in their owning downstream batches and register themselves into the worker's action map.
-
-5. **`server/src/cron/jobsReaper.ts`** — runs every 60s, flips `status='claimed' AND lease_expires_at < now()` rows to `status='failed'` with `last_error='lease expired'`. Logs count to stdout.
-
-6. **`server/src/cron/jobsRetention.ts`** — daily sweep, deletes `done OR failed` rows older than 7 days. Safety net (producers should normally drain on their own cycle).
-
-7. **Boot wiring** in `server/src/index.ts`:
-   - Start one worker per pool (`ib`, `finnhub`, `compute`).
-   - Start `jobsReaper`.
-   - Start `jobsRetention`.
-   - Workers join the existing cron set; producers are added incrementally as downstream batches land.
-
-8. **Observability** (minimal v1):
-   - `bin/upside-psql -c "select worker_pool, status, count(*) from screener_jobs group by 1,2 order by 1,2;"` — the queue-depth-at-a-glance query (call out in this batch's verification).
-   - On circuit-breaker-style sustained failure (≥10 failures within 5 min for a single action), `services/notify.ts:notifyCritical` to `#errors-critical`. Acts as the early warning before a full dashboard exists.
-
-### Files this batch creates/edits
-- `supabase/migrations/021_screener_jobs.sql` (new)
-- `server/src/services/jobs/queue.ts` (new + vitest)
-- `server/src/services/jobs/worker.ts` (new + vitest)
-- `server/src/services/jobs/actions.ts` (new — empty action registry + the two `noop:*` placeholders)
-- `server/src/cron/jobsReaper.ts` (new)
-- `server/src/cron/jobsRetention.ts` (new)
-- `server/src/index.ts` (boot wiring — start three workers + two crons)
-- `server/src/services/notify.ts` (extend with `notifyJobQueueCircuit(action)` if not already covered by `notifyCritical`)
-
-### Does NOT touch
-- Any business logic (no real actions; S0.3 ships only the framework + `noop:*` placeholders).
-- Existing crons (S0.5 / S1.5 / S2 / S3 migrate themselves onto the queue when they land; S0.3 doesn't migrate the existing pollers — those keep their current shape).
-- Any FE surface.
-
-### Verification
-
-- Migration applied.
-- Boot logs show three worker pools started + reaper + retention crons.
-- Smoke: enqueue 100 `noop:ok` jobs, observe queue counts via the psql query above. Workers drain to zero within ~1 minute. Enqueue 100 `noop:fail`, observe all transition to `failed` and `notifyJobQueueCircuit` fires once at the threshold breach.
-- Dedup smoke: call `enqueue('noop:ok', {x:1})` twice in quick succession; second call returns `'deduped'`, only one `queued` row exists.
-- Crash safety: kill the worker process mid-claim, wait for reaper, observe row transitions back through `failed` (lease expired). Producer's retry path is exercised by the downstream batches' producers — not this batch's verification.
-- Concurrent-claim safety: spawn 4 worker processes against 1,000 queued `noop:ok` jobs, confirm no duplicate execution (each job's done timestamp is unique to one worker's `claimed_by`).
-
-### Out of scope (per `spec/job-queue.md` → "What this layer does NOT do")
-
-- DAGs / declarative dependencies (cross-stage chaining lives in producer logic).
-- Heartbeat / lease renewal (jobs assumed to fit within `LEASE_DURATION`).
-- Realtime worker observability dashboard (psql query + Discord notifications are enough for v1).
-- External queue infra (BullMQ / RabbitMQ / NATS).
-- Job-payload encryption.
-
----
-
-## Batch S0.5: Universe price + volume coverage research + integration
-
-**Depends on:** Batch S1 (universe table exists), Batch 13.7 (Finnhub queue).
-
-**Scope:** Decide how to keep `quotes.canonical_price`-style data fresh for **universe tickers** (~3,000 Ring-1 IN) — not just the ~25 held + watchlist conids the existing pollers cover. Specifically resolves the gap that **Finnhub free `/quote` has price but no volume**, and the `catalyst_reversal` Stage-1 broad detection needs volume on ~5,300 tickers nightly without pushing daily IB usage past the on-demand budget.
-
-**Research portion** (~half-day): evaluate free-tier alternatives on (a) does it give volume? (b) batch endpoint or per-symbol? (c) free-tier rate limit + daily cap? (d) ToS for our scale? See `spec/signals/data-sources.md` → Universe coverage for the candidate list:
-
-- **yfinance / Yahoo (unofficial)** — free, no key, has intraday OHLCV + daily volume. ToS-gray.
-- **Polygon.io free tier** — 5 calls/min, aggregates + trades.
-- **Alpaca Market Data (free IEX feed)** — bars + volume; free with account.
-- **Twelve Data free** — 8 calls/min, 800/day; quotes with volume.
-
-**Integration portion** (~half-day): write a small `services/universeQuote.ts` wrapper that pulls price+volume for the universe with whichever source the research picked, on the cadence the caching/staggering plan calls for (`spec/signals/screener-universe.md` → Caching + staggering). Extends `universe.last_price` + `universe.last_avg_volume` fields S1 already provisioned. **If no free-tier source qualifies**, S0.5 concludes "IB snapshot is the only viable source" — record that decision, plan IB-snapshot batched calls into the cron, accept the IB-budget cost.
-
-### Files this batch creates/edits
-- `docs/universe-data-research.md` (new) — research notes + decision record
-- `server/src/services/universeQuote.ts` (new) — the integration wrapper, source-agnostic API
-- `server/src/cron/universeCron.ts` (extend — wire the new wrapper for price/volume refresh; weekly cap+vol, daily price)
-- `server/src/services/finnhub.ts` OR new provider file depending on research outcome
-- `spec/signals/data-sources.md` (update the Universe-coverage section with the chosen source)
-
-### Does NOT touch
-- Trait scoring (S2), band engine (S3), FE (S4), or any IB-related code (unless IB-snapshot path is chosen as the fallback).
-
-### Verification
-- Research doc lists each candidate with measured free-tier behavior + a clear pick.
-- After integration: `bin/upside-psql -c "select count(*) from universe where last_price is not null and last_avg_volume is not null;"` returns ≥ 90% of `filter_result='in'` count within 24h of cron.
-- Daily provider call count stays within the chosen tier's free quota.
-
----
-
-## Batch S1.5: Real IBKR conid resolution for universe tickers
-
-**Depends on:** Batch S1 (universe table + synthetic-conid PK in place).
-
-**Scope:** Replace the synthetic conids in S1's `universe` rows with **real IBKR conids** resolved via `ibSecdefSearch`. Without this, S2's trait scoring can't join `intraday_stats` (IB-keyed) and S2's `catalyst_reversal` can't pull `ibHistory`. ~45 min IB **once**, then cached forever per ticker; re-resolves only on universe additions. Spec: `spec/signals/screener-universe.md` → Conid resolution.
-
-### Deliverables
-
-1. **Migration `020_universe_real_conid.sql`** — add `real_conid bigint null` + `auto_promoted bool default false` columns to `universe`. Index on `real_conid` for join performance. (Matches `spec/schema.md` → universe.)
-2. **`server/src/services/screener/conidResolver.ts`** — `resolveConid(symbol, mic)` that calls `ibSecdefSearch(symbol)`, filters to `secType=STK + currency=USD + exchange ∈ {NASDAQ, NYSE, AMEX}`, returns the primary-exchange match (or null if no STK match). First-listed tiebreaker for ambiguous cases (dual listings, A/B classes). Vitest fixtures for: clean single-match, multi-match w/ correct primary pick, no-match, non-STK-only response.
-3. **`server/src/cron/conidResolutionCron.ts`** (or extension of universeCron) — daily pass: select universe rows where `real_conid IS NULL`, resolve in IB-rate-limited batches (~10/sec). One-time backlog ~45 min IB; steady-state near-zero (only new symbols).
-4. **Optional one-shot kick** `npm run cron:resolve-conids` for the initial backlog flush.
-
-### Files this batch creates/edits
-- `supabase/migrations/020_universe_real_conid.sql` (new)
-- `server/src/services/screener/conidResolver.ts` (new + vitest)
-- `server/src/cron/conidResolutionCron.ts` (new) OR extend `universeCron.ts` with a resolution pass
-- `server/src/index.ts` (boot wiring)
-- `server/scripts/runConidResolutionCron.ts` (new) + `npm run cron:resolve-conids` script
-
-### Does NOT touch
-- Trait scoring (S2), band engine (S3), FE (S4). Pure data-layer slice.
-
-### Manual prereqs
-- IB connected during the initial backlog resolution (~45 min on first run; routine days are seconds).
-
-### Verification
-- Migration applied.
-- After first full resolution pass: `bin/upside-psql -tAc "select 100.0 * count(real_conid) / count(*) from universe;"` returns ≥ **95%** (the ~5% unresolved are obscure types, delisted-since-Finnhub-pull, or genuine ambiguity).
-- Spot-check: `bin/upside-psql -c "select symbol, conid, real_conid from universe where symbol in ('REPL', 'MNTS', 'RGTI');"` shows real conids matching the ones already in `watchlist_items` for the watchlist-overlap names.
-
----
-
-## Batch S1: Stock universe + Ring 1 nightly cron
-
-**Depends on:** Batch 13.7 (Finnhub rate-limited queue).
-
-**Scope:** Production version of the universe scan + filter scoped in [Screener Slice 1 — scoping artifacts] (CLAIMS, 2026-05-30). New `universe` table maintained by a nightly cron. Foundation for S2/S3/S4 — without S1 there's nothing for trait scoring to score, no curated list for the band engine to walk, no rows for the FE tab to render. Spec: `spec/signals/screener-universe.md` (Ring 0, Ring 1, dynamic universe inclusion).
-
-### Deliverables
-
-1. **Migration `01X_universe.sql`** — `universe` table per `spec/schema.md` → `universe`. Service-role write, no user-facing reads needed (server-internal cache). Realtime NOT enabled (high churn, no FE consumer).
-2. **`server/src/cron/universeCron.ts`** — runs at **09:00 IDT** (= 2 AM ET) nightly. Steps: Finnhub `/stock/symbol?exchange=US` (single call, cached for the day) → in-process type+MIC filter → per-conid `finnhubQueue.request('quote'|'profile', ...)` for the price+cap gate → upsert `universe` rows with `filter_result` set. Sleep cadence honors the existing queue's 50/min budget; full sweep ~100 min wall-clock at free-tier.
-3. **`server/src/services/screener/universeFilter.ts`** — pure function tested via vitest (sample-of-survivors style fixtures from the scoping-script output).
-4. **`server/src/services/finnhub.ts`** — extend with `getSymbolList()` (`/stock/symbol?exchange=US`) and `getProfile2(symbol)` (`/stock/profile2`) if not already present.
-5. **Pre-market 15:30 IDT skeleton** — `universeCron` accepts a `mode: 'nightly' | 'premarket'` arg; the premarket pass refreshes price/cap on Ring-1-borderline tickers only (cheaper than full re-scan). Dynamic universe inclusion via 3× volume gap is **scaffolded but not wired** in S1 — the daily-bar pipeline that catalyst_reversal needs lands in S2, so the volume-gap promotion plugs in there.
-6. **Retention**: rows with no `last_filter_pass` in 30 days deleted by a small daily retention task.
-7. **Boot wiring** in `server/src/index.ts` to start the cron + an explicit `npm run cron:universe` one-shot for manual kicks.
-
-### Files this batch creates/edits
-- `supabase/migrations/01X_universe.sql` (new)
-- `server/src/cron/universeCron.ts` (new)
-- `server/src/services/screener/universeFilter.ts` (new)
-- `server/src/services/finnhub.ts` (extend)
-- `server/src/index.ts` (boot wiring)
-
-### Does NOT touch
-- Trait scoring (S2), band engine (S3), FE (S4).
-
-### Verification
-- Migration applied cleanly via Supabase SQL editor.
-- After cron's first nightly run: `bin/upside-psql -tAc "select count(*) from universe where filter_result='in';"` returns a number within the **2,728–3,373** CI from the scoping sample (point ~3,051).
-- `external_api_metrics` shows ≤ ~6,000 Finnhub calls for the sweep (≈ 2 calls per Ring-0 survivor) — within the free-tier 60/min × full-night budget.
-- Manual `npm run cron:universe` triggers a one-shot pass.
-
----
-
-## Batch S2: Screener — trait scoring engine
-
-**Depends on:** Batch S1 (universe table), Batch S1.5 (real_conid resolution), Batch S0.5 (universe price+volume coverage), Batch B (existing `intraday_stats`).
-
-**Scope:** The three traits (`intraday_range_trader`, `catalyst_reversal`, `post_earnings_drift`) and the `trait_scores` table they write to. Implements the **caching + staggering + event-gated** architecture from `spec/signals/screener-universe.md` → "Caching + staggering" so daily IB usage stays ~15-20 min (compatible with on-demand IBeam, not requiring 13.3). Discord first-fire notifications for the catalyst/earnings traits.
-
-### Deliverables
-
-1. **Migration `01X_trait_scores.sql`** — `trait_scores(conid, trait, asof_date, score, payload jsonb, computed_at, PRIMARY KEY (conid, trait, asof_date))` per `spec/schema.md`. Realtime enabled. Note: `conid` here references `universe.real_conid` (S1.5), not the synthetic PK.
-
-2. **`server/src/services/screener/traits/intradayRangeTrader.ts`** — pure function reading `intraday_stats` rows (joined via `universe.real_conid`), applying threshold rules (p50 ≥ 2%, p25 ≥ 1%, sample_size ≥ 30, envelope-tightness ≤ 1.5, price-bonus for sub-$30). Vitest fixtures.
-
-3. **`server/src/services/screener/traits/catalystReversal.ts`** — **three-stage** per spec:
-   - **Stage 0**: pull Finnhub `/calendar/earnings` (today + last 3 days) + a daily `/news-sentiment` sweep over universe tickers showing prior-day news. Candidates = universe ∩ (had-news ∪ reported-earnings). ~100–300/day.
-   - **Stage 1**: IB snapshot per Stage-0 candidate (~9 min IB). Flag those showing ≥3× vol vs `universe.last_avg_volume` AND ≥5% gap/intraday move.
-   - **Stage 2**: `ibHistory(real_conid, '1y', '1d')` per Stage-1 hit (~5–50 tickers/day, ~1 min IB). Evaluate A ∧ B (beaten-down + confirmed wake-up). Survivors → `trait_scores` + set `universe.auto_promoted=true`.
-
-4. **`server/src/services/screener/traits/postEarningsDrift.ts`** — Finnhub `/calendar/earnings` (one bulk call) + close-up-on-report-day test via `ibHistory(real_conid, '1m', '1d')` on each reporter (~10–50/day, ~1 min IB).
-
-5. **Staggered `intradayStatsCron` extension** — change the cron from "iterate active watchlist conids" to "iterate `universe WHERE filter_result='in' AND real_conid IS NOT NULL AND real_conid mod 7 = day_of_week`" (plus continue covering watchlist conids for back-compat). Each ticker refreshes weekly; ~430 universe tickers/day × ~1 sec IB = ~7 min IB/day. Spec: `spec/signals/screener-universe.md` → Caching + staggering.
-
-6. **Weekly market-cap refresh cron** (Sunday) — re-pulls Finnhub `/stock/profile2` for all `filter_result='in'` rows to update `last_market_cap_m` + `last_avg_volume`. ~50 min Finnhub / week. Filter re-evaluates at next nightly `universeCron` pass.
-
-7. **Trait shelf-life retention**: drop `trait_scores` beyond shelf-life — 1 day for `intraday_range_trader`, 3 days for `catalyst_reversal`, 5 days for `post_earnings_drift`. Daily cleanup task.
-
-8. **`services/notify.ts:notifyTraitFirstFire(trait, symbol, payload)`** — first-fire-per-(conid, trait, day) Discord ping. Routes `catalyst_reversal` + `post_earnings_drift` to `#upside-catalyst-alerts` (env `DISCORD_WEBHOOK_CATALYST_ALERTS`); `intraday_range_trader` is silent (baseline trait, would spam).
-
-### Files this batch creates/edits
-- `supabase/migrations/01X_trait_scores.sql` (new)
-- `server/src/services/screener/traits/*.ts` (new — three trait functions + vitest)
-- `server/src/cron/universeCron.ts` (extend with the scoring pass + Stage-0 news pre-filter for catalyst)
-- `server/src/cron/intradayStatsCron.ts` (change target list to staggered universe set)
-- `server/src/cron/marketCapRefreshCron.ts` (new — Sunday weekly cap+vol refresh)
-- `server/src/services/notify.ts` (add `notifyTraitFirstFire`)
-- `server/src/services/finnhub.ts` (extend with `/calendar/earnings`, `/news-sentiment` if not present)
-- `.env.example` (add `DISCORD_WEBHOOK_CATALYST_ALERTS`)
-
-### Does NOT touch
-- Universe filter itself (S1), band engine (S3), FE (S4).
-
-### Manual prereqs
-- Create `#upside-catalyst-alerts` Discord channel + webhook → `DISCORD_WEBHOOK_CATALYST_ALERTS` to VPS `.env`.
-
-### Verification
-- Migration applied.
-- After a cron run: `bin/upside-psql -c "select trait, count(*) from trait_scores where asof_date=current_date group by trait;"` shows three rows with non-trivial counts (intraday_range_trader likely 100s, others fewer).
-- Live (Saturday → Monday spans a post-earnings window): `#upside-catalyst-alerts` fires one ping per qualifying ticker per day; no duplicate fires for the same ticker on the same day.
-
----
-
-## Batch S3: Improved entry engine — adaptive band layers
-
-**Depends on:** Batch S2 (`intraday_range_trader` trait gives us the curated list), Batch B (`intraday_stats` is the static baseline).
-
-**Scope:** The three adaptive layers on top of the static `intraday_stats` band — `session_regime` classifier, today's `vol_scalar`, walking band-state machine. The improvement over the existing entry-zone engine: bands adapt to today's gap + today's realized volatility + today's pivots instead of being frozen at open. Spec: `spec/signals/band-engine.md`.
-
-### Deliverables
-
-1. **Migration `01X_band_state.sql`** — `band_state(conid, session_date, anchors jsonb, current_low_band, current_high_band, session_regime, vol_scalar, vol_regime_shift, updated_at, PRIMARY KEY (conid, session_date))` per `spec/schema.md`. Realtime enabled (FE band chips subscribe).
-2. **`server/src/services/bandEngine/sessionRegime.ts`** — Layer 1 classifier (gap + first-15-min direction + pre-mkt volume → `mean_reversion | bullish_trend | bearish_trend | mixed`). Pure function + vitest fixtures (typical / trend / mixed).
-3. **`server/src/services/bandEngine/volScalar.ts`** — Layer 2: `ATR(last 12 5min bars) / ATR_30d_baseline` → band-width multiplier + annotation enum (`high_vol_today` / `calm_day` / null). Pure function + vitest. **Validated empirically 2026-05-30**: this layer would have widened MNTS's band to cover the actual low ($16.00 vs predicted $17.96).
-4. **`server/src/services/bandEngine/walkingState.ts`** — Layer 3: state machine with re-anchor on observed reversal from running extremum (threshold = `0.5 × intraday_ATR`). Both bands recompute on every anchor. No chain-length limit. Pure function + vitest with multi-leg scenario fixtures (REPL-style scalp pattern: 4 buy/sell legs in one session).
-5. **`server/src/services/bandEngine/volRegimeShift.ts`** — daily flag (last 5 sessions ATR > 2× prior 30d ATR) — the cheap correctness hedge per spec; just sets the flag + annotation, does NOT auto-truncate the lookback (that's a Track-10 deferred item).
-6. **`server/src/cron/bandEngineCron.ts`** — runs every 5 min during **16:30 IDT – 03:00 IDT** (regular session + AH) on the curated list (`intraday_range_trader` survivors, ~100 tickers). 15:45 IDT fires session_regime classifier; ticks thereafter run vol_scalar + walkingState. AH walking annotates `session_regime = 'ah_low_confidence'`.
-7. **Reset task at 16:30 IDT next session** — clears anchors, resets regime. Same cron file; mode-flag invocation.
-8. **`services/notify.ts:notifyBandTouchLow` / `notifyBandTouchHigh`** — band-touch Discord notifications. Low-touch on curated (not held) → `#upside-dip-buys` (existing channel). High-touch on held position → new `#upside-sell-zones` (env `DISCORD_WEBHOOK_SELL_ZONES`). 4h cooldown per `(conid, band_kind)` via a `band_touch_last_fired_at` jsonb field on `band_state`.
-
-### Files this batch creates/edits
-- `supabase/migrations/01X_band_state.sql` (new)
-- `server/src/services/bandEngine/*.ts` (new — sessionRegime, volScalar, walkingState, volRegimeShift + vitest)
-- `server/src/cron/bandEngineCron.ts` (new)
-- `server/src/services/notify.ts` (add `notifyBandTouchLow` / `notifyBandTouchHigh`)
-- `.env.example` (add `DISCORD_WEBHOOK_SELL_ZONES`)
-
-### Does NOT touch
-- Universe (S1), trait scoring (S2), FE (S4).
-
-### Manual prereqs
-- Create `#upside-sell-zones` Discord channel + webhook → `DISCORD_WEBHOOK_SELL_ZONES` to VPS `.env`.
-
-### Verification
-- Migration applied.
-- During regular session: `bin/upside-psql -c "select conid, session_regime, vol_scalar, jsonb_array_length(anchors) from band_state where session_date=current_date order by jsonb_array_length(anchors) desc limit 10;"` shows curated tickers with regime labels + walking anchors growing through the session.
-- Band-touch Discord pings fire on first touch + are suppressed on subsequent touches within 4h.
-- MNTS-style cases: when `vol_regime_shift = true`, the published band is visibly wider than the static `intraday_stats` band would have been.
-
----
-
-## Batch X1: Dip-bounce track — curated list + two-scorer alert + forward-tracking
-
-**Depends on:** Batch S2 (`trait_scores` for curated-list membership), Batch S3 (`band_state` for session_regime + vol_regime_shift), Batch B (`intraday_stats` for typical band check), Batch A+ (`entry_zones` for confluence + trend regime). All shipped.
-
-**Scope:** Materializes the dip-bounce design (2026-06-03 session). Three pieces ship as one batch because each is too small standalone and they share the same poll-cycle hook: (1) the **curated list** — auto-maintained ~200-300 high-potential pool replacing the 25-name manual watchlist as the alert pool, (2) two **dip-bounce scorers** (intraday + swing) firing into two new Discord channels with cooldowns, (3) **forward-tracking infrastructure** (`signal_fires` + `signal_outcomes` + `signal_hit_rate_30d` view) — durable backbone for *all* signal hit-rate measurement going forward, not just this batch.
-
-Spec: `spec/signals/curated-list.md`, `spec/signals/dip-bounce-scorer.md`, `spec/schema.md` (new tables).
-
-### Deliverables
-
-1. **Migration `02X_dip_bounce.sql`** — three new tables (`curated_list`, `signal_fires`, `signal_outcomes`) per `spec/schema.md`. Realtime enabled on `curated_list` only. Includes the `signal_hit_rate_30d` SQL view.
-
-2. **`server/src/config/curatedList.ts`** — named constants: `TARGET_SIZE = 250`, `MIN_AVG_VOLUME = 1_000_000`, `MIN_DAILY_ATR_PCT = 1.5`.
-
-3. **`server/src/services/curatedList/buildCuratedList.ts`** — pure function: read `trait_scores` for today's `intraday_range_trader`, join `universe.real_conid` + `universe.last_avg_volume`, compute daily ATR% from the nightly bar pull, apply gates, sort by score desc, cap at `TARGET_SIZE`. Vitest fixtures (size cap, liquidity gate, ATR gate, fewer-than-target survivors).
-
-4. **`server/src/cron/curatedListCron.ts`** — runs at **09:10 IDT nightly** (after S2's trait scoring at 09:00) + **15:30 IDT pre-market** (incremental refresh). Writes today's `curated_list` rows. Reuses S0.3's job queue (`compute` worker pool).
-
-5. **`server/src/config/dipBounceScorer.ts`** — named weight + threshold constants for both scorers (see `spec/signals/dip-bounce-scorer.md` for the formulas). All tunable from outcome data; no magic numbers in the scorer functions themselves.
-
-6. **`server/src/services/dipBounce/intradayScorer.ts`** — pure function `computeIntradayDipBounceScore(conid, asof_ts) → { score, components, fired }`. Reads `quotes`, `intraday_stats`, `band_state`, `entry_zones`. Critical guard: `IN_TYPICAL_BAND = 0` when drop is past p75 (deep is worse than typical). Vitest fixtures for all 5 components + the `deep` veto + the threshold-cross logic.
-
-7. **`server/src/services/dipBounce/swingScorer.ts`** — pure function `computeSwingDipBounceScore(conid, asof_ts) → { score, components, fired }`. Reads daily indicators (RSI, ATR, trend regime) via `technicals.ts` + the same tables as the intraday scorer. Vitest fixtures.
-
-8. **`server/src/services/dipBounce/dipBounceCron.ts`** OR poll-cycle hook in `upsertQuote` — fires both scorers on every `quotes.canonical_price` write for any conid in `curated ∪ active-watchlist ∪ held` (the visibility-opt-in compute set — see `spec/screens/watchlist.md` → Engine coverage). Cooldown checks read `signal_fires` for last fire timestamp per `(conid, signal_kind)`. On fire: write `signal_fires` row, fire Discord ping. Wire choice: pick whichever keeps the existing poll-cycle path clean — the user has been bitten by alert checks bloating the poll cycle.
-
-9. **`server/src/services/notify.ts`** extensions — `notifyIntradayDipBounce(payload)` and `notifySwingDipBounce(payload)` routing to the two new channels. Embed format per `spec/signals/dip-bounce-scorer.md` → Discord message format.
-
-10. **`server/src/cron/signalOutcomesCron.ts`** — runs every 5 minutes. Selects `signal_fires` rows whose next-due outcome offset (+30m / +2h / +1d / +3d) has elapsed without a corresponding `signal_outcomes` row, looks up `quotes.canonical_price`, writes the outcome row + `return_pct`. Generic — works for any future `signal_kind`.
-
-11. **`server/scripts/dip-bounce-backtest.mjs`** — **throwaway calibration script, NOT maintained, NOT in the cron set**. Runs the proposed scorer constants against the last 60 sessions of bar data for the curated list, prints fire counts per day + naive hit-rate. Used once to set v1 weights to roughly 1–3 fires/day per channel, then discarded. Add a comment at the top: "Throwaway — see spec/signals/dip-bounce-scorer.md → Throwaway calibration. Do not extend; rebuild from forward-tracker data after a month of real fires."
-
-12. **`.env.example`** — add `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` and `DISCORD_WEBHOOK_SUGGESTIONS_SWING`.
-
-13. **Boot wiring** in `server/src/index.ts` — start `curatedListCron` + `signalOutcomesCron`. Scorers hook into the existing poll cycle (no separate cron).
-
-14. **Compute-set widening** — the dip-bounce poll hook and `bandEngineCron` (shipped S3) target `curated ∪ active-watchlist ∪ held`, not curated-only, so every ticker on a *visible* imported list gets a walking band + dip-bounce score (`spec/signals/curated-list.md` → Consumers). Bounded by the user's visibility choices; small IB-budget delta. Thin names with insufficient `intraday_stats` history surface a "needs more history" state rather than a fabricated band.
-
-### Files this batch creates/edits
-- `supabase/migrations/02X_dip_bounce.sql` (new)
-- `server/src/config/curatedList.ts` (new)
-- `server/src/config/dipBounceScorer.ts` (new)
-- `server/src/services/curatedList/buildCuratedList.ts` (new + vitest)
-- `server/src/services/dipBounce/intradayScorer.ts` (new + vitest)
-- `server/src/services/dipBounce/swingScorer.ts` (new + vitest)
-- `server/src/services/dipBounce/dipBounceCron.ts` (new) OR extend `services/quotes/upsertQuote.ts`
-- `server/src/cron/curatedListCron.ts` (new)
-- `server/src/cron/signalOutcomesCron.ts` (new)
-- `server/src/services/notify.ts` (two new functions)
-- `server/scripts/dip-bounce-backtest.mjs` (new, throwaway — NOT maintained)
-- `server/src/index.ts` (boot wiring)
-- `.env.example` (two new env vars)
-
-### Does NOT touch
-- The Watchlist virtual-list FE (X2 owns that).
-- Universe (S1), trait scoring (S2) — pure data consumer. (Does widen `bandEngineCron`'s target list per deliverable 14.)
-- `markers.md` (separate alert primitive; the dip-bounce scorer doesn't replace it).
-
-### Manual prereqs
-- Create `#upside-intraday-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SUGGESTIONS_INTRADAY` to VPS `.env`.
-- Create `#upside-swing-suggestions` Discord channel + webhook → `DISCORD_WEBHOOK_SUGGESTIONS_SWING` to VPS `.env`.
-
-### Pre-ship calibration (throwaway-script use)
-- Run `node server/scripts/dip-bounce-backtest.mjs` on the dev VPS. Inspect fire rate per scorer over the last 60 sessions. Target combined fire rate: **1–3 fires/day** across both channels. If fires/day > 5 → raise scoring thresholds; if < 0.5 → lower thresholds. Commit the tuned constants, then ship the live scorer.
-
-### Verification
-- Migration applied.
-- After first `curatedListCron` run: `bin/upside-psql -c "select count(*) from curated_list where asof_date = current_date;"` returns a number in `[180, 250]`.
-- Spot-check membership: `bin/upside-psql -c "select c.conid, u.symbol, c.intraday_range_trader_score, c.avg_daily_volume, c.daily_atr_pct from curated_list c join universe u on u.real_conid = c.conid where c.asof_date = current_date order by c.rank limit 20;"` returns 20 names that pass the gates.
-- Live: within a regular session day, observe at least one fire in each channel; confirm `signal_fires` row written + `signal_outcomes` rows accumulate at +30m / +2h / +1d / +3d.
-- Hit-rate view: `bin/upside-psql -c "select * from signal_hit_rate_30d;"` returns per-kind aggregate rows once fires + outcomes have accumulated (≥1 week of data needed for a meaningful number).
-- Cooldown: same ticker firing twice within 4h on intraday (or 24h on swing) → second fire is silently skipped (no Discord ping, no `signal_fires` row).
-
-### Out of scope (X2 follow-up)
-- Any FE surface — the Watchlist virtual lists that render these scorers as two ranked leaderboards land in X2 below.
-- Porting band-touch and marker fires onto the same `signal_fires` backbone — easy follow-up once X1's tables exist; queued as part of Batch C remainder.
-
----
-
-## Batch X2: Watchlist virtual lists — Intraday / Swing (retires the Screener tab)
-
-**Depends on:** Batch X1 (`curated_list`, `signal_fires`, `signal_outcomes`, hit-rate view, compute-set widening). Soft dep on Batch R2 (shared `TickerCard` danger badge — either order).
-
-**Scope:** Supersedes both the S4 three-accordion shape *and* the standalone Screener tab (2026-06-05 milestone). The two ranked lists ("Intraday" / "Swing") render as **Upside-curated virtual lists inside the Watchlist screen** — two always-present virtual sub-tabs ahead of the imported lists. Spec already revised: `spec/screens/watchlist.md` → Upside-curated virtual lists; `spec/screens/screener.md` is now a retirement redirect.
-
-Each virtual list is a **living leaderboard**: top-N by a **composite** opportunity score, re-ranking on the poll cycle, each row showing a rolling-30d hit-rate column, a walking-band chip, the danger badge, and one or more **reason chips** (`dip` / `catalyst` / `post-earnings`). The list source is the **union** `curated_list ∪ universe.auto_promoted` event names — so `catalyst_reversal` (→ both lists) and `post_earnings_drift` (→ Swing) appear alongside the dip-scored character names. A **⚡ just-fired** marker flags names that recently crossed their dip-bounce threshold.
-
-### Deliverables
-- Watchlist sub-tab strip gains the two virtual tabs (Intraday ✨ / Swing ✨) ahead of imported lists.
-- `useVirtualList(kind)` hook — query `curated_list ∪ auto_promoted`, join `trait_scores` + `signal_fires` + `band_state` + the hit-rate view, compute the composite rank (weights as named constants, calibration-tuned), Realtime subscribe.
-- Virtual-list row = the shared `TickerCard` + reason chips + hit-rate column + walking-band chip + ⚡ fired marker.
-- Long-press affordances: Add to one of my watchlists / Set marker (prefilled at band p50).
-- Retire `client/src/pages/Screener.tsx` + the Screener bottom-nav tab (nav stays Portfolio · Watchlist · Settings).
-
-### Open questions (settle at claim time)
-- Composite-rank weights between the dip-bounce score and the event-trait scores — seed by calibration, like the scorer weights.
-- Hit-rate column shape: rolling 30d %, or % + sample size + a +30m/+2h/+1d/+3d tooltip.
-- Does an imported-list row gain an "on a virtual list" chip so the user sees overlap? (Cheap Watchlist-row tweak.)
-
-### Files this batch creates/edits (rough)
-- `client/src/pages/Watchlist.tsx` + `client/src/components/Watchlist/*` (virtual tabs + virtual-list rows; reuse the imported-row `TickerCard`)
-- `client/src/hooks/useVirtualList.ts` (new)
-- remove `client/src/pages/Screener.tsx` + its nav entry / route
-- `client/src/styles/components.css` (reason chips, ⚡ marker, hit-rate column)
-
-### Does NOT touch
-- Any signal-engine code or schema — pure FE consumer of X1's outputs (the compute-set widening + union data come from X1).
-
----
-
-## Batch X3: Curated-list volume gate — median ADV from IB bars
-
-**Depends on:** Batch X1 (the cron + gate it fixes).
-
-**Why:** the curated list never builds. `curatedListCron.loadSeeds` pre-filters on `universe.last_avg_volume`, which is NULL for all 5,307 universe rows — nothing populates it (`universeCron` writes `null`; `marketCapRefreshCron`'s documented "+ last_avg_volume bootstrap" was never implemented; Finnhub `profile2` carries no average volume). 0 seeds → empty `curated_list` → both virtual tabs stuck in "warming up". See `spec/signals/curated-list.md` → Volume source.
-
-**Scope:** compute the 30d **median** daily volume from the daily bars the cron already pulls for ATR (`bars[].v`) and gate on that; drop the dead universe pre-filter. No new data dependency (ATR already needs the bars), and **no single-day-volume fallback** — quality-first: the list stays empty when IB history is down rather than admit low-quality-gated names.
-
-### Deliverables
-1. **`curatedListCron.ts`** — `loadSeeds` drops the `universe.last_avg_volume` join + pre-filter, returns all `intraday_range_trader` seeds (top `MAX_CANDIDATES` by score). The probe computes `{ atrPct, medAdv }` from one daily-bar pull; `CuratedCandidate.avgDailyVolume` becomes the bar-derived 30d median.
-2. **`buildCuratedList.ts`** — gate logic unchanged (already gates on `avgDailyVolume`); just receives the bar-derived value. Confirm/extend vitest.
-3. **`median()` helper** — inline or in `technicals.ts`.
-4. **`marketCapRefreshCron.ts`** — drop the misleading "+ last_avg_volume bootstrap" header line (it never did this).
-5. **`config/curatedList.ts`** — clarify `MIN_AVG_VOLUME` comment (bar-derived median).
-
-### Files this batch creates/edits
-- `server/src/cron/curatedListCron.ts`
-- `server/src/services/curatedList/buildCuratedList.ts` (+ test)
-- `server/src/cron/marketCapRefreshCron.ts` (comment only)
-- `server/src/config/curatedList.ts` (comment only)
-
-### Does NOT touch
-- Schema (`curated_list.avg_daily_volume` already exists), the FE, the universe / trait-scoring producers.
-- `universe.last_avg_volume` — left for Batch X4 to populate.
-
-### Verification
-- `pnpm typecheck` + `vitest run` clean.
-- After deploy + IB history available: `curated_list` count climbs above 0 (`bin/upside-psql -c "select count(*) from curated_list"`); virtual tabs flip out of "warming up".
-
----
-
-## Batch X4: daily_bars layer — Polygon-primary daily-grain SSOT
-
-**Depends on:** Batch X3 (the gate that reads daily-grain volume/ATR).
-
-**Why:** daily OHLCV bars are the **only** data type with no non-IB fallback (`spec/data/sources.md` → Reliability posture), so the curated list / swing pack / sparkline all die when IB history 503s (weekends, off-hours). Polygon grouped-daily already returns the whole universe's OHLCV in one call and is weekend-safe; 30 trailing calls = full 30-day history for every name. Makes Polygon the daily-grain SSOT and demotes IB to live-only. **Subsumes the old X4 (volume-only precompute)** — `last_avg_volume` becomes one derived column of this layer.
-
-**Scope:**
-1. **Migration** — `daily_bars` table: `(conid bigint, date date, o/h/l/c numeric, v bigint, source text, computed_at)`, PK `(conid, date)`, ~40-day retention. See `spec/schema.md`.
-2. **Producer** — extend `universeQuoteProducer`: nightly append yesterday's grouped-daily bar per universe row (conid via `real_conid`, Polygon `T`→symbol); 30-day bootstrap on first run / gaps; Yahoo gap-fill writes the **same** table.
-3. **Repoint daily-grain consumers:** `curatedListCron.dailyMetrics` reads ATR% + 30d median ADV from `daily_bars` (X3's math, same gates); swing dip-bounce daily pack; sparkline (7 bars).
-4. **Derived** — populate `universe.last_avg_volume` from `daily_bars` (resolves `sources.md` Observation 2).
-
-**Does NOT touch:** intraday 5-min (`intraday_stats`) or live snapshot — Polygon free is daily-only; those stay IB. Live price stays in `quotes` (Batch X5).
-
-**Verification:** `daily_bars` populates from Polygon on a weekend (IB down); `curated_list` builds with no IB history; typecheck + vitest.
-
----
-
-## Batch X5: Price SSOT — `quotes` is the only price table
-
-**Depends on:** none hard.
-
-**Why:** price lives in two tables today — `positions.current_price` (held) + `quotes.canonical_price` (watchlist/curated), written by different pollers (`sources.md` Observation 4). The UI must draw every price (position cards, watchlist rows, TickerDetail, chart) from **one** table. Decision (2026-06-06): `quotes` is the single price home; `positions` holds holding detail only (conid, qty, cost) and joins `quotes` by conid. IB live price when connected, Finnhub fallback — the existing `canonical_price`/`canonical_source` logic, extended to held tickers.
-
-**Scope:**
-1. Ensure every **held** conid has a `quotes` row (held + watchlist share the poller path).
-2. **Drop `positions.current_price`** (+ any other price columns) via migration; `positions` keeps conid/symbol/qty/avgCost/etc.
-3. Repoint readers to `quotes` by conid: `routes/portfolio`, `usePositions` / `useTickerDetail`, `signalEngine`, `riskFlagsCron`, P&L math.
-4. Pollers (`ibPricePoller`, `finnhubPricePoller`) write price to `quotes`, not `positions`.
-
-**Verification:** a held+watchlisted ticker shows one price from one table; no `positions.current_price` reads remain; P&L correct.
-
----
-
-## Batch X6: Earnings calendar — single shared daily pull
-
-**Depends on:** none.
-
-**Why:** `catalystReversalProducer` (3d lookback) and `postEarningsDriftProducer` (5d) each call `earningsCalendarRange` daily — two Finnhub calls for overlapping windows (`sources.md` Observation 6). Wasteful + a needless rate-limit risk.
-
-**Scope:** a shared `services/earningsCalendar.ts` that fetches the widest window (5d) **once per UTC day** (in-memory memo + concurrent-coalesce); both producers read it and filter to their own lookback client-side. One call/day. + vitest.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)** and the **price SSOT (X5)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **X7** (news-as-signal — already specced in `spec/signals/news-signal.md`, the next fresh feature) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -471,211 +24,6 @@ Each virtual list is a **living leaderboard**: top-N by a **composite** opportun
 **Depends on:** Finnhub news (already wired: `companyNews`; `newsSentiment` currently unused — `sources.md` Observation 3).
 
 **Why deferred / what:** news should raise/lower a stock's potential the way earnings do — good news ≈ a good report, bad news ≈ a bad one. Design in `spec/signals/news-signal.md`. Build after the daily-grain + price-SSOT work; spec'd now so it isn't lost. Wires `newsSentiment` (today dead code) into trait/curated ranking and/or `risk-flags`.
-
----
-
-## Batch R1: Risk-flags engine (data + LLM integration)
-
-**Depends on:** existing feature pack (`technicals.ts`), Finnhub `basicFinancials` + `/calendar/earnings`, `positions` + `watchlist_items`. **Optional:** `curated_list` (X1) to widen the working set — not a hard dep (held + active-watchlist covers v1).
-
-**Scope:** Materializes the risk-flags v1 design (2026-06-05 session). The daily-grain danger-flag engine per **`spec/signals/risk-flags.md`** — six zero/low-infra flags computed nightly + on-demand, persisted to `risk_flags`, plus the LLM prompt refine + CRITICAL confidence clamp. Pump / momentum detection (SPCE / RGTI / MNTS cases) is the flagship. Data layer + signal integration only; the FE surface is R2.
-
-### Deliverables
-
-1. **Migration `02X_risk_flags.sql`** — `risk_flags` table per `spec/schema.md` → `risk_flags` (Realtime enabled, 7-day retention). Adds `risk_flag_config jsonb` to `user_preferences` with the seed defaults.
-2. **`server/src/config/riskFlags.ts`** — named threshold seeds (surge X%/N, vol Y×, RSI Z, near-52w W%, micro-cap $C, earnings D days) + the WARNING/CRITICAL combination rule as one named block (no magic numbers in the function).
-3. **`server/src/services/riskFlags/computeRiskFlags.ts`** — pure function `(conid, inputs, prevRow) → RiskFlagRow | null`. Inputs: feature pack (`rsi14`, `relativeVolume30d`, `pctFrom52wHigh`), trailing-N-session return from daily bars, Finnhub `marketCapitalization` + avg vol, earnings-calendar days. Computes each flag, the row severity, and `since`-inheritance from `prevRow`. Returns null when no flag is active. Vitest fixtures: each flag in isolation, the CRITICAL pump combo, micro-cap escalation, `since` inheritance, clean-ticker → null.
-4. **`server/src/cron/riskFlagsCron.ts`** — nightly pass over held + active-watchlist conids: upsert flagged rows, **delete** rows whose conditions no longer hold. Plus an exported `topUpRiskFlags(conid)` used on-demand.
-5. **`signalEngine` wiring** — call `topUpRiskFlags` before analysis; populate `contextualTriggers.riskFlags`; after schema validation, **clamp `signalQuality ≤ 35` when severity is CRITICAL** (`spec/signals/playbook.md` → Risk-flag context + confidence cap).
-6. **`server/src/services/llm.ts:buildPrompt`** — inject the **RISK FLAGS** block + the explicit pump instruction (rationale MUST address surge flags; signal MUST downgrade) — the REFINE that counter-weights the existing "favour patience / weigh structure" framing.
-7. **`user_preferences.risk_flag_config`** read/write via `PUT /api/user/preferences` (validation in the existing prefs route).
-8. **`server/scripts/risk-flags-calibrate.mjs`** — **throwaway, NOT maintained, NOT in the cron set**. Runs the proposed thresholds against the SPCE / RGTI / MNTS dangerous-peak windows (retro-validation) + a clean-breakout sample; prints flag counts. Used once to seed the v1 defaults, then discarded. Header comment: "Throwaway — see `spec/signals/risk-flags.md` → Calibration. Do not extend."
-
-### Files this batch creates/edits
-- `supabase/migrations/02X_risk_flags.sql` (new)
-- `server/src/config/riskFlags.ts` (new)
-- `server/src/services/riskFlags/computeRiskFlags.ts` (new + vitest)
-- `server/src/cron/riskFlagsCron.ts` (new)
-- `server/src/services/signalEngine.ts` (wire riskFlags trigger + clamp)
-- `server/src/services/llm.ts` (RISK FLAGS prompt block)
-- `server/src/routes/*` (prefs route — accept `risk_flag_config`)
-- `server/src/index.ts` (boot wiring — start `riskFlagsCron`)
-- `server/scripts/risk-flags-calibrate.mjs` (new, throwaway — NOT maintained)
-
-### Does NOT touch
-- Any FE surface (R2 owns the badge / section / gate / settings controls).
-- Screener (S*) or dip-bounce (X*) engines — pure consumer of the existing feature pack + Finnhub data.
-
-### Verification
-- Migration applied.
-- After a nightly run: `bin/upside-psql -c "select conid, severity, jsonb_array_length(flags) from risk_flags where asof_date = current_date order by severity;"` shows rows for any held/watched name meeting a threshold; clean names have no row.
-- A CRITICAL ticker analyzed → persisted `signal_quality ≤ 35` regardless of model output.
-- Calibration script flags SPCE / RGTI / MNTS at their dangerous peaks without drowning a clean-breakout sample.
-- `since` on a flag persists across consecutive nightly runs while the condition holds; resets after the row is deleted and later re-raised.
-
----
-
-## Batch R2: Risk-flags FE
-
-**Depends on:** Batch R1 (`risk_flags` table + `risk_flag_config`).
-
-**Scope:** The user-facing surface for risk flags per `spec/screens/portfolio.md` → Danger badge, `spec/screens/ticker-detail.md` → Risk flags + Pre-analysis gate, `spec/screens/settings.md` → Risk flags. Pure FE consumer of R1's outputs.
-
-### Deliverables
-1. **`client/src/hooks/useRiskFlags.ts`** — `risk_flags` single-row (today, by conid) + Realtime sub.
-2. **`DangerBadge`** — red (CRITICAL) / amber (WARNING) pill on `TickerCard` (Portfolio + Watchlist variants), separate from the signal pill, renders first in the signal+badge row, never truncated, "+N" when flags stack. Tap → opens the Risk-flags section in TickerDetail.
-3. **`RiskFlagsSection`** — collapsible in TickerDetail (expanded by default on CRITICAL): one row per flag with plain-language explanation + `since` + the threshold that fired.
-4. **`PreAnalysisGateModal`** — DANGER modal fronting Analyze / Refine on a CRITICAL ticker; explicit confirm before the normal two-step friction.
-5. **Settings → Risk flags** controls — the six tunable thresholds, persisted to `user_preferences.risk_flag_config`.
-6. **CSS** for badge + section + modal in `client/src/styles/components.css`.
-
-### Does NOT touch
-- Any signal-engine code, cron, or schema — pure FE consumer of R1.
-
-### Verification
-- A flagged card shows the danger badge at a glance (no detail open needed); badge color matches severity.
-- TickerDetail shows the Risk-flags section listing each active flag; absent on a clean ticker.
-- Analyze on a CRITICAL ticker opens the gate modal before the two-step friction; WARNING does not gate.
-- Editing a threshold in Settings persists; the next nightly pass reflects it.
-
----
-
-## Batch S4 *(superseded by X2 above — left for reference only)*: Virtual lists — Screener tab FE
-
-> **Heads-up (2026-06-03):** The dip-bounce track design supersedes this batch's original "three trait accordions" shape with the two-ranked-list shape of X2 above. **Do not claim S4 in isolation** — claim X2 instead. This entry is preserved for the file lists + verification steps that may still partially apply to X2; the spec content (vertical accordions per trait) is the part that changed.
-
-**Depends on:** Batch S2 (`trait_scores`), Batch S3 (`band_state`).
-
-**Scope:** New Screener tab in the bottom nav with vertical accordions per trait, walking-band annotation chips, and a promote-to-watchlist affordance. The user-facing endpoint of the screener track — the place where you SEE the discovered tickers. Spec: `spec/screens/screener.md`.
-
-### Deliverables
-
-1. **`client/src/pages/Screener.tsx`** (new) — top-level page; loading-state-fix pattern (header always visible, body shows skeleton + per-trait loading).
-2. **`client/src/components/common/BottomNav.tsx`** — add Screener tab (4 tabs total: Portfolio · Watchlist · **Screener** · Settings).
-3. **`client/src/routes.tsx`** — add `/screener` route.
-4. **`client/src/components/Screener/*`** (new):
-   - `TraitAccordion.tsx` — collapsible per-trait section; top-5 rows default + "Show all 30" expand. Section order: catalyst_reversal first when populated, range-traders default, drift last.
-   - `ScreenerRow.tsx` — uses the existing `TickerCard` primitive in `variant='screener'`. PriceFlicker wraps the price. Trait-specific chip cluster: `IntradayStatsChip` + "$X.XX band" for range-trader; gap multiplier + intraday move + beaten-down basis for catalyst_reversal; days-since-earnings + report-day pop for post_earnings_drift.
-   - `BandAnnotationChip.tsx` — small chip showing `session_regime` + `vol_scalar` annotation. Tap → opens popover with next predicted low/high bands. (Reuses the existing entry-zone popover styling pattern from Watchlist.)
-   - `PromoteSheet.tsx` — long-press / right-click on a row → sheet with "Add to Watchlist" + "Set marker" actions; the marker action prefills the price from the band engine's published p50 buy band.
-   - `ScreenerSettingsSheet.tsx` — gear icon → visible-traits toggles, top-N list size, sort (score / price / alphabetical), "hide tickers in my Watchlist" toggle.
-5. **`client/src/hooks/useScreenerData.ts`** — Supabase Realtime subscription on `trait_scores` + `band_state`, joined with `universe` + `contracts` for symbol/name lookup. Returns `tickersByTrait` shape ready to render.
-6. **Empty state**: "The screener is still warming up." (renders when no `trait_scores` rows exist for today). Refresh sub-row in header shows last-refresh timestamp.
-7. **Per-screen settings persist in localStorage** for v1 (Batch 15 will move them to `user_preferences.stat_config`-style — small follow-up migration).
-8. **CSS** for screener-specific blocks in `client/src/styles/components.css`.
-
-### Files this batch creates/edits
-- `client/src/pages/Screener.tsx` (new)
-- `client/src/components/common/BottomNav.tsx`
-- `client/src/routes.tsx`
-- `client/src/components/Screener/*.tsx` (new)
-- `client/src/hooks/useScreenerData.ts` (new)
-- `client/src/styles/components.css` (Screener-specific blocks)
-
-### Does NOT touch
-- Any signal-engine code, any cron, any schema. Pure FE consumer of S1+S2+S3 outputs.
-
-### Verification
-- New "Screener" tab visible in BottomNav.
-- Tapping it shows three accordions (catalyst_reversal at top when populated, range-traders default, drift last).
-- Each row shows trait-specific chips + walking-band annotation chip when `band_state` has data.
-- Tap a band chip → popover with next-low and next-high bands.
-- Long-press → promote sheet works; "Add to Watchlist" writes a `watchlist_items` row; the new ticker appears in Watchlist on next render.
-- Loading state shows header + accordion shells (not a whiteout — follows the loading-state pattern shipped 2026-05-30).
-
----
-
-## Batch M1: Agent context efficiency — measurement + structural slim-down
-
-**Depends on:** none. Pure tooling + dev-workflow batch; no product surface.
-
-**Scope:** stop paying for 150k+-token agent sessions where most of the burn is re-reading bloated coordination files. Four slices ship together: (1) a PreToolUse hook that counts per-file Read calls so future split rounds (M2) are data-driven, (2) immediate content-file splits where the bloat is already obvious (BUILD_QUEUE.md, CLAIMS.md), (3) procedure extraction from `AGENTS.md` into three Claude-Code skills whose plain-markdown bodies Cursor also reads, (4) a hierarchical README index across `spec/` so orientation reads scope to the folder you're touching. Subsequent content-file split rounds (e.g. slicing `spec/roadmap.md` or `spec/signals/*`) run **data-driven** after a week of stats. Spec: `spec/roadmap.md` → Meta — agent context efficiency.
-
-### Observed pain (why now)
-
-This session alone: `BUILD_QUEUE.md` (~1100 lines, ~38k tokens) and `CLAIMS.md` (~460 lines, ~30k tokens) both blew the Read-tool 25k single-call cap and forced truncated reads + follow-up Grep calls. `/context` reports messages at 183k tokens, dominated by tool-result file contents. Cache misses past the 5-min TTL on long sessions compound the cost. `AGENTS.md` (~230 lines) re-reads on every session orientation, and most of its bulk is procedure rather than policy.
-
-### Deliverables
-
-#### Slice A — Measurement
-
-1. **`.claude/hooks/read-counter.sh`** — PreToolUse hook on the `Read` tool. Appends one tab-separated line per call to gitignored `.claude-stats/file-reads.log`: `<utc-iso>\t<file-path>\t<bytes>\t<session-id>`. Non-blocking (`exit 0` always); silent (no stdout); resilient to a missing stats dir (creates on first call). Registered in `.claude/settings.local.json` so it loads only in this repo + only for the user who opts in.
-2. **`bin/upside-readstats`** — aggregator script: prints "top N most-read files" (lifetime + last 7d), avg bytes per read, sessions touched. Allowlisted via `Bash(bin/upside-readstats:*)` so the user (or the agent) can call it without an approval prompt. Reads from the gitignored log; never writes secrets.
-3. **`.claude-stats/` directory** — gitignored. Created lazily by the hook.
-4. **`.gitignore` update** — add `.claude-stats/`.
-
-#### Slice B — Immediate content splits
-
-5. **`BUILD_QUEUE.md` split** — keep current shape but move the **Completed batches** one-paragraph summaries (currently lines 18-83) into a new **`BUILD_QUEUE_DONE.md`** (archive). The active file becomes "Un-done batches + pick-order pointer" only. Cross-link from `BUILD_QUEUE.md`'s top: "Completed history: see `BUILD_QUEUE_DONE.md`."
-6. **`CLAIMS.md` split** — analogous: keep In progress + Known issues + the last ~5 completed batches; move older completed entries to a new **`CLAIMS_DONE.md`** (archive). Cross-link from `CLAIMS.md`'s bottom: "Older completed batches archived in `CLAIMS_DONE.md`."
-
-#### Slice C — Procedure extraction (three skills)
-
-7. **`.claude/skills/claim-batch/SKILL.md`** — claim protocol + push-race recovery + mid-batch handoff + stale-claim recovery (currently AGENTS.md lines 116–171). Description-line trigger: *"Use when claiming a batch from `BUILD_QUEUE.md` — eligibility check, dependency check, parallelism check, CLAIMS.md entry, `meta: claim` commit, push-race recovery, handoff/reclaim flows. Invoke before starting any new batch."*  Body is a focused step-by-step checklist; AGENTS.md becomes a 3-line policy pointer.
-8. **`.claude/skills/finish-batch/SKILL.md`** — finish protocol (currently AGENTS.md lines 130–138). Description-line trigger: *"Use when wrapping up a claimed batch — final commit, SHA capture, CLAIMS.md move-to-completed, `meta: complete` commit, push, `/compact` reminder."* Body is the step-by-step.
-9. **`.claude/skills/spec-edit/SKILL.md`** — encodes the "before editing spec" checklist + design-decision persistence (currently AGENTS.md lines 193–222). Description-line trigger: *"Use before editing any file under `spec/**`, or when persisting a design/spec decision the user has just made. Encodes concern-matching via per-folder README, size-watch, cross-reference rule, archive rule, propagation to `BUILD_QUEUE.md`, and the per-folder README pattern."* Body covers the full checklist incl. when to flag miscarving and the per-folder index convention.
-
-All three skills get allowlisted via `Skill(claim-batch)`, `Skill(finish-batch)`, `Skill(spec-edit)` in `.claude/settings.local.json` so invocation isn't a friction point — they just load their body, no side effects.
-
-#### Slice D — Hierarchical spec index
-
-10. **`spec/README.md` slim-down** — drop the `spec/signals/*` and `spec/screens/*` per-file rows. Keep root files (architecture / flows / schema / job-queue / roadmap / archive) + two pointer lines to the sub-folder READMEs. Reading-order + editing-convention sections stay.
-11. **`spec/signals/README.md`** (new) — per-folder index for the 9 signal files. One-line description per file, matching the current top-level descriptions.
-12. **`spec/screens/README.md`** (new) — per-folder index for the 7 screen files. Same shape.
-
-#### Slice E — AGENTS.md slim-down
-
-13. **`AGENTS.md` rewrite** — drops from ~230 to ~120 lines:
-    - Spec-layout table (lines 27–50) → one-liner pointer to `spec/README.md`.
-    - Claim protocol (116–128), Push race recovery (140–151), Mid-batch handoff (153–162), Stale-claim recovery (164–171) → each compressed to a 2–3 line policy statement + pointer to the `claim-batch` skill.
-    - Finish protocol (130–138) → 2-line policy + pointer to `finish-batch` skill.
-    - Design and spec decisions (193–222) → 2-line policy ("Design decisions must be persisted to `spec/**` and `BUILD_QUEUE.md` before moving on") + pointer to `spec-edit` skill.
-    - Commit-message convention table, file ownership, ideation handoff, branch model, what-does-NOT-belong → unchanged.
-
-### Out of scope (deferred to M2, data-driven, after ~1 week of stats)
-
-- Splitting content spec files (`spec/signals/*.md`, `spec/schema.md`, `spec/roadmap.md`) — coherence beats fragmentation; wait for the read-counter data to identify which sections are actually re-read independently before slicing.
-- Splitting code files — same reasoning; measure before cutting.
-- Auto-summarization of archive files.
-- Hooks on Write / Edit / Bash — not where the context goes.
-
-### Files this batch creates/edits
-- `.claude/hooks/read-counter.sh` (new)
-- `.claude/settings.local.json` (register hook + allowlist three skills)
-- `bin/upside-readstats` (new, chmod +x)
-- `.gitignore` (add `.claude-stats/`)
-- `BUILD_QUEUE.md` (move Completed batches → archive)
-- `BUILD_QUEUE_DONE.md` (new)
-- `CLAIMS.md` (move older completed → archive)
-- `CLAIMS_DONE.md` (new)
-- `.claude/skills/claim-batch/SKILL.md` (new)
-- `.claude/skills/finish-batch/SKILL.md` (new)
-- `.claude/skills/spec-edit/SKILL.md` (new)
-- `spec/README.md` (slim-down)
-- `spec/signals/README.md` (new)
-- `spec/screens/README.md` (new)
-- `AGENTS.md` (procedure extraction + spec-map → pointer)
-
-### Does NOT touch
-- Any code under `server/` or `client/`.
-- Any `spec/` content file other than the README slim-down and the two new sub-folder READMEs.
-- `CLAUDE.md` (already minimal — 4 lines deferring to AGENTS.md).
-
-### Verification
-
-- `bin/upside-readstats` prints a table after a few sessions; "top 5" should match intuition.
-- `BUILD_QUEUE.md` Read returns under the 25k cap without truncation.
-- `CLAIMS.md` Read returns under the 25k cap without truncation.
-- `AGENTS.md` Read returns under ~120 lines / ~4k tokens.
-- Existing pointers ("the screener track now sequences as S0.3 → ... → S4") still resolve cleanly post-split; un-done batch lookups don't require cross-file traversal.
-- All three skills appear in the available-skills system reminder at session start with their trigger descriptions.
-- Invoking each skill via the Skill tool returns the SKILL.md body without an approval prompt.
-- Existing AGENTS.md cross-references from spec / queue still resolve (the policy statements + skill pointers replace the procedures cleanly).
-- A clean session orientation read costs measurably fewer tokens (track via `/context` before/after).
-
-### Trigger for the data-driven follow-up batch (M2, sketched only)
-
-After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code files with sustained heavy read traffic AND a clear sub-structure that maps to independent reads (e.g. one section of a file consistently read alone), spawn M2 to split those. Don't pre-spec M2 — let the data shape it.
 
 ---
 
@@ -700,92 +48,124 @@ After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code file
 
 ---
 
-## Batch 13.2: Generic IB passthrough debug endpoint
+## Batch 13.9: Finnhub call inventory + per-category cadence tuning
 
-**Depends on:** Batch 13 (live IB available via IBeam).
+**Depends on:** Batches 14a, 14b, 14c, 14d (all Finnhub callers must exist before tuning).
 
-**Scope:** A single auth-gated, read-only, allowlist-enforced HTTP endpoint that proxies any IB Client Portal path the user supplies and returns the raw response untouched. Lets us pull live IB data shapes from the laptop with one `curl`, without spinning up the local Client Portal Gateway and re-authenticating in a browser. Strictly debug infrastructure; no FE surface.
-
-**Why now (not post-MVP):** post-MVP Watchlist track will need to inspect the real shape of `/v1/api/iserver/watchlists` and friends to lock the schema. Having this tool available *during* MVP work means we can capture watchlist payloads any time without blocking on post-MVP starting. The endpoint is tiny (~50-100 lines), strictly debug-only, and doesn't expand MVP user-facing scope.
+**Scope:** Now that all Finnhub callers in the codebase are real, inventory them and set sensible per-category min-intervals on the queue.
 
 ### Deliverables
 
-1. **New route** `GET /api/debug/ib-passthrough?path=<IB-PATH>[&...querystring]` in `server/src/routes/debug.ts`:
-   - **Auth-gated**: requires Bearer token from a whitelisted email. Non-whitelisted bearers → 403. Anonymous → 401.
-   - **IB session required**: if IBeam container is not running or session not authenticated → 503 with `{ reason: 'ib_not_connected' }`.
-   - **Path allowlist enforced**: the `path` query param must match one of an explicit allowlist of safe, read-only IB endpoints. Any other path → 400 with `{ reason: 'path_not_allowed', allowed: [...] }`.
-   - **Method is GET only.** No body. No way to POST / PUT / DELETE through this endpoint.
-   - **Response**: the raw IB response, content-type preserved, status code preserved (so 4xx/5xx from IB pass through transparently for debugging).
+1. **Inventory document** — short markdown table inside this batch's commit listing every Finnhub call:
+   - Caller (`signalEngine`, `accuracyUpdater`, `finnhubPricePoller`, etc.)
+   - Category (`quote`, `candle`, `news`, ...)
+   - Trigger (user-action, cron, fallback-only)
+   - Acceptable staleness ("price needs <90s fresh"; "news every 15 min is fine")
 
-2. **Allowlist** (in `server/src/services/ibPassthroughAllowlist.ts`) — explicit list of regexes matching safe IB Client Portal paths. Initial set:
-   ```
-   ^/v1/api/iserver/accounts$
-   ^/v1/api/iserver/account/[^/]+/summary$
-   ^/v1/api/iserver/auth/status$
-   ^/v1/api/iserver/contract/\d+/info$
-   ^/v1/api/iserver/marketdata/history$
-   ^/v1/api/iserver/marketdata/snapshot$
-   ^/v1/api/iserver/secdef/search$
-   ^/v1/api/iserver/watchlists$
-   ^/v1/api/iserver/watchlist$
-   ^/v1/api/portfolio/accounts$
-   ^/v1/api/portfolio/[^/]+/ledger$
-   ^/v1/api/portfolio/[^/]+/positions/\d+$
-   ^/v1/api/portfolio/[^/]+/summary$
-   ^/v1/api/portfolio/[^/]+/transactions$
-   ^/v1/api/tickle$
-   ```
-   **Explicitly forbidden** (never add to allowlist, document why): anything under `/v1/api/iserver/account/[^/]+/orders`, `/v1/api/iserver/reply/`, `/v1/api/iserver/scanner/`, or any path containing `order` / `place` / `cancel` / `modify`. Order operations would let a compromised auth token execute trades. Even though the IB allowlist is positive (only listed paths pass), document this rule in `ibPassthroughAllowlist.ts` so future additions don't accidentally cross the line.
+2. **Update default config in `finnhubQueue.ts`** with per-category min-intervals. Approximate starting values (tune empirically):
+   - `quote`: 60s per-key (fallback-only — when IB is on, this never fires)
+   - `candle`: 4h per-key (accuracy cron runs once daily)
+   - `news`: 15min per-key
+   - `insider`: 12h per-key
+   - `earnings`: 24h per-key
+   - `profile`: 7d per-key
 
-3. **Logging**: every passthrough call logs `{ caller_email, path, status, duration_ms }` to `external_api_metrics` with `provider: 'ib'` and a marker tag (e.g. `endpoint: 'debug-passthrough:<path>'`). Treats this surface as auditable from day one.
-
-4. **Local capture workflow**: user runs from laptop:
-   ```bash
-   TOKEN=$(... fetch from Supabase session, or paste from browser dev tools)
-   API_URL=https://<current-vercel-or-tunnel-url>
-
-   curl -sS -H "Authorization: Bearer $TOKEN" \
-     "$API_URL/api/debug/ib-passthrough?path=/v1/api/iserver/watchlists" \
-     > captures/watchlists-$(date -u +%Y-%m-%d).json
-
-   curl -sS -H "Authorization: Bearer $TOKEN" \
-     "$API_URL/api/debug/ib-passthrough?path=/v1/api/iserver/watchlist&id=<wl_id>" \
-     > captures/watchlist-<id>-$(date -u +%Y-%m-%d).json
-   ```
-   Files land in the gitignored `captures/` directory (already established in Batch 7).
-
-5. **README note** in `server/README.md` or a new `docs/debug.md` documenting the endpoint, the allowlist policy, the curl workflow, and the security model.
+3. **Verify under load** — fire a synthetic burst of analyses + price polls; confirm no 429s and that all caller-side flows still complete (any waits should be acceptable given the categories).
 
 ### Files this batch creates/edits
-- `server/src/routes/debug.ts` (new)
-- `server/src/services/ibPassthroughAllowlist.ts` (new)
-- `server/src/index.ts` (mount the debug route)
-- `server/src/services/ibGateway.ts` (potentially add a generic `ibRawGet(path, query)` helper if one isn't already exposed)
-- `docs/debug.md` (new, brief)
+- `server/src/services/finnhubQueue.ts` (config map), commit message contains the inventory table.
 
 ### Does NOT touch
-- Any FE files.
-- Any production routes or business logic.
-- Schema.
-- Discord.
-
-### Manual prerequisites
-- None new — uses existing whitelisted-email auth and the already-running IBeam.
+- Anything else.
 
 ### Verification
-- Whitelisted email + connected IB + allowlisted path → JSON response from IB.
-- Whitelisted email + connected IB + non-allowlisted path (e.g. `/v1/api/iserver/account/<id>/orders`) → 400 `path_not_allowed`.
-- Non-whitelisted bearer → 403.
-- No bearer → 401.
-- IB disconnected → 503 `ib_not_connected`.
-- Method other than GET → 405.
-- After a few captures, `external_api_metrics` shows audit rows tagged `debug-passthrough:*`.
-
-### Acceptance use-case (proof of utility, runs during this batch as the verification capstone)
-- Capture `/v1/api/iserver/watchlists` and one specific `/v1/api/iserver/watchlist?id=<id>` from live IB.
-- Paste the file list back into the chat with Claude so the post-MVP Watchlist track's data model can be locked against real shapes ahead of when its batch is built.
+- Burst test passes without 429s.
+- Real-world usage over a day shows no Finnhub error rows in `external_api_metrics`.
 
 ---
+
+## Batch 15: Alerts feed + Settings wired
+
+**Depends on:** Batch 14a, 14b, 14c.
+
+**Scope:** Replace the two `ComingSoon` placeholders with real screens. Reflects the unified-analysis decision (Alerts now lists both SELL and BUY signal events) and the 2-tab MVP bottom nav (Alerts is a bell icon in the Portfolio screen header, not a bottom-nav destination — see spec).
+
+### Deliverables
+
+1. **Alerts surface — bell icon in Portfolio header → Alerts screen**. The bell renders a small unread-count badge when there are new signal/zone events since the user last viewed the screen.
+
+2. **Alerts feed** — chronological list of all signal-related events, newest first:
+   - SELL signal generated, SELL range entered (Discord-fired)
+   - BUY signal generated, BUY range entered (Discord-fired)
+   - Zone entered (Discord-fired)
+   - no_signal analyses (so user sees "I looked at NVDA, no signal" history)
+   - **Display filter slider**: "Show signals above ___% Quality" (range: 0-100, default 50). **Display filter only — does NOT affect generation.** Settings has the separate generation threshold.
+   - Filter pills: All / Sell / Buy / Zone-Entry / no_signal.
+   - Empty state: "No signals yet. Tap Analyze on any position to generate one."
+
+3. **"I acted on this" button** on each Alerts list item → POST sets `signals.acted_on_at`. Zone-entries get a similar lightweight "Mark as seen" affordance.
+
+4. **Aggregate accuracy display** at top of Alerts feed: pulls from `GET /api/signals/accuracy` from Batch 14b. Shows per signal type:
+   - "Recent SELL signals: X% hit-rate over 30d, median +Y% from optimal."
+   - "Recent BUY signals: X% hit-rate over 30d, median +Y% from optimal."
+   - Placeholder copy if data is sparse in early days.
+
+5. **Settings (`/settings`)** — app-level (per spec):
+   - **IB Connection**: status indicator + Connect/Disconnect button.
+   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`). Clarify in copy: "BE-level minimum; the Alerts feed has a separate display filter."
+   - **Signal min market value** ($, persists to `user_preferences.signal_min_market_value`).
+   - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
+   - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
+   - **Theme** (Dark / Light / System, persists).
+   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a** (Settings "Analysis engine" section): lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced, takes effect on next analyze. Batch 15 just folds it into the final Settings layout — no rebuild.
+   - **Sign out** button.
+
+6. **`PUT /api/user/preferences`** — BE endpoint validates + upserts the user_preferences row. FE writes through this rather than directly to Supabase to keep validation centralized. *(Note: a GET/PUT `/api/user/preferences` route already shipped in Batch R2 for `risk_flag_config`; Batch 15 extends it to the rest of the prefs rather than building it fresh.)*
+
+### Files this batch creates/edits
+- `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (extend the existing preferences route).
+
+### Verification
+- Tap bell icon → Alerts list renders, shows signals + zone-entries.
+- Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
+- Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
+- Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
+
+---
+
+## Batch 16: Polish + PWA push notifications
+
+**Depends on:** Batch 15.
+
+**Scope:** Final pre-MVP sweep. Loading/error/empty states, mobile install guidance, a11y pass, and PWA push notifications (replacing the originally-dropped MVP item).
+
+### Deliverables
+
+1. **Loading states** for every async surface (initial portfolio load, chart load, analyze in progress, settings save).
+2. **Error states**: BE unreachable, IB session stalled mid-action, Supabase Realtime disconnect with reconnect.
+3. **Empty states** with helpful guidance (no positions: "Connect IB"; no signals yet: same as Batch 15).
+4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
+5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored. Tooltip semantics on the zone icon verified.
+6. **PWA push notifications**:
+   - Service worker push subscription on first launch (with permission prompt).
+   - VAPID key generation + backend dispatch logic via the `web-push` npm library.
+   - Subscribed devices get notified on the same triggers Discord uses (zone-entry, signal-range-entry). Discord stays as the developer/admin channel; PWA push is the user-facing channel.
+   - Quiet hours support in Settings (defer if scope creeps — Discord-only is acceptable for MVP).
+7. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
+
+### Files this batch creates/edits
+- Scattered touches across `client/src/`, plus `server/src/services/webPush.ts` (new), `client/public/service-worker.js`.
+
+### Verification
+- Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
+- Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
+- PWA push: grant permission on phone, kill the app, trigger a zone-cross from another device or by manual Supabase update → phone notification arrives within seconds.
+
+**🎯 Milestone: MVP per spec.**
+
+---
+
+# Blocked / deferred
 
 ## Batch 13.3: Secondary IBKR user + desired-state IBeam toggle
 
@@ -875,193 +255,9 @@ After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code file
 
 ---
 
-## Batch 13.5: Verify & implement `tradingDaysHeld` + MTD return
-
-**Depends on:** Batch 13.1.
-
-**Scope:** Two metrics flagged "⚠ Verification pending" in the spec — both currently unverified live. Resolve both, implement whichever is missing. After this batch, the spec's verification markers can be removed.
-
-### Deliverables
-
-1. **`tradingDaysHeld`** — for each held position, count of US trading days since entry:
-   - First investigation: query IB's transactions endpoint (`/v1/api/portfolio/<acctId>/transactions` — confirm exact name) for transaction history per held conid. Confirm response shape gives reliable entry dates including for positions held >1 year.
-   - If reliable: implement in `server/src/services/ibGateway.ts:ibTradingDaysHeld(conid)`, called by `pricePoller` once per position per session (cache result, only re-fetch if shares changed).
-   - If unreliable for older positions: fall back to Upside-tracked entry-date (write `first_seen_at` on `positions` when a new conid first appears, use that). Older positions show "≥N days" until the user's next change-in-shares event.
-
-2. **MTD return** — month-to-date portfolio return percent:
-   - First investigation: query IB's account summary (`/v1/api/portfolio/<acctId>/summary` or `/v1/api/iserver/account/<acctId>/summary` — confirm) for an MTD field.
-   - If present: surface via `GET /api/portfolio/summary` to the FE.
-   - If absent: implement via Redis-cached `portfolio_value_month_start` (set on first poll of each new month, never overwritten until the next month begins). MTD = `(current - cached) / cached`. Persists across api restarts via Redis durability.
-
-3. **FE wire-up**:
-   - `tradingDaysHeld` → `PositionStats` section's "Days held" row and `daysHeld`-derived "Return per day" row.
-   - MTD return → `SummaryStrip` right card.
-   - Both should render with reasonable fallback states (e.g. "—" if data unavailable rather than crashing).
-
-### Files this batch creates/edits
-- `server/src/services/ibGateway.ts`, `server/src/services/redis.ts` (month-start cache helper if needed), `server/src/routes/portfolio.ts`, `server/src/cron/pricePoller.ts` (capture month-start), possibly `supabase/migrations/00X_position_first_seen.sql` (if IB transactions unreliable), `client/src/components/TickerDetail/PositionStats.tsx`, `client/src/components/PortfolioHome/SummaryStrip.tsx`.
-
-### Does NOT touch
-- Signal engine, Discord, zone detection.
-
-### Verification
-- Portfolio screen shows real MTD return value (not "—" or placeholder).
-- Open any held position's detail → PositionStats shows real days-held + computed %/day.
-- Document the verification findings in the commit message / claim notes so the spec's "⚠ Verification pending" markers can be removed.
-
----
-
-## Batch 13.7: Finnhub rate-limited request queue
-
-**Depends on:** Batch 13.
-
-**Scope:** Build the queue infrastructure that all future Finnhub callers will use. No actual Finnhub features added in this batch — just the plumbing. Per-category cadence tuning happens in Batch 13.9 once real callers exist.
-
-### Deliverables
-
-1. **`server/src/services/finnhubQueue.ts`**:
-   - Token-bucket limiter, 50 calls/min global (configurable via env `FINNHUB_RATE_LIMIT_PER_MIN`, default 50). 10-call buffer below Finnhub's 60/min free-tier ceiling.
-   - Per-category min-interval-per-key support. Categories: `quote`, `candle`, `news`, `insider`, `earnings`, `profile` (extensible). Config map; default all categories to 0s min-interval (no throttle) for this batch — tuning happens in 13.9.
-   - **No stale-cache returns** — requests for the same `(category, key)` within an in-flight or recent same-pair request **wait for the next eligible slot**, then get fresh data. Worst-case wait equals the category's min-interval.
-   - FIFO ordering within a category; global token bucket shared across categories.
-   - Exponential backoff + 1 retry on 429 (defensive only).
-   - Exposed API: `finnhubQueue.request<T>(category, key, fn: () => Promise<T>): Promise<T>`.
-
-2. **`server/src/services/finnhub.ts`** — existing stub gets a small refactor: every existing or skeleton Finnhub call goes through `finnhubQueue.request()`. Even if some functions are stubs, the queue wrapper is in place so 14a/14b can use them directly.
-
-3. **Metrics table — rename or extend `ib_api_metrics` → `external_api_metrics`** (add a `provider text not null` column, default `'ib'` for existing rows). Instrument each Finnhub call same as IB: endpoint/category, duration_ms, status, retries. Lightweight; foundation for future per-category cadence tuning.
-
-### Files this batch creates/edits
-- `server/src/services/finnhubQueue.ts` (new), `server/src/services/finnhub.ts` (refactor to route through queue), `server/src/env.ts` (add `FINNHUB_RATE_LIMIT_PER_MIN`), `supabase/migrations/00X_external_api_metrics.sql` (rename or extend the IB metrics table).
-
-### Does NOT touch
-- Any feature consumer of Finnhub (those come in 14a/b/d).
-
-### Verification
-- Unit-test or manual: fire 100 requests in a tight loop through the queue, confirm fan-out respects 50/min and no Finnhub 429s.
-- `external_api_metrics` shows rows for any test calls made.
-
----
-
-## Batch 13.8: Multi-source price polling (IB primary, Finnhub fallback)
-
-**Depends on:** Batch 13.7.
-
-**Scope:** Make `current_price` updates IB-independent. When IB is connected, use IB. When IB is off, fall back to Finnhub quote endpoint via the queue. Both sources write to the same `positions` row. This is what makes the on-demand IBeam model actually viable as a daily-use product — the user can leave IB off and still see fresh-enough data.
-
-### Deliverables
-
-1. **Schema (`supabase/migrations/00X_price_source.sql`)**:
-   - Add `price_source text not null default 'ib'` to `positions` (enum-like: `'ib' | 'finnhub'`).
-   - Add `last_price_update_at timestamptz null` to `positions` (used by Finnhub poller to decide whether to skip).
-
-2. **`server/src/cron/pricePoller.ts`** — split / rename:
-   - `ibPricePoller`: keeps existing adaptive cadence (10s / 60s / 5min based on market period). Writes with `price_source: 'ib'` and updates `last_price_update_at`. Runs only when IB session `connected`.
-   - `finnhubPricePoller`: new. 60s cadence, always-on. For each held position, if `last_price_update_at` is null or older than 90s, fetch quote via `finnhubQueue.request('quote', symbol, ...)` and write with `price_source: 'finnhub'`.
-
-3. **Optional FE indicator (cheap to add now, deferred render):** PositionCard accepts `priceSource` prop. Default: render nothing extra. Behind a feature flag, render a small "F" badge near the price when source is Finnhub. Useful for debugging but no need to expose to user yet.
-
-### Files this batch creates/edits
-- `server/src/cron/ibPricePoller.ts` (renamed from / split off pricePoller.ts), `server/src/cron/finnhubPricePoller.ts` (new), `server/src/services/finnhub.ts` (add `getQuote(symbol)`), `supabase/migrations/00X_price_source.sql`, optional small PositionCard prop addition.
-
-### Does NOT touch
-- Signal engine, zone detection (those come in 14a/14c respectively but consume what this batch provides).
-
-### Verification
-- IB connected: positions update every 10-60s with `price_source = 'ib'`.
-- Disconnect IB via FE button → wait 90s → Supabase shows positions still updating, `price_source = 'finnhub'`.
-- Reconnect IB → next IB poll wins → `price_source` returns to `'ib'`, Finnhub poller goes idle.
-
----
-
-## Batch 14a: Signal engine + manual unified analysis end-to-end
-
-**Depends on:** Batch 13.1, 13.5, 13.7.
-
-**Scope:** The brain. User taps Analyze → 10-15s later one unified analysis lands in Supabase — both SELL and BUY directions evaluated, both rendered on TickerDetail when present. Replaces the original Batch 14 in the queue; split into 14a (engine) and 14b (accuracy) for cleaner scope. Reflects the post-Batch-13 decision to make all MVP analyses unified (see UPSIDE_MVP_SPEC.md → "Signal Model").
-
-### Deliverables
-
-#### Backend
-
-1. **Schema additions (`supabase/migrations/00X_unified_signals.sql`)**:
-   - New `analyses` table: `{ analysis_id uuid pk, user_id uuid, symbol text, conid bigint, indicator_snapshot jsonb, reasoning text, analyzed_at timestamptz, expires_at timestamptz }`. Holds shared analysis context.
-   - Alter `signals` table:
-     - Drop the legacy `signalType` `'sell' | 'no_signal'` check constraint; widen to `'sell' | 'buy' | 'no_signal'`.
-     - Add `analysis_id uuid not null references analyses(analysis_id)`.
-     - Add `motivation text null` — `'take_profit' | 'derisk' | 'avoid_downside'` for SELL; `'pullback_entry' | 'breakout_continuation' | 'value'` for BUY; null for `no_signal`.
-     - Add `rationale text null` — direction-specific reasoning bullet (the overall narrative lives on `analyses.reasoning`).
-   - Index `signals(user_id, symbol, analyzed_at desc)` for the "latest non-superseded" query.
-
-2. **Provider implementations in `server/src/services/llm.ts`**:
-   - Real `GeminiProvider.analyze(context)` using Gemini API.
-   - Stubs for `ClaudeProvider` / `OpenAiProvider` that throw a clear error pointing to the relevant env var.
-
-3. **`server/src/services/signalEngine.ts`** (new) — orchestrates a single unified analysis:
-   - Acquire `analysis_locks` row (TTL 5 min — see step 8).
-   - Ensure `contracts` cache row exists (lazy-fetch).
-   - Pull intraday + daily history from IB; compute RSI, MACD, Bollinger, VWAP via `technicals.ts`.
-   - Pull current snapshot via `ibGateway.ibSnapshot`.
-   - Pull news / earnings / insider data via Finnhub (through the queue).
-   - **Read position's zone state** (`zone_entered_at`, `entered_zone_via_gap` — fields exist post-Batch-14c, null-safe before then). If `inZone`: populate `contextualTriggers.inProfitTakingZone`.
-   - Assemble structured LLM prompt. The prompt requests **unified analysis: indicator readings, narrative reasoning, then nullable `sellSignal` and `buySignal` blocks**. Both nulls is valid output (no actionable signal in either direction). `contextualTriggers` section reserved in prompt structure for future trigger types.
-   - Call `llm.analyze()`.
-   - **Zod-validate the LLM response.** On malformed: retry once with a stricter prompt. On second failure: write one `signals` row with `signalType: 'no_signal'` and reason "LLM response malformed", linked to a parent `analyses` row, then release lock.
-   - On valid response: insert one `analyses` row, then 1-2 `signals` rows (one for each non-null direction; or one `no_signal` row if both null).
-   - **Supersede prior analyses**: for the same `(user_id, symbol)`, update all prior non-superseded `signals` rows: `superseded_by_analysis_id = <new analysis_id>`. Whole-analysis supersede semantics regardless of which directions filled in (see spec).
-   - Release lock.
-
-4. **`server/src/services/technicals.ts`** — full implementations: `rsi()`, `macd()`, `bollinger()`, `vwap()`. Use `technicalindicators` npm package.
-
-5. **`server/src/services/finnhub.ts`** — flesh out `getCompanyNews`, `getInsiderTransactions`, `getEarningsCalendar` (all through the queue).
-
-6. **`server/src/routes/signals.ts`** — replace the 501 stub with a real handler:
-   - **Re-analyze soft-block**: check if an `analyses` row exists for `(user_id, symbol)` with `analyzed_at` within last 5 min. If yes: return `429` with `{ lastAnalyzedAt, reason: 'recent_analysis' }`. FE re-sends with `force: true` to bypass.
-   - **Daily cost ceiling**: env var `MAX_LLM_CALLS_PER_DAY` (default 50). Per-day counter in Redis keyed `llm_calls:YYYY-MM-DD` with midnight-UTC TTL. If exceeded: return 429 with `{ reason: 'daily_limit_reached' }`. **Each unified analysis counts as one call**, regardless of how many signals it produces.
-   - Invoke `signalEngine.analyze()` async, return 202 immediately. FE subscribes to `signals` Realtime to detect completion.
-
-7. **Note on idempotency**: explicitly **NOT** adding idempotency keys. The `analysis_locks` row already prevents concurrent double-runs.
-
-8. **Analysis lock TTL bumped to 5 min**: cron `lockCleanup.ts` cleans rows older than 5 min.
-
-#### Frontend
-
-9. **`client/src/components/TickerDetail/SignalSection.tsx`** — wire to real signal data via Supabase Realtime. Latest non-superseded analysis's signal rows render: shared `indicator analysis` + `reasoning` header (from the `analyses` row), then per-direction blocks below (SELL block if `sellSignal` row exists, BUY block if `buySignal` row exists, "no signal: <reason>" if `no_signal`). "View history" expands the chronological list across `analyses`.
-
-10. **`client/src/hooks/useAnalysisLock.ts`** — subscribe to `analysis_locks` for the active (user, symbol) → disable Analyze button when locked.
-
-11. **Two-step Analyze button (per spec)**: tap → grey out 1s → "Confirm analyze" → tap again → POST `/api/signals/analyze`.
-
-12. **Re-analyze soft-block UI**: on 429 with `reason: 'recent_analysis'` + `lastAnalyzedAt`, render confirm prompt. On Yes, re-POST with `force: true`.
-
-13. **Daily-limit-reached UI**: on 429 with `reason: 'daily_limit_reached'`, show inline "Daily analysis limit reached — resets at midnight UTC" and disable button until then.
-
-14. **`SignalPill` primitive** (in `client/src/components/primitives/SignalPill.tsx`): renders `[<type> · <quality>% · <motivation> · $<low>-<high>]`. Used on TickerCards by both held and watchlist variants. Colors per `signalType`: SELL red, BUY green, no_signal gray. Both pills can render simultaneously on a card.
-
-### Files this batch creates/edits
-- `supabase/migrations/00X_unified_signals.sql` (new — analyses table + signals schema changes)
-- `server/src/services/llm.ts`, `server/src/services/signalEngine.ts` (new), `server/src/services/technicals.ts`, `server/src/services/finnhub.ts`, `server/src/services/redis.ts` (LLM cost counter helpers), `server/src/routes/signals.ts`, `server/src/cron/lockCleanup.ts` (renamed from signalRunner.ts, 5-min TTL)
-- `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/hooks/useAnalysisLock.ts`, `client/src/hooks/useSignals.ts`, `client/src/components/primitives/SignalPill.tsx` (new)
-
-### Manual prerequisites (user)
-- Get Gemini API key at aistudio.google.com → add `GEMINI_API_KEY` to VPS `.env`.
-- Get Finnhub API key at finnhub.io → add `FINNHUB_API_KEY` to VPS `.env`.
-- `docker compose restart api`.
-
-### Verification
-- Tap Analyze on a held position → 1s greyed → tap again → ~10-15s later TickerDetail's Signal Section renders with shared indicators + reasoning header, plus per-direction block(s) for whichever of SELL / BUY the LLM emitted.
-- Tap Analyze on a non-held watchlistable ticker → same flow; expect BUY block likely (LLM has nothing to sell), maybe SELL block if it thinks a short-equivalent exit case exists.
-- Tap Analyze on a position with strong bull + bear signals → both SELL and BUY blocks render; pills row on TickerCard shows both.
-- Tap Analyze again immediately → 429 with soft-block prompt → confirm → new analysis runs and supersedes the prior analysis's signal rows (`superseded_by_analysis_id` populated, latest renders).
-- Force 51 analyses in a day (test mode) → 51st returns daily-limit-reached.
-- Crash mid-analysis via SIGKILL on the api → cron cleans up stale lock within 5 min → button re-enables.
-- Send a malformed LLM response (test mode) → retry happens → second failure writes `no_signal` row with reason "LLM response malformed" → no crash.
-
----
-
 ## Batch 14b: Daily hindsight accuracy tracking cron
 
-**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework is now happening as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signals/playbook.md`; scope in `CLAIMS.md`.
+**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework happened as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signals/playbook.md`; scope in `CLAIMS.md`.
 
 **Depends on:** Batch 14a, 13.7.
 
@@ -1097,68 +293,9 @@ After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code file
 
 ---
 
-## Batch 14c: Profit-taking zone detection + Discord notifications + card UI
-
-**Depends on:** Batch 13.8.
-
-**Scope:** Continuous detection that a position is in profit-taking zone (P&L crosses threshold). One Discord notification per zone-entry with 4h cooldown. Card UI emphasis with tooltip. LLM `contextualTriggers` field populated. Replaces the originally-planned pre-market gap detection — gap is now just one cause of zone-entry, marked with a small "GAP" badge for the day.
-
-### Deliverables
-
-#### Backend
-
-1. **Schema (`supabase/migrations/00X_profit_zone.sql`)**:
-   - Add to `positions`: `zone_entered_at timestamptz null`, `zone_exited_at timestamptz null`, `last_zone_notification_at timestamptz null`, `entered_zone_via_gap boolean not null default false`.
-   - Add to `user_preferences`: `profit_zone_threshold_pct numeric not null default 2.0`.
-
-2. **Zone state recomputation** — extend `ibPricePoller` and `finnhubPricePoller` (from Batch 13.8) to compute zone state on every write:
-   - Read user's threshold from `user_preferences`.
-   - `wasInZone = (priorRow.zone_entered_at !== null)`; `nowInZone = pnlPct >= threshold`.
-   - If `!wasInZone && nowInZone`: set `zone_entered_at = now()`, `entered_zone_via_gap = (now() < todays_regular_open_in_ET)`, call `discord.notifyZoneEntry()` (which checks cooldown internally).
-   - If `wasInZone && !nowInZone`: set `zone_exited_at = now()`, clear `zone_entered_at`.
-   - At end-of-regular-session each day: clear `entered_zone_via_gap` for all positions (small daily cleanup task).
-
-3. **`server/src/services/discord.ts`** — extend existing multi-channel notifier:
-   - New env var: `DISCORD_WEBHOOK_ZONES`.
-   - `notifyZoneEntry(position)` function. Internal cooldown check: if `last_zone_notification_at` is within 4h, skip silently. Else fire notification and set `last_zone_notification_at = now()`.
-   - Message format: `🔔 {symbol} entered profit-taking zone — P&L +{X.XX}% (threshold: +{Y}%){gap suffix if viaGap}`.
-
-4. **`contextualTriggers` populated in `signalEngine`** (cooperates with Batch 14a):
-   - When user taps Analyze, signalEngine reads position's `zone_entered_at` and `entered_zone_via_gap`.
-   - If `inZone`: populate `contextualTriggers.inProfitTakingZone = { thresholdPct, currentPnlPct, viaGap }`.
-   - The LLM prompt's contextual-triggers section interpolates: "This position is in profit-taking zone (P&L +X.X%, threshold +Y%). Address specifically: should we take profit here, or hold for more? {If viaGap: 'Zone entry was caused by an overnight gap, which often fades at open due to others taking profit.'}"
-   - This batch updates the prompt template; the framework hookup itself happened in 14a.
-
-#### Frontend
-
-5. **`client/src/components/PortfolioHome/PositionCard.tsx`**:
-   - When `position.zone_entered_at IS NOT NULL` (and not exited): render small icon (initial pick: `⇡` Unicode glyph or a lightning-bolt SVG — final choice during implementation) next to the P&L number on the card.
-   - **Tooltip**: hover (desktop) or long-press (mobile) shows: `"Profit-taking zone — P&L crossed +{threshold}% threshold. Consider analyzing."`. Use a small `Tooltip` common component (Radix UI tooltip is fine; or hand-rolled with proper a11y attributes).
-   - When `entered_zone_via_gap`: additionally render a small "GAP" mini-badge near the icon for the trading day.
-   - Card structural layout is NOT altered. Icon and GAP badge are inline with P&L.
-
-6. **`client/src/components/TickerDetail/SignalSection.tsx`** — when position `inZone`, show inline shortcut button "Analyze for profit-taking?" that triggers the normal Analyze flow (the `contextualTriggers` get auto-attached server-side based on current zone state).
-
-7. **Common `Tooltip` component** (`client/src/components/common/Tooltip.tsx`) — if it doesn't already exist. Hover for desktop, long-press for mobile. ESC dismisses. Used by the zone icon and gap badge here; potentially other future hover-help surfaces.
-
-### Files this batch creates/edits
-- `supabase/migrations/00X_profit_zone.sql`, `server/src/cron/ibPricePoller.ts` + `finnhubPricePoller.ts` (zone recompute), `server/src/services/discord.ts` (zones channel + notifyZoneEntry), `server/src/services/signalEngine.ts` (contextualTriggers populator), `client/src/components/PortfolioHome/PositionCard.tsx`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/components/common/Tooltip.tsx`, `client/src/types/index.ts` (Position type additions: `zone_entered_at`, `entered_zone_via_gap`, etc.).
-
-### Manual prerequisite (user)
-- Create new Discord channel `#upside-zones`, generate webhook, add `DISCORD_WEBHOOK_ZONES` to VPS `.env`, `docker compose restart api`.
-
-### Verification
-- Set threshold to 0.5% temporarily; positions cross threshold → Discord ping arrives in `#upside-zones`, card icon appears.
-- Tooltip on hover (desktop) and long-press (mobile) shows correct text.
-- Price flips in/out of zone within 4h → only first transition notifies.
-- Manually update a position to simulate overnight gap (write a zone-entry timestamp before today's open) → GAP badge renders alongside zone icon → clears at end of session.
-- Tap Analyze on a zone position → signal reasoning explicitly addresses profit-taking decision.
-
----
-
 ## Batch 14d: Signal-range Discord notifications (SELL + BUY)
 
-**DEFERRED (2026-05-26):** deferred alongside Batch 14b until signal quality improves (see the 14b note + `CLAIMS.md` → Known issues). The zone-entry notifications in 14c still ship; this is specifically the *signal-range* pings.
+**DEFERRED (2026-05-26):** deferred alongside Batch 14b until signal quality improves (see the 14b note + `CLAIMS.md` → Known issues). The zone-entry notifications in 14c still ship; this is specifically the *signal-range* pings. **Note (2026-06):** the dip-bounce track (X1) shipped a generic `signal_fires`/`signal_outcomes` backbone with two suggestion channels — when this un-defers, port it onto that backbone rather than building parallel range-check plumbing.
 
 **Depends on:** Batch 14a, 14c.
 
@@ -1192,195 +329,3 @@ After ~1 week of stats, when `bin/upside-readstats` surfaces ≥3 spec/code file
 - Generate a unified analysis with a BUY range slightly below current price. Wait for price to drift down into range. Discord ping arrives once in `#upside-signals-buy`; `entered_range_at` set on the BUY signal row.
 - Re-trigger same condition → no duplicate notification (one-time event).
 - Same analysis producing both SELL and BUY: only the relevant channel fires when price enters its respective range.
-
----
-
-## Batch 14e: Marketdata snapshot endpoint + TickerDetail wire-up
-
-**Depends on:** Batch 13 (live IB), Batch 13.8 (Finnhub queue for fallback).
-
-**Scope:** Fill the TickerDetail data that's been hardcoded empty since the screen was built against mock data. `useTickerDetail` currently returns `dayLow/dayHigh: 0`, `currentInRange: 0`, `marketStats: []` (see comments in `client/src/hooks/useTickerDetail.ts`), so **Today's Range** shows zeros and **Market Stats** is blank. This batch builds the snapshot endpoint that feeds both. Spec: `screens/_design-system.md` → Today's Range / Market Stats (data-source notes).
-
-### Deliverables
-1. **`GET /api/marketdata/snapshot/:symbol`** (`server/src/routes/marketdata.ts`) — auth-gated. Returns `{ dayLow, dayHigh, open, prevClose, last, week52High, week52Low, stats: { volume, peRatio, eps, marketCap, beta, avgVol30d, ... } }`.
-   - Primary source: IB snapshot (subscribe-wait-fetch `ibSnapshot`, already built) for day range + intraday fields; IB fundamentals for 52-week range / P-E / EPS / beta / market cap.
-   - Fallback: Finnhub quote + basic-financials via the rate-limited queue when IB is disconnected.
-2. **`useTickerDetail` wire-up**: replace the hardcoded `0`/`[]` with the snapshot fields; compute `currentInRange` from real `dayLow/dayHigh`. Map the stat pool to the `MarketStats` panel; keep `stat_config` ordering.
-3. **Caching**: short Redis TTL (e.g. 30-60s) on the snapshot per symbol to avoid hammering IB on every TickerDetail open.
-
-### Files
-- `server/src/routes/marketdata.ts`, `server/src/services/ibGateway.ts` (snapshot/fundamentals field mapping), `server/src/services/finnhub.ts` (fallback), `server/src/services/redis.ts` (cache helper), `client/src/hooks/useTickerDetail.ts`, `client/src/components/TickerDetail/MarketStats.tsx`.
-
-### Does NOT touch
-- Signal engine, chart history endpoint (already real), pollers.
-
-### Verification
-- Open a held ticker → Today's Range bar reflects real day low/high with the dot positioned correctly; Market Stats grid populated; 52-week range bar shows real bounds.
-- Disconnect IB → snapshot still returns via Finnhub fallback (some fundamental fields may be null — render "—").
-
----
-
-## Batch 14f: TickerDetail real-data chart + signal polish
-
-**Depends on:** Batch 14a (signals/pills). Independent of 14e.
-
-**Scope:** Four FE fixes where the chart/signal UI was built against mock data and doesn't behave on real data. Frontend-only (Vercel deploy). Spec: `screens/_design-system.md` → Price Chart / Signal Section.
-
-### Deliverables
-1. **RSI subchart** — `PriceChart.tsx` hardcodes `rsi: []` on the real-data path (line ~40), so the RSI line never draws while the decorative band `<div>`s still render ("bands but no data"). Compute RSI **client-side** from the fetched candles and render the line; render the bands only when RSI data is present.
-2. **Y-axis scaling** — the main price scale uses default autoscale margins (~20% top), pushing the top far above the day's high (e.g. 4.8 shown for a 4.59 high). Set explicit `rightPriceScale.scaleMargins` (tighter top) so the high sits closer to the top edge.
-3. **Entry / position-price line** — already wired to `positionStats.avgCost` but too faint, and the "Entry" arrow marker lands at the chart's left edge when no real entry date is in-window. Make the horizontal avg-cost line prominent + labeled ("Avg $XX.XX"); render the entry-date marker only when the purchase date falls in the visible window.
-4. **Collapsed Signal section shows pills** — extend `CollapsibleSection` with an optional header accessory; in the Signal section render the `SignalPill` row there so the actionable signals stay visible when collapsed (parity with TickerCard).
-
-### Files
-- `client/src/components/TickerDetail/PriceChart.tsx`, `client/src/components/common/CollapsibleSection.tsx`, `client/src/components/TickerDetail/TickerDetail.tsx`, `client/src/components/TickerDetail/SignalSection.tsx`, `client/src/styles/components.css`. RSI: reuse `technicalindicators` or a small local RSI util.
-
-### Does NOT touch
-- Backend, marketdata snapshot (that's 14e), signal engine.
-
-### Verification
-- Toggle RSI on a real ticker → line renders inside the banded pane; bands gone when RSI unavailable.
-- Chart top sits just above the day's high, not ~5% over.
-- Avg-cost line is clearly visible + labeled; no stray "Entry" marker at the chart edge.
-- Collapse the Signal section → the SELL/BUY pills remain visible in the header.
-
----
-
-## Batch 14.5: Schema cleanup — remove `position_history`
-
-**Depends on:** Batch 13.
-
-**Scope:** Drop the unused `position_history` table and related references. MTD now comes from Redis cached month-start (Batch 13.5); accuracy lives on `signals`. The table was deferred-feature scaffolding that never had a real use case.
-
-### Deliverables
-1. **`supabase/migrations/00X_drop_position_history.sql`**: `drop table if exists position_history cascade;`.
-2. Edit `supabase/migrations/001_initial.sql` (the consolidated baseline) to remove the `position_history` table definition so a future fresh apply doesn't recreate it.
-3. Grep codebase for any imports / types referring to it → remove.
-4. Spec entry for `position_history` already removed (handled in spec edits).
-
-### Files this batch creates/edits
-- `supabase/migrations/00X_drop_position_history.sql`, `supabase/migrations/001_initial.sql`, possibly `server/src/types/index.ts`.
-
-### Does NOT touch
-- Active features.
-
-### Verification
-- `select * from position_history` errors with "relation does not exist".
-- `pnpm typecheck` clean (or equivalent).
-
----
-
-## Batch 13.9: Finnhub call inventory + per-category cadence tuning
-
-**Depends on:** Batches 14a, 14b, 14c, 14d (all Finnhub callers must exist before tuning).
-
-**Scope:** Now that all Finnhub callers in the codebase are real, inventory them and set sensible per-category min-intervals on the queue.
-
-### Deliverables
-
-1. **Inventory document** — short markdown table inside this batch's commit listing every Finnhub call:
-   - Caller (`signalEngine`, `accuracyUpdater`, `finnhubPricePoller`, etc.)
-   - Category (`quote`, `candle`, `news`, ...)
-   - Trigger (user-action, cron, fallback-only)
-   - Acceptable staleness ("price needs <90s fresh"; "news every 15 min is fine")
-
-2. **Update default config in `finnhubQueue.ts`** with per-category min-intervals. Approximate starting values (tune empirically):
-   - `quote`: 60s per-key (fallback-only — when IB is on, this never fires)
-   - `candle`: 4h per-key (accuracy cron runs once daily)
-   - `news`: 15min per-key
-   - `insider`: 12h per-key
-   - `earnings`: 24h per-key
-   - `profile`: 7d per-key
-
-3. **Verify under load** — fire a synthetic burst of analyses + price polls; confirm no 429s and that all caller-side flows still complete (any waits should be acceptable given the categories).
-
-### Files this batch creates/edits
-- `server/src/services/finnhubQueue.ts` (config map), commit message contains the inventory table.
-
-### Does NOT touch
-- Anything else.
-
-### Verification
-- Burst test passes without 429s.
-- Real-world usage over a day shows no Finnhub error rows in `external_api_metrics`.
-
----
-
-## Batch 15: Alerts feed + Settings wired
-
-**Depends on:** Batch 14a, 14b, 14c.
-
-**Scope:** Replace the two `ComingSoon` placeholders with real screens. Reflects the unified-analysis decision (Alerts now lists both SELL and BUY signal events) and the 2-tab MVP bottom nav (Alerts is a bell icon in the Portfolio screen header, not a bottom-nav destination — see spec).
-
-### Deliverables
-
-1. **Alerts surface — bell icon in Portfolio header → Alerts screen**. The bell renders a small unread-count badge when there are new signal/zone events since the user last viewed the screen.
-
-2. **Alerts feed** — chronological list of all signal-related events, newest first:
-   - SELL signal generated, SELL range entered (Discord-fired)
-   - BUY signal generated, BUY range entered (Discord-fired)
-   - Zone entered (Discord-fired)
-   - no_signal analyses (so user sees "I looked at NVDA, no signal" history)
-   - **Display filter slider**: "Show signals above ___% Quality" (range: 0-100, default 50). **Display filter only — does NOT affect generation.** Settings has the separate generation threshold.
-   - Filter pills: All / Sell / Buy / Zone-Entry / no_signal.
-   - Empty state: "No signals yet. Tap Analyze on any position to generate one."
-
-3. **"I acted on this" button** on each Alerts list item → POST sets `signals.acted_on_at`. Zone-entries get a similar lightweight "Mark as seen" affordance.
-
-4. **Aggregate accuracy display** at top of Alerts feed: pulls from `GET /api/signals/accuracy` from Batch 14b. Shows per signal type:
-   - "Recent SELL signals: X% hit-rate over 30d, median +Y% from optimal."
-   - "Recent BUY signals: X% hit-rate over 30d, median +Y% from optimal."
-   - Placeholder copy if data is sparse in early days.
-
-5. **Settings (`/settings`)** — app-level (per spec):
-   - **IB Connection**: status indicator + Connect/Disconnect button.
-   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`). Clarify in copy: "BE-level minimum; the Alerts feed has a separate display filter."
-   - **Signal min market value** ($, persists to `user_preferences.signal_min_market_value`).
-   - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
-   - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
-   - **Theme** (Dark / Light / System, persists).
-   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a** (Settings "Analysis engine" section): lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced, takes effect on next analyze. Batch 15 just folds it into the final Settings layout — no rebuild.
-   - **Sign out** button.
-
-6. **`PUT /api/user/preferences`** — BE endpoint validates + upserts the user_preferences row. FE writes through this rather than directly to Supabase to keep validation centralized.
-
-### Files this batch creates/edits
-- `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (new — preferences PUT/GET).
-
-### Verification
-- Tap bell icon → Alerts list renders, shows signals + zone-entries.
-- Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
-- Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
-- Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
-
----
-
-## Batch 16: Polish + PWA push notifications
-
-**Depends on:** Batch 15.
-
-**Scope:** Final pre-MVP sweep. Loading/error/empty states, mobile install guidance, a11y pass, and PWA push notifications (replacing the originally-dropped MVP item).
-
-### Deliverables
-
-1. **Loading states** for every async surface (initial portfolio load, chart load, analyze in progress, settings save).
-2. **Error states**: BE unreachable, IB session stalled mid-action, Supabase Realtime disconnect with reconnect.
-3. **Empty states** with helpful guidance (no positions: "Connect IB"; no signals yet: same as Batch 15).
-4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
-5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored. Tooltip semantics on the zone icon verified.
-6. **PWA push notifications**:
-   - Service worker push subscription on first launch (with permission prompt).
-   - VAPID key generation + backend dispatch logic via the `web-push` npm library.
-   - Subscribed devices get notified on the same triggers Discord uses (zone-entry, signal-range-entry). Discord stays as the developer/admin channel; PWA push is the user-facing channel.
-   - Quiet hours support in Settings (defer if scope creeps — Discord-only is acceptable for MVP).
-7. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
-
-### Files this batch creates/edits
-- Scattered touches across `client/src/`, plus `server/src/services/webPush.ts` (new), `client/public/service-worker.js`.
-
-### Verification
-- Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
-- Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
-- PWA push: grant permission on phone, kill the app, trigger a zone-cross from another device or by manual Supabase update → phone notification arrives within seconds.
-
-**🎯 Milestone: MVP per spec.**

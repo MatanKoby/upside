@@ -70,3 +70,55 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ### Slice: Vercel SPA hard-refresh fix — COMPLETE
 `client/vercel.json` adds a rewrites rule (everything except `/assets/`, `/sw.js`, workbox, manifest, favicon, robots → `/index.html`) so hard-refresh on `/watchlist`, `/ticker/:symbol`, etc. doesn't 404. Schema validation in Vercel rejected the `comments` field — stripped to just `$schema` + `rewrites`.
+
+---
+
+## Signal / playbook track (Batches 13.2–14g)
+
+> One-liners only — full "What shipped" entries live in `CLAIMS_DONE.md`; git log has the diffs.
+
+- **13.2** — generic IB passthrough debug endpoint (`/api/debug/ib/*`, allowlisted).
+- **13.5** — `tradingDaysHeld` + MTD return (Redis month-start anchor; MTD card later removed).
+- **13.7** — Finnhub rate-limited request queue (per-category min-intervals, the backbone every Finnhub caller shares).
+- **13.8** — multi-source price polling (IB primary + Finnhub fallback, `price_source` tracking).
+- **14a** — signal engine + manual analysis end-to-end (later reshaped by 14g).
+- **14c** — profit-taking zone detection + Discord + card UI (`zone_*` fields on positions).
+- **14e** — marketdata snapshot endpoint + TickerDetail wire-up (Today's Range + Market Stats).
+- **14f** — TickerDetail real-data chart + signal polish.
+- **14.5** — schema cleanup, removed `position_history`.
+- **14g** — single-direction **playbook** engine: computed feature pack (`technicals.ts`), per-leg legs + horizon, `signals.playbook jsonb`, level-anchored prompt. (Migration `010_playbook.sql`.)
+
+---
+
+## Screener track (Batches S0.3–S3)
+
+- **S0.3** — async job queue `screener_jobs` (partial-unique dedup index, per-pool workers ib/finnhub/compute, reaper + retention). Migration `021`. The infra every screener cron runs on.
+- **S0.5** — universe price+volume coverage: Polygon grouped-daily (primary) + Yahoo v8/chart (per-gap fallback) via the job queue. Migration `022` (`universe.last_volume`). `services/universeQuote.ts` + `universeQuoteProducer`.
+- **S1** — `universe` table + nightly Ring-1 filter cron (Finnhub symbol list → type/MIC sieve → price/cap gate). Migration `019`. Synthetic FNV conid PK.
+- **S1.5** — real IBKR conid resolution via `ibSecdefSearch` on the `ib` pool. Migration `023` (`real_conid` + `auto_promoted`). `conidPicker` (US-STK match, first-listed tiebreak).
+- **S2** — three trait scorers (`intraday_range_trader` / `catalyst_reversal` / `post_earnings_drift`) → `trait_scores`; staggered `intradayStatsCron` (1/7 universe/day); weekly cap refresh; first-fire Discord. Migrations `024` (trait_scores) + `025` (screener_jobs.result).
+- **S3** — adaptive band engine: session-regime + vol-scalar + walking-state + vol-regime-shift layers on the static intraday_stats band; `bandEngineCron`; band-touch Discord (4h cooldown). Migration `026` (`band_state`).
+
+---
+
+## Dip-bounce + data-SSOT track (Batches X1–X6)
+
+- **X1** — dip-bounce track: `curated_list` pool, intraday + swing scorers → two suggestion channels, and the durable `signal_fires` / `signal_outcomes` / `signal_hit_rate_30d` forward-tracking backbone. Migration `028`. Compute-set widening (curated ∪ active-watchlist ∪ held).
+- **X2** — Watchlist virtual lists (Intraday ✨ / Swing ✨ leaderboards) rendering X1's outputs in the Watchlist screen; retired the standalone Screener tab. Pure FE (`useVirtualList`, `VirtualList*`). No migration.
+- **X3** — curated-list volume gate fix: 30d median ADV computed from the daily bars the cron already pulls (the empty-list bug — `universe.last_avg_volume` was never populated). No migration.
+- **X4** — `daily_bars` layer: Polygon-primary daily-grain SSOT (one call → whole universe, weekend-safe), 30d bootstrap + Yahoo gap-fill; repointed curated cron / swing pack / sparkline off IB history; `universe.last_avg_volume` derived from it. Migration `029`.
+- **X5** — price SSOT: `quotes` is the only price table; dropped 9 price/P&L columns from `positions` (migration `030`); market value + P&L recomputed from `quotes.canonical_price × shares` in the FE hooks + portfolio summary + signalEngine.
+- **X6** — earnings calendar single shared daily pull (`services/earningsCalendar.ts` memo) — two Finnhub calls/day → one. No migration.
+
+---
+
+## Risk-flags track (Batches R1–R2)
+
+- **R1** — daily-grain danger-flag engine (six flags + WARNING/CRITICAL tiers, pump detection), `risk_flags` table, signalEngine top-up + LLM pump-downgrade clamp (`signalQuality ≤ 35` on CRITICAL). Migration `027`.
+- **R2** — risk-flags FE: `DangerBadge`, TickerDetail Risk-flags section, CRITICAL pre-analysis gate, Settings threshold controls; first `user_preferences` FE→BE write (`GET/PUT /api/user/preferences`). No migration.
+
+---
+
+## Meta (Batch M1)
+
+- **M1** — agent context efficiency: read-counter hook + `bin/upside-readstats`; split `BUILD_QUEUE_DONE.md` / `CLAIMS_DONE.md` out of the active files; extracted claim-batch / finish-batch / spec-edit skills; hierarchical `spec/` README index; slimmed `AGENTS.md`.
