@@ -391,6 +391,47 @@ Each virtual list is a **living leaderboard**: top-N by a **composite** opportun
 
 ---
 
+## Batch X3: Curated-list volume gate — median ADV from IB bars
+
+**Depends on:** Batch X1 (the cron + gate it fixes).
+
+**Why:** the curated list never builds. `curatedListCron.loadSeeds` pre-filters on `universe.last_avg_volume`, which is NULL for all 5,307 universe rows — nothing populates it (`universeCron` writes `null`; `marketCapRefreshCron`'s documented "+ last_avg_volume bootstrap" was never implemented; Finnhub `profile2` carries no average volume). 0 seeds → empty `curated_list` → both virtual tabs stuck in "warming up". See `spec/signals/curated-list.md` → Volume source.
+
+**Scope:** compute the 30d **median** daily volume from the daily bars the cron already pulls for ATR (`bars[].v`) and gate on that; drop the dead universe pre-filter. No new data dependency (ATR already needs the bars), and **no single-day-volume fallback** — quality-first: the list stays empty when IB history is down rather than admit low-quality-gated names.
+
+### Deliverables
+1. **`curatedListCron.ts`** — `loadSeeds` drops the `universe.last_avg_volume` join + pre-filter, returns all `intraday_range_trader` seeds (top `MAX_CANDIDATES` by score). The probe computes `{ atrPct, medAdv }` from one daily-bar pull; `CuratedCandidate.avgDailyVolume` becomes the bar-derived 30d median.
+2. **`buildCuratedList.ts`** — gate logic unchanged (already gates on `avgDailyVolume`); just receives the bar-derived value. Confirm/extend vitest.
+3. **`median()` helper** — inline or in `technicals.ts`.
+4. **`marketCapRefreshCron.ts`** — drop the misleading "+ last_avg_volume bootstrap" header line (it never did this).
+5. **`config/curatedList.ts`** — clarify `MIN_AVG_VOLUME` comment (bar-derived median).
+
+### Files this batch creates/edits
+- `server/src/cron/curatedListCron.ts`
+- `server/src/services/curatedList/buildCuratedList.ts` (+ test)
+- `server/src/cron/marketCapRefreshCron.ts` (comment only)
+- `server/src/config/curatedList.ts` (comment only)
+
+### Does NOT touch
+- Schema (`curated_list.avg_daily_volume` already exists), the FE, the universe / trait-scoring producers.
+- `universe.last_avg_volume` — left for Batch X4 to populate.
+
+### Verification
+- `pnpm typecheck` + `vitest run` clean.
+- After deploy + IB history available: `curated_list` count climbs above 0 (`bin/upside-psql -c "select count(*) from curated_list"`); virtual tabs flip out of "warming up".
+
+---
+
+## Batch X4 (deferred): Precompute `universe.last_avg_volume` (Polygon 30d ADV)
+
+**Depends on:** none hard; complements X3.
+
+**Why a later item:** X3 makes the volume gate work without it. X4's payoff is *scale + robustness*, not data quality — a cheap universe-wide pre-filter (gate before the IB probe), a gate that survives IB outages, and a populated `baseline_volume` for `catalystReversal`. Worth doing once the trait-scored set is large enough that probing all seeds strains the IB budget.
+
+**Scope (sketch):** a backfill/refresh job that writes `universe.last_avg_volume` = 30d median daily volume from Polygon aggregates (free-tier 5/min, staggered), weekly cadence. Re-introduce the cheap volume pre-filter in `curatedListCron.loadSeeds` as an optimization — the bar-derived median stays the authority for the persisted value and the gate whenever the precompute is stale or missing.
+
+---
+
 ## Batch R1: Risk-flags engine (data + LLM integration)
 
 **Depends on:** existing feature pack (`technicals.ts`), Finnhub `basicFinancials` + `/calendar/earnings`, `positions` + `watchlist_items`. **Optional:** `curated_list` (X1) to widen the working set — not a hard dep (held + active-watchlist covers v1).
