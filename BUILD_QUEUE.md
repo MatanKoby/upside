@@ -422,13 +422,55 @@ Each virtual list is a **living leaderboard**: top-N by a **composite** opportun
 
 ---
 
-## Batch X4 (deferred): Precompute `universe.last_avg_volume` (Polygon 30d ADV)
+## Batch X4: daily_bars layer — Polygon-primary daily-grain SSOT
 
-**Depends on:** none hard; complements X3.
+**Depends on:** Batch X3 (the gate that reads daily-grain volume/ATR).
 
-**Why a later item:** X3 makes the volume gate work without it. X4's payoff is *scale + robustness*, not data quality — a cheap universe-wide pre-filter (gate before the IB probe), a gate that survives IB outages, and a populated `baseline_volume` for `catalystReversal`. Worth doing once the trait-scored set is large enough that probing all seeds strains the IB budget.
+**Why:** daily OHLCV bars are the **only** data type with no non-IB fallback (`spec/data/sources.md` → Reliability posture), so the curated list / swing pack / sparkline all die when IB history 503s (weekends, off-hours). Polygon grouped-daily already returns the whole universe's OHLCV in one call and is weekend-safe; 30 trailing calls = full 30-day history for every name. Makes Polygon the daily-grain SSOT and demotes IB to live-only. **Subsumes the old X4 (volume-only precompute)** — `last_avg_volume` becomes one derived column of this layer.
 
-**Scope (sketch):** a backfill/refresh job that writes `universe.last_avg_volume` = 30d median daily volume from Polygon aggregates (free-tier 5/min, staggered), weekly cadence. Re-introduce the cheap volume pre-filter in `curatedListCron.loadSeeds` as an optimization — the bar-derived median stays the authority for the persisted value and the gate whenever the precompute is stale or missing.
+**Scope:**
+1. **Migration** — `daily_bars` table: `(conid bigint, date date, o/h/l/c numeric, v bigint, source text, computed_at)`, PK `(conid, date)`, ~40-day retention. See `spec/schema.md`.
+2. **Producer** — extend `universeQuoteProducer`: nightly append yesterday's grouped-daily bar per universe row (conid via `real_conid`, Polygon `T`→symbol); 30-day bootstrap on first run / gaps; Yahoo gap-fill writes the **same** table.
+3. **Repoint daily-grain consumers:** `curatedListCron.dailyMetrics` reads ATR% + 30d median ADV from `daily_bars` (X3's math, same gates); swing dip-bounce daily pack; sparkline (7 bars).
+4. **Derived** — populate `universe.last_avg_volume` from `daily_bars` (resolves `sources.md` Observation 2).
+
+**Does NOT touch:** intraday 5-min (`intraday_stats`) or live snapshot — Polygon free is daily-only; those stay IB. Live price stays in `quotes` (Batch X5).
+
+**Verification:** `daily_bars` populates from Polygon on a weekend (IB down); `curated_list` builds with no IB history; typecheck + vitest.
+
+---
+
+## Batch X5: Price SSOT — `quotes` is the only price table
+
+**Depends on:** none hard.
+
+**Why:** price lives in two tables today — `positions.current_price` (held) + `quotes.canonical_price` (watchlist/curated), written by different pollers (`sources.md` Observation 4). The UI must draw every price (position cards, watchlist rows, TickerDetail, chart) from **one** table. Decision (2026-06-06): `quotes` is the single price home; `positions` holds holding detail only (conid, qty, cost) and joins `quotes` by conid. IB live price when connected, Finnhub fallback — the existing `canonical_price`/`canonical_source` logic, extended to held tickers.
+
+**Scope:**
+1. Ensure every **held** conid has a `quotes` row (held + watchlist share the poller path).
+2. **Drop `positions.current_price`** (+ any other price columns) via migration; `positions` keeps conid/symbol/qty/avgCost/etc.
+3. Repoint readers to `quotes` by conid: `routes/portfolio`, `usePositions` / `useTickerDetail`, `signalEngine`, `riskFlagsCron`, P&L math.
+4. Pollers (`ibPricePoller`, `finnhubPricePoller`) write price to `quotes`, not `positions`.
+
+**Verification:** a held+watchlisted ticker shows one price from one table; no `positions.current_price` reads remain; P&L correct.
+
+---
+
+## Batch X6: Earnings calendar — single shared daily pull
+
+**Depends on:** none.
+
+**Why:** `catalystReversalProducer` (3d lookback) and `postEarningsDriftProducer` (5d) each call `earningsCalendarRange` daily — two Finnhub calls for overlapping windows (`sources.md` Observation 6). Wasteful + a needless rate-limit risk.
+
+**Scope:** a shared `services/earningsCalendar.ts` that fetches the widest window (5d) **once per UTC day** (in-memory memo + concurrent-coalesce); both producers read it and filter to their own lookback client-side. One call/day. + vitest.
+
+---
+
+## Batch X7 (deferred): News-as-signal
+
+**Depends on:** Finnhub news (already wired: `companyNews`; `newsSentiment` currently unused — `sources.md` Observation 3).
+
+**Why deferred / what:** news should raise/lower a stock's potential the way earnings do — good news ≈ a good report, bad news ≈ a bad one. Design in `spec/signals/news-signal.md`. Build after the daily-grain + price-SSOT work; spec'd now so it isn't lost. Wires `newsSentiment` (today dead code) into trait/curated ranking and/or `risk-flags`.
 
 ---
 
