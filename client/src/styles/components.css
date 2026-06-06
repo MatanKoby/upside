@@ -1569,3 +1569,61 @@
 
 /* Settings — Risk-flags action row (Save + Reset). */
 .settings-actions { display: flex; gap: var(--sp-8); align-items: center; flex-wrap: wrap; }
+
+/* ─── Watchlist virtual lists — Intraday / Swing (Batch X2) ───────────────── */
+
+/* Virtual sub-tabs lead the strip with a sparkle accent. */
+.watchlist-tab-virtual { font-weight: var(--fw-medium); }
+
+/* First-run import CTA, slim banner under the strip (virtual tabs render above). */
+.watchlist-import-hint {
+  display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap;
+  padding: var(--sp-8) var(--sp-4); margin-top: var(--sp-8);
+  font-size: var(--fs-11); color: var(--text-secondary);
+}
+.btn-sm { padding: var(--sp-4) var(--sp-8); font-size: var(--fs-11); }
+
+/* ⚡ just-fired marker — sits ahead of the symbol on a live dip-bounce cross. */
+.virtual-fired-icon {
+  color: var(--pill-watch-text);
+  margin-right: 3px; vertical-align: -2px;
+}
+
+/* `why` reason chips (dip / catalyst / post-earnings) — colour by trait family. */
+.reason-chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 6px; border-radius: var(--radius-pill);
+  font-size: 10px; line-height: 1.2; white-space: nowrap;
+  border: 0.5px solid transparent;
+}
+.reason-chip-dip           { background: var(--pill-buy-bg);   color: var(--pill-buy-text); }
+.reason-chip-catalyst      { background: var(--pill-event-bg); color: var(--pill-event-text); }
+.reason-chip-post-earnings { background: var(--pill-watch-bg); color: var(--pill-watch-text); }
+
+/* Walking-band chip — session regime + vol scalar; title carries next bands. */
+.band-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: var(--radius-pill);
+  background: var(--bg-elevated); color: var(--text-secondary);
+  border: 0.5px solid var(--border);
+  font-size: 10px; line-height: 1.2; white-space: nowrap;
+}
+.band-chip-regime { font-weight: var(--fw-medium); }
+.band-chip-vol { color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* Rolling-30d hit-rate column. */
+.hit-rate {
+  display: inline-flex; align-items: baseline; gap: 2px;
+  font-size: 10px; line-height: 1.2; white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.hit-rate-n { color: var(--text-tertiary); font-size: 9px; }
+.hit-rate-good  { color: var(--pill-buy-text); }
+.hit-rate-ok    { color: var(--pill-watch-text); }
+.hit-rate-low   { color: var(--pill-sell-text); }
+.hit-rate-empty { color: var(--text-tertiary); }
+
+/* Keep the virtual-row chip cluster on one line like imported rows. */
+.virtual-row .reason-chip,
+.virtual-row .band-chip,
+.virtual-row .hit-rate { white-space: nowrap; }

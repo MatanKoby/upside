@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { IconSettings, IconCloudDownload, IconHelpCircle } from '@tabler/icons-react';
 import { useWatchlistData, type WatchlistList, type WatchlistItem, type QuoteRow, type Marker, type EntryZoneRow, type Horizon, type IntradayStatsRow } from '../hooks/useWatchlistData';
 import { MarkerSheet, type MarkerPrefill } from '../components/Watchlist/MarkerSheet';
+import { VirtualList } from '../components/Watchlist/VirtualList';
+import type { VirtualKind } from '../config/virtualList';
 import { MiniSparkline } from '../components/Watchlist/MiniSparkline';
 import { EntryZoneCluster } from '../components/Watchlist/EntryZoneCluster';
 import { IntradayStatsChip } from '../components/Watchlist/IntradayStatsChip';
@@ -61,17 +63,26 @@ export default function Watchlist() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
-  const [activeListId, setActiveListId] = useState<string | null>(null);
+  // Selected sub-tab: a virtual list (`virtual:intraday` / `virtual:swing`) or
+  // an imported list id. The two virtual tabs are always present and lead the
+  // strip, so Intraday is the default landing tab.
+  const [selectedKey, setSelectedKey] = useState<string>('virtual:intraday');
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const activeLists = useMemo(() => lists.filter((l) => l.active), [lists]);
 
-  // Default the visible sub-tab to the first active list whenever the active
-  // set changes (e.g. after toggling one on/off).
-  const currentList = activeListId && activeLists.find((l) => l.id === activeListId)
-    ? activeListId
-    : (activeLists[0]?.id ?? null);
+  const virtualKind: VirtualKind | null = selectedKey === 'virtual:intraday'
+    ? 'intraday'
+    : selectedKey === 'virtual:swing'
+      ? 'swing'
+      : null;
+
+  // For an imported-list selection, resolve to a valid active list (the
+  // selected one may have just been hidden); fall back to the first active.
+  const currentList = virtualKind
+    ? null
+    : (activeLists.find((l) => l.id === selectedKey)?.id ?? activeLists[0]?.id ?? null);
 
   async function runSync() {
     setSyncing(true);
@@ -120,34 +131,51 @@ export default function Watchlist() {
 
       {isLoading ? (
         <p className="watchlist-empty">Loading…</p>
-      ) : lists.length === 0 ? (
-        <EmptyState syncing={syncing} message={syncMessage} onSync={runSync} />
-      ) : activeLists.length === 0 ? (
-        <NoActiveLists onOpenSettings={() => setSettingsOpen(true)} />
       ) : (
         <>
-          <SubTabStrip lists={activeLists} currentId={currentList} onPick={setActiveListId} />
-          <ItemList
-            items={itemsByList[currentList ?? ''] ?? []}
-            quotes={quotesByConid}
-            markersByConid={markersByConid}
-            entryZonesByConid={entryZonesByConid}
-            statsByConid={statsByConid}
-            riskByConid={riskByConid}
-            onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid) })}
-            onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid), marker })}
-            onPromoteZone={(item, zone) =>
-              setMarkerSheet({
-                symbol: item.symbol,
-                conid: Number(item.conid),
-                prefill: {
-                  price: zone.price,
-                  condition: 'at_or_below',
-                  label: `from ${zone.horizon} entry zone`,
-                },
-              })
-            }
-          />
+          <SubTabStrip lists={activeLists} selectedKey={selectedKey} onPick={setSelectedKey} />
+          {lists.length === 0 && <ImportHint syncing={syncing} message={syncMessage} onSync={runSync} />}
+          {virtualKind ? (
+            <VirtualList
+              kind={virtualKind}
+              riskByConid={riskByConid}
+              onAddMarker={(row) =>
+                setMarkerSheet({
+                  symbol: row.symbol,
+                  conid: row.conid,
+                  prefill: {
+                    price: row.band?.lowBand ?? undefined,
+                    condition: 'at_or_below',
+                    label: 'from walking band',
+                  },
+                })
+              }
+            />
+          ) : currentList ? (
+            <ItemList
+              items={itemsByList[currentList] ?? []}
+              quotes={quotesByConid}
+              markersByConid={markersByConid}
+              entryZonesByConid={entryZonesByConid}
+              statsByConid={statsByConid}
+              riskByConid={riskByConid}
+              onAddMarker={(item) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid) })}
+              onEditMarker={(item, marker) => setMarkerSheet({ symbol: item.symbol, conid: Number(item.conid), marker })}
+              onPromoteZone={(item, zone) =>
+                setMarkerSheet({
+                  symbol: item.symbol,
+                  conid: Number(item.conid),
+                  prefill: {
+                    price: zone.price,
+                    condition: 'at_or_below',
+                    label: `from ${zone.horizon} entry zone`,
+                  },
+                })
+              }
+            />
+          ) : (
+            <NoActiveLists onOpenSettings={() => setSettingsOpen(true)} />
+          )}
         </>
       )}
 
@@ -176,12 +204,15 @@ export default function Watchlist() {
   );
 }
 
-function EmptyState({ syncing, message, onSync }: { syncing: boolean; message: string | null; onSync: () => void }) {
+// Slim banner under the strip when the user has no imported lists yet. The
+// virtual tabs (Intraday / Swing) still render above it, so the screen is never
+// blank — this just keeps the first-run "Import from IB" CTA discoverable.
+function ImportHint({ syncing, message, onSync }: { syncing: boolean; message: string | null; onSync: () => void }) {
   return (
-    <div className="watchlist-empty">
-      <p>You haven't imported any watchlists yet.</p>
-      <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
-        <IconCloudDownload size={16} stroke={1.5} />{' '}
+    <div className="watchlist-import-hint">
+      <span>No imported watchlists yet.</span>
+      <button type="button" className="btn btn-primary btn-sm" disabled={syncing} onClick={onSync}>
+        <IconCloudDownload size={14} stroke={1.5} />{' '}
         {syncing ? 'Importing…' : 'Import from IB'}
       </button>
       {message && <p className="watchlist-empty-msg">{message}</p>}
@@ -201,22 +232,39 @@ function NoActiveLists({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 }
 
+const VIRTUAL_TABS: Array<{ key: string; label: string }> = [
+  { key: 'virtual:intraday', label: 'Intraday ✨' },
+  { key: 'virtual:swing', label: 'Swing ✨' },
+];
+
 function SubTabStrip({
   lists,
-  currentId,
+  selectedKey,
   onPick,
 }: {
   lists: WatchlistList[];
-  currentId: string | null;
-  onPick: (id: string) => void;
+  selectedKey: string;
+  onPick: (key: string) => void;
 }) {
   return (
     <nav className="watchlist-tabstrip">
+      {/* Two Upside-curated virtual tabs always lead the strip (can't be
+          hidden), then one tab per active imported list. */}
+      {VIRTUAL_TABS.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          className={`watchlist-tab watchlist-tab-virtual ${t.key === selectedKey ? 'is-active' : ''}`}
+          onClick={() => onPick(t.key)}
+        >
+          {t.label}
+        </button>
+      ))}
       {lists.map((l) => (
         <button
           key={l.id}
           type="button"
-          className={`watchlist-tab ${l.id === currentId ? 'is-active' : ''}`}
+          className={`watchlist-tab ${l.id === selectedKey ? 'is-active' : ''}`}
           onClick={() => onPick(l.id)}
         >
           {l.name}
