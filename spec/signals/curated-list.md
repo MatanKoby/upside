@@ -21,9 +21,12 @@ A ticker is on the curated list for `asof_date` iff:
 
 - It has a `trait_scores` row for `(intraday_range_trader, asof_date)`, AND
 - It ranks in the **top 250** by that trait's score (desc), AND
-- `universe.last_avg_volume ≥ 1,000,000` shares/day (30d median), AND
-- Its daily ATR% ≥ 1.5% (computed from the same daily-bar pull that feeds
-  `intraday_stats`; cached on `curated_list.daily_atr_pct`).
+- Its **30d median daily volume ≥ 1,000,000** shares/day, AND
+- Its daily **ATR% ≥ 1.5%**.
+
+Both are computed from the **same daily-bar pull** (IB `3m/1d`) — see *Volume
+source* below — and cached on `curated_list.avg_daily_volume` /
+`curated_list.daily_atr_pct`.
 
 Three knobs, all named constants (`server/src/config/curatedList.ts`),
 tunable from outcome data:
@@ -34,6 +37,21 @@ tunable from outcome data:
 
 `TARGET_SIZE` is a cap, not a floor. If only 180 names pass the gates the
 list is 180. If 800 pass, the top 250 by trait score win.
+
+**Volume source (2026-06-06).** The volume gate reads the **30d median** of the
+daily bars the cron already pulls for ATR (`bars[].v`), *not*
+`universe.last_avg_volume`. That column is never populated — `universeCron`
+writes `null`, the `marketCapRefreshCron` "bootstrap" its header claims was never
+implemented, and Finnhub `profile2` carries no average volume — so the old
+pre-filter silently rejected every candidate and the list stayed empty. Deriving
+median ADV from the ATR bars is **zero-marginal-cost** (those bars are already
+fetched) and internally consistent with the ATR number. Median, not mean, so a
+single news-day volume spike can't sneak an illiquid name through. There is **no
+single-day-volume fallback**: on a day IB history is unavailable the list stays
+empty rather than admit low-quality-gated names. Precomputing
+`universe.last_avg_volume` from Polygon 30d aggregates — a cheap universe-wide
+pre-filter that also survives IB outages and feeds `catalystReversal` — is a
+deferred scale/robustness improvement (`BUILD_QUEUE.md` → Batch X4).
 
 ## Why pure `intraday_range_trader`
 
