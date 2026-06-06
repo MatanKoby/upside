@@ -8,13 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X5 — Price SSOT (quotes is the only price table)
-- Owner: claude
-- Started: 2026-06-06 11:40
-- Scope decision (with user, 2026-06-06): **drop price AND P&L** from `positions`
-  — recompute market_value + unrealized_pnl from `quotes.canonical_price`. positions
-  holds holding facts (conid/qty/cost/zone-state) only.
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -45,6 +38,35 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X5 — Price SSOT: quotes is the only price table (2026-06-06)
+- Owner: claude
+- Started: 2026-06-06 11:40 · Finished: 2026-06-06 19:51
+- Commit: 08c6d95 (code) · 15d37af (spec)
+- **Scope decision (with user, 2026-06-06):** the strict option — **drop price AND P&L** from `positions`, not just `current_price`. `positions` holds holding facts only (conid / shares / avg_cost / realized_pnl / vwap / zone-state / entry provenance); market value + unrealized P&L are **recomputed** from `quotes.canonical_price × shares` by every reader. `quotes` is the single price home.
+- **What shipped:**
+  - **Migration `030_positions_price_ssot.sql`** — drops 9 columns from `positions`: `current_price`, `market_value`, `unrealized_pnl`, `unrealized_pnl_pct`, `today_change`, `today_change_pct`, `daily_return`, `portfolio_weight`, `portfolio_contribution`. ⚠️ **APPLY LAST** (see prereqs).
+  - **`ibPricePoller` / `finnhubPricePoller`** — both keep computing price/market-value/P&L **in-memory** (still needed for the `quotes` mirror via `upsertQuote`, the profit-zone check, and the MTD anchor) but **stop persisting** them to `positions`. IB poller: new `toPositionRow()` projection writes only the holding-fact columns; change-detection now keys off vwap/shares/avg_cost/entry/zone (price removed); `finalizePortfolioMetrics` deleted. Finnhub poller: positions `.update()` now writes only `price_source` + `last_price_update_at` + zone fields; the portfolio-weight recompute block deleted; still mirrors the quote.
+  - **`routes/portfolio`** — `/summary` recomputes `totalValue` + `totalPnl` from `positions ⨝ quotes` (`canonical_price × shares`); `/positions` orders by `symbol` (was `market_value`).
+  - **`signalEngine`** — reads price from `quotes.canonical_price` by conid (IB snapshot still overrides when live); the held min-value gate + held P&L% are recomputed from it (was `position.market_value` / `unrealized_pnl_pct`).
+  - **`riskFlagsCron`** — drops the `positions.current_price` read; price comes from the canonical quote (its existing quotes-fill loop already handled the null case).
+  - **`usePositions` / `useTickerDetail`** — join `quotes` by held conid and recompute `currentPrice` / `marketValue` / `unrealizedPnL[Percent]` / `todayChange[Percent]` / portfolio weight / daily-return. `usePositions` now subscribes to **both** `positions` and `quotes` Realtime (quotes filtered client-side to held conids, 250ms-debounced reload) and sorts by computed market value. The `Position` / `PositionStats` types are unchanged, so `PositionCard` / `PositionStats` / `PortfolioHome` needed no edits.
+- **Implementation forks / decisions:**
+  - **Pollers keep price in-memory** rather than re-reading quotes — they already have the IB/Finnhub price they just wrote, so the zone check + MTD + quotes mirror reuse it; only the *persisted* `positions` columns shrank.
+  - **Kept on `positions`:** `vwap_value` (a session metric, not a duplicated quote; `PositionCard` reads it), `realized_pnl` (broker fact), `trading_days_held` (date math). Only price-and-P&L-derived columns were dropped.
+  - **Per-share `today_change` $ derived from `today_change_pct`** (`prevClose = price / (1 + pct/100)`) since `quotes` stores the % not the $ — exact, no extra column.
+  - **FE computes live, server computes on read** — a Postgres view joining positions⨝quotes can't be Realtime-subscribed, so the hooks do the client-side join (mirrors `useVirtualList`); the summary route does it server-side on fetch.
+- **Verification:** server `pnpm typecheck` clean (incl. scripts tsconfig); `vitest run` **178/178**; client `pnpm build` (tsc --noEmit + vite) clean. UI behaviour is user-driven (`feedback_user_drives_ui_testing`).
+- **Manual prereqs for live-flip (ORDER MATTERS):**
+  1. `git pull` + `./bin/upside rebuild api` on the VPS **and** let the Vercel FE deploy land (push already triggers it). The new code stops reading/writing the dropped columns.
+  2. **THEN apply `030_positions_price_ssot.sql`** in the Supabase SQL editor. ⚠️ Applying it *before* the deploy would break the still-running old code that selects `market_value`. (Expand/contract: code first, drop last.)
+  3. No Discord/env changes.
+- **Verification post-live-flip:**
+  - A held + watchlisted ticker shows **one** price (from `quotes`) on the position card, watchlist row, and TickerDetail; P&L + portfolio weight render and tick live as the quote updates.
+  - `bin/upside-psql -c "\d positions"` shows the 9 columns gone; `select count(*) from positions;` unaffected.
+  - Portfolio summary total value/P&L matches the sum of card values.
+  - Analyze on a held name still gates on min market value + carries the correct P&L% in the prompt.
+- **Follow-ups deferred:** X7 (news-as-signal, specced). The dip-bounce (X1/X2), risk-flags (R1/R2), daily_bars (X4), and price-SSOT (X5) tracks are all shipped; remaining un-done: Batch C remainder, Batch 15 (alerts feed), 14h, 13.9, 16.
 
 ### Batch X4 — daily_bars layer: Polygon-primary daily-grain SSOT (2026-06-06)
 - Owner: claude
