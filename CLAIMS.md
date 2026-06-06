@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X2 — Watchlist virtual lists (Intraday / Swing)
-- Owner: claude
-- Started: 2026-06-06 05:06
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,35 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X2 — Watchlist virtual lists: Intraday / Swing (2026-06-06)
+- Owner: claude
+- Started: 2026-06-06 05:06 · Finished: 2026-06-06 05:25
+- Commit: 0ff573e
+- **What shipped:** the FE surface for X1's dip-bounce track — two always-present Upside-curated virtual sub-tabs (Intraday ✨ / Swing ✨) leading the Watchlist strip, rendering `curated_list ∪ event-trait names` as living top-N leaderboards. Pure FE consumer of X1's outputs; **no migration, no schema/engine/cron change.**
+  - **`config/virtualList.ts`** (new) — composite-rank weight constants for both lists (`INTRADAY_WEIGHTS` / `SWING_WEIGHTS`), `VIRTUAL_LIST_TOP_N = 30`, `FIRE_LIVE_WINDOW_HOURS` (4h / 24h, matching the BE cooldowns), `HIT_RATE_WINDOW_DAYS = 30`, `HIT_RATE_DEF` (intraday +2h vs +1%, swing +3d vs +5% — mirrors `signal_hit_rate_30d`). All flagged as **calibration seeds** — no forward-tracked data exists yet; retune from `signal_hit_rate_30d` after ~a month of real fires.
+  - **`hooks/useVirtualList.ts`** (new) — `useVirtualList(kind)`. Union members = `curated_list` (today, UTC → `dip` reason + `intraday_range_trader_score`) ∪ `trait_scores` (today, UTC, `catalyst_reversal` → `catalyst`/both lists, `post_earnings_drift` → `post-earnings`/swing). Joins `quotes` (conid→symbol + price + change + sparkline), `band_state` (latest session_date per conid → walking-band chip + marker-prefill low), `signal_fires` (live ⚡ within cooldown + the 30d hit-rate numerator), `signal_outcomes` (per-conid rolling-30d hit-rate, recomputed client-side since the view aggregates per-kind). Composite rank per kind, top-N, **debounced** Realtime (curated_list / trait_scores / band_state / quotes) coalescing bursts into one reload (~250-300 conids).
+  - **`components/Watchlist/VirtualListRow.tsx`** (new) — shared watchlist-row layout (symbol · sparkline · price/change/source) + the virtual extras: ⚡ just-fired marker, `why` reason chips, walking-band chip (regime + vol-scalar; title carries next low/high), rolling-30d hit-rate column (`%` + `n<sample>`, or `—` when no graded fires — honest absent, not zero), and the shared `DangerBadge`. Tap → TickerDetail; long-press → add-marker sheet.
+  - **`components/Watchlist/VirtualList.tsx`** (new) — leaderboard body: loading / warming-up empty state / ranked rows; long-press routes up to the page's `MarkerSheet` prefilled at the band low (`at_or_below`, "from walking band").
+  - **`pages/Watchlist.tsx`** (edit) — selection model now spans virtual tabs (`virtual:intraday` / `virtual:swing`) + imported list ids; **Intraday is the default landing tab**. `SubTabStrip` renders the two virtual tabs first (can't be hidden), then active imported lists. The first-run "Import from IB" CTA became a slim `ImportHint` banner under the strip so the screen is never blank (virtual tabs always render).
+  - **`styles/components.css`** (edit) — reason chips (dip→buy / catalyst→event / post-earnings→watch palette), ⚡ fired icon, walking-band chip, hit-rate column (good/ok/low/empty tiers), virtual-tab accent, import-hint banner.
+- **Open-question resolutions (the three from BUILD_QUEUE "settle at claim time"):**
+  - **Composite weights** — seeded named constants (character signal highest, then live-fire boost, then hit-rate); documented as calibration, not data-tuned (no data yet). Both lists draw the **same union** and differ only by rank lens + which reason dominates — simplest robust shape; low-relevance names sink below the top-30 cut rather than needing hard per-list membership rules.
+  - **Hit-rate column shape** — `%` + sample size (`n<k>`), `title` tooltip naming the 30d window; `—` when genuinely absent (per `feedback_show_data_not_dashes`).
+  - **"On a virtual list" chip on imported rows** — **deferred** (additive imported-row tweak; not built v1).
+- **Implementation forks / deferrals:**
+  - **`universe` is not granted to `authenticated`** (service_role only) — so event membership comes from `trait_scores` (FE-readable) instead of `universe.auto_promoted`, and conid→symbol comes from `quotes` (not `universe.symbol`). A union name with no quote row yet is skipped (engine hasn't priced it). No grant/migration added (X2 is pure-FE scope).
+  - **"Add to one of my watchlists" long-press affordance deferred** — there is no `watchlist_items` insert endpoint, and manual items have IB-sync-wipe implications (a real feature + BE route + RLS, not a pure-FE tweak). Long-press wires the **Set marker** affordance only (prefilled at band low). Add-to-watchlist queued as a follow-up.
+  - **"Retire the Screener tab" was already a no-op** — S4 was superseded by X2 before being built, so no `Screener.tsx` / route / nav tab existed to remove. Nav stays Portfolio · Watchlist · Alerts · Settings.
+  - **Walking-band chip popover** — v1 shows next low/high via the chip `title` (lightweight); the full tap-popover (à la `EntryZoneCluster`) is a polish follow-up.
+- **Verification:** client `pnpm build` (tsc --noEmit + vite) **clean**. No server change (no typecheck/test delta). UI behaviour is user-driven (per `feedback_user_drives_ui_testing`) — needs live data to render (see below).
+- **Manual prereqs for live-flip:** none beyond **X1's** (apply `028_dip_bounce.sql`; rebuild VPS; IB connected so `curatedListCron` + `trait_scores` + `band_state` populate). The Watchlist FE deploys via Vercel on push. Until `028` is applied + the engine has run with IB, both virtual tabs show the "still warming up" empty state.
+- **Verification post-live-flip:**
+  - Watchlist strip leads with **Intraday ✨ / Swing ✨**; tapping each shows a ranked leaderboard once `curated_list` / `trait_scores` have rows.
+  - Rows show reason chips, a walking-band chip when `band_state` has a row, a ⚡ marker on a name with a `signal_fires` row inside cooldown, and a hit-rate `%`+`n` once `signal_outcomes` accumulate (else `—`).
+  - Long-press a virtual row → add-marker sheet prefilled at the band low.
+- **Follow-ups deferred:** add-to-watchlist affordance (needs BE insert route + IB-sync decision); "on a virtual list" chip on imported rows; full walking-band tap-popover; composite-weight + hit-rate recalibration from real `signal_hit_rate_30d` data after ~a month.
+- **What's next:** the dip-bounce (X1/X2) + risk-flags (R1/R2) tracks are both FE-complete. Remaining un-done: Batch C remainder (per-marker cooldown UI, `at_or_above` routing, port band-touch/marker fires onto `signal_fires`), Batch 15 (alerts feed + settings), 14h (live leg tracking + Refine), 13.9, 16. No single "next" pointer — ask the user.
 
 ### Batch X1 — Dip-bounce track (curated list + two-scorer alert + forward-tracking) (2026-06-05)
 - Owner: claude
