@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X6 — Earnings calendar: single shared daily pull
-- Owner: claude
-- Started: 2026-06-06 11:04
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,16 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X6 — Earnings calendar: single shared daily pull (2026-06-06)
+- Owner: claude
+- Started: 2026-06-06 11:04 · Finished: 2026-06-06 11:07
+- Commit: 1a5028c
+- **What shipped:** the low-hanging-fruit win from the data audit — `catalystReversalProducer` (3d lookback) and `postEarningsDriftProducer` (5d) each called `earningsCalendarRange` daily, two Finnhub calls for overlapping windows. New **`server/src/services/earningsCalendar.ts`** → `getEarningsWindow()` memoizes one call per UTC day for the widest window (`EARNINGS_WINDOW_DAYS = 5`), coalesces concurrent callers onto one in-flight request, and doesn't poison the cache on failure (next call retries). Both producers read it and filter to their own lookback client-side → **2 calls/day → 1**. In-memory memo (both producers share the Node process); no table needed.
+  - Files: `services/earningsCalendar.ts` (new) + `earningsCalendar.test.ts` (new, 3 cases: memo / concurrent-coalesce / failure-retry); `cron/catalystReversalProducer.ts` + `cron/postEarningsDriftProducer.ts` (swap `earningsCalendarRange` import → `getEarningsWindow` + per-lookback filter; drop unused `to`).
+  - Catalog: `spec/data/sources.md` Obs 6 + `consumers.md` Obs 4 marked resolved.
+- **Verification:** `pnpm typecheck:server` clean; `vitest run` **172/172** (3 new).
+- **Context:** one of the data-architecture decisions persisted in `5a1103c` (queue X4–X7 + `spec/signals/news-signal.md`). Remaining queued: **X4** daily_bars layer (Polygon daily-grain SSOT — the weekend-gap fix), **X5** price SSOT (`quotes` only), **X7** news-as-signal (deferred).
 
 ### Batch X3 — Curated-list volume gate: median ADV from IB bars (2026-06-06)
 - Owner: claude
