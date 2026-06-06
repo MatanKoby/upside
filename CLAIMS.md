@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X2 — Watchlist virtual lists (Intraday / Swing)
+- Owner: claude
+- Started: 2026-06-06 05:06
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
