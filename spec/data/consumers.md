@@ -33,8 +33,8 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 | `dipBounceCron` *(service)* | `quotes`, `intraday_stats`, `band_state`, `entry_zones`, `curated_list` (via `computeSet`), `daily_bars` (swing pack) | `signal_fires` | Discord webhooks | 60s |
 | `signalOutcomesCron` | `signal_fires`, `quotes` | `signal_outcomes` | — | 5min |
 | `riskFlagsCron` | `user_preferences`, `positions`, `quotes` | `risk_flags` | Finnhub `basicFinancials` + `earningsCalendar` | daily |
-| `ibPricePoller` | `contracts`, `positions` | `contracts`, `positions` | IB positions + snapshot | poll loop (IB up) |
-| `finnhubPricePoller` | `positions` | `positions.current_price` | Finnhub `getQuote` | poll loop (IB down) |
+| `ibPricePoller` | `contracts`, `positions` | `contracts`, `positions` (holding facts only), `quotes` (price) | IB positions + snapshot | poll loop (IB up) |
+| `finnhubPricePoller` | `positions` | `quotes` (price), `positions` (price-source metadata + zone state) | Finnhub `getQuote` | poll loop (IB down) |
 | `watchlistQuotePoller` | `positions` | `quotes` (via `services/quotes`) | Finnhub `getQuote` | poll loop |
 
 ### Maintenance / housekeeping crons (no business data)
@@ -66,7 +66,7 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 
 | Route | Reads | Writes | External |
 | --- | --- | --- | --- |
-| `portfolio` | `positions` | — | — |
+| `portfolio` | `positions`, `quotes` (`/summary` recomputes value+P&L from canonical_price × shares) | — | — |
 | `marketdata` | `positions`, `daily_bars` (sparkline) | — | IB snapshot / history (live pass-through); sparkline reads `daily_bars` first, IB fallback (Batch X4) |
 | `signals` | `analyses`, `analysis_locks` | `analysis_locks` (+ triggers `signalEngine`) | — |
 | `watchlists` | `watchlist_*` | `watchlist_lists` / `items` | IB watchlists (sync) |
@@ -82,7 +82,7 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 
 | Hook / page | Reads (Supabase) | Calls (API) |
 | --- | --- | --- |
-| `usePositions` | `positions` | — |
+| `usePositions` | `positions`, `quotes` (join by conid → recompute price + P&L) | — |
 | `usePortfolioSummary` | — | `/api/portfolio/summary` |
 | `useTickerDetail` | `positions`, `watchlist_items`, `quotes` | — |
 | `useChartHistory` | — | `/api/marketdata/history` |
@@ -106,6 +106,6 @@ Pages: `PortfolioHome`, `Watchlist`, `TickerDetailPage`, `Settings`, `Login`,
 
 1. **`useVirtualList` joins 6 tables client-side** (curated/trait/quotes/band/fires/outcomes) with a per-conid hit-rate recompute. Correct for now, but if it gets heavy a server-side `/api/virtual-list` (or a materialized view) would collapse it to one request — flag for after live data exists.
 2. **Per-ticker hit-rate recomputed in the client** because `signal_hit_rate_30d` aggregates per *kind*, not per *conid*. If other surfaces need per-conid hit-rate, promote it to a view rather than duplicating the client math.
-3. **`positions` is read by ~10 consumers** — it's the de-facto held-state SSOT. Confirm `current_price` there vs `quotes.canonical_price` don't diverge for held+watchlisted tickers (cross-ref `sources.md` → Observation 4).
+3. **`positions` is read by ~10 consumers** — it's the de-facto held-state SSOT (holding facts only). Price + P&L no longer live here (Batch X5): readers join `quotes` by conid and recompute, so there's no `current_price`-vs-`canonical_price` divergence to police (`sources.md` → Observation 4, resolved).
 4. **`trait_scores` written by 3 producers, read by `curatedListCron` + `useVirtualList`** — clean fan-in/out; the two earnings-based producers now **share one earnings-calendar pull** (Batch X6 — `sources.md` → Observation 6).
 5. **Alerts screen (Batch 15) is unbuilt** — `ComingSoon`. When built it consumes `signals` / `signal_fires` / `entry_zones` events; design it to read the existing tables, not a new pipeline.

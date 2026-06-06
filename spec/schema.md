@@ -4,11 +4,11 @@ What's stored where, in what shape, with what semantics.
 
 ## Supabase tables
 
-- **`positions`** — current holdings per user, written by `ibPricePoller` / `finnhubPricePoller`, read via Realtime by the FE. Includes:
-  - Standard fields: `symbol`, `conid`, `shares`, `avg_cost`, `current_price`, `market_value`, `pnl`, `pnl_percent`, `vwap`, etc.
+- **`positions`** — current holdings per user, written by `ibPricePoller` / `finnhubPricePoller`, read via Realtime by the FE. **Holding facts only (Batch X5 — no price or price-derived column).** Includes:
+  - Holding fields: `symbol`, `conid`, `shares`, `avg_cost`, `realized_pnl`, `vwap_value`/`vwap_updated_at`, `trading_days_held`, `currency`, `asset_class`, `industry`, `category`, `first_seen_at`/`first_seen_source`.
   - Zone-tracking: `zone_entered_at`, `zone_exited_at`, `last_zone_notification_at`, `entered_zone_via_gap` (see `signals/playbook.md` → Profit-Taking Zone Detection).
   - Source-tracking: `price_source` enum `'ib' | 'finnhub'`, `last_price_update_at` (see `architecture.md` → Multi-source price polling).
-  - **`current_price` is the MVP canonical "latest quote"** for held symbols — see `architecture.md` → Single source of truth for current price. All consumers (header, chart price-line, Today's-Range, `signalEngine`) read it; no consumer re-fetches its own.
+  - **Price + P&L are NOT stored here.** `migration 030` dropped `current_price`, `market_value`, `unrealized_pnl[_pct]`, `today_change[_pct]`, `daily_return`, `portfolio_weight`, `portfolio_contribution`. The canonical price lives in **`quotes`** (keyed by conid); market value + unrealized P&L + weight are **recomputed** from `quotes.canonical_price × shares` by every reader (the FE `usePositions`/`useTickerDetail`, the server `routes/portfolio` `/summary` + `signalEngine`). See `architecture.md` → Single source of truth for current price.
 
 - **`quotes`** *(MVP via watchlist pivot; batch A1, extended A1-polish + B)* — canonical latest quote per instrument, keyed by conid. Stores **both** IB and Finnhub prices side-by-side (each with its own timestamp) so consumers can compare them, so divergence is visible (e.g. IB live $4.28 vs Finnhub prior-close $4.18 pre-market), and so fallback decisions can be made on real provenance rather than overwriting one with the other:
   ```
@@ -21,7 +21,7 @@ What's stored where, in what shape, with what semantics.
     today_open       numeric                   -- (migration 018) required by stats.md alert band
   }
   ```
-  Each poller writes only its own source's columns; the `canonical_*` triple is the denormalized "the price to use" (IB-when-fresh-and-connected, Finnhub otherwise), set by whichever poller is currently authoritative. All three pollers also thread `today_open` (IB snapshot field `7295` / Finnhub `quote.o`) — see `signals/stats.md` for why. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop extended to cover held + watchlisted conids); read by every price surface and `signalEngine`. `positions.current_price` is preserved as a denormalized mirror of `canonical_price` (the same poller writes both) for MVP backward compatibility. Enforces the **price-is-an-instrument-property** principle.
+  Each poller writes only its own source's columns; the `canonical_*` triple is the denormalized "the price to use" (IB-when-fresh-and-connected, Finnhub otherwise), set by whichever poller is currently authoritative. All three pollers also thread `today_open` (IB snapshot field `7295` / Finnhub `quote.o`) — see `signals/stats.md` for why. Promotes the MVP `positions.current_price` pattern to an instrument-keyed table so non-held symbols have prices too without duplicating a `price` column per surface. Written by the pollers (loop covers held ∪ active-watchlist conids); read by **every** price surface (position cards, watchlist rows, TickerDetail, chart, sparkline), the portfolio summary, `signalEngine`, and `riskFlagsCron`. **Batch X5:** this is the single price home — `positions` no longer mirrors `canonical_price` (the old `positions.current_price` was dropped). Market value + unrealized P&L are recomputed from `canonical_price × shares` by readers, never stored. Enforces the **price-is-an-instrument-property** principle.
 
 - **`analyses`** — one row per Analyze call. Holds the shared analysis context. Schema:
   ```
