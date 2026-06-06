@@ -25,7 +25,7 @@
 
 import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
-import { earningsCalendarRange } from '../services/finnhub.js';
+import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,
   drainDone,
@@ -79,10 +79,10 @@ interface UniverseTarget {
 async function loadCandidateUniverseFromEarnings(): Promise<UniverseTarget[]> {
   // Bulk earnings calendar — one Finnhub call for the lookback window.
   const from = daysAgoIsoDate(LOOKBACK_TRADING_DAYS);
-  const to = todayIsoDate();
   let earnings;
   try {
-    earnings = await earningsCalendarRange(from, to);
+    // Shared once-per-day calendar pull (Batch X6); filter to this lookback.
+    earnings = (await getEarningsWindow()).filter((r) => r.date != null && r.date >= from);
   } catch (e) {
     void notifyError('catalystReversalProducer.earningsCal', (e as Error).message, e);
     return [];

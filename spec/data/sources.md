@@ -176,4 +176,4 @@ outage. It subsumes Batch X4. Pre-market intraday snapshot volume for
 3. **`newsSentiment` is defined in `finnhub.ts` but called by nothing** — dead code or an unfinished `catalyst_reversal` input. Decide: wire it or delete it.
 4. **Current price has two homes** — `positions.current_price` (held, via `ibPricePoller`/`finnhubPricePoller`) and `quotes.canonical_price` (watchlist/curated, via `watchlistQuotePoller`→`services/quotes`). `architecture.md` claims one SSOT; verify a held-AND-watchlisted ticker isn't priced by two pollers into two columns.
 5. **Three price pollers** (`ibPricePoller`, `finnhubPricePoller`, `watchlistQuotePoller`) — confirm the held-vs-watchlist division is clean and not double-fetching.
-6. **`earningsCalendarRange` pulled twice** — both `catalystReversalProducer` and `postEarningsDriftProducer` call it daily; could share one cached pull (single-request principle).
+6. ~~**`earningsCalendarRange` pulled twice**~~ — **RESOLVED (Batch X6):** both producers now read one shared once-per-day pull via `services/earningsCalendar.ts` (`getEarningsWindow`), each filtering to its own lookback.
