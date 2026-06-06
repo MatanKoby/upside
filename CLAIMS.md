@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X3 — Curated-list volume gate: median ADV from IB bars
-- Owner: claude
-- Started: 2026-06-06 07:56
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,22 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X3 — Curated-list volume gate: median ADV from IB bars (2026-06-06)
+- Owner: claude
+- Started: 2026-06-06 07:56 · Finished: 2026-06-06 08:00
+- Commit: 1736ffb
+- **What shipped:** the fix that lets `curated_list` actually build — discovered during the X1/X2 live-flip when the virtual lists stayed empty. **Root cause:** `curatedListCron.loadSeeds` pre-filtered candidates on `universe.last_avg_volume`, which is NULL for all 5,307 universe rows. Nothing ever populates it — `universeCron` writes `null`, `marketCapRefreshCron`'s header claimed a "+ last_avg_volume bootstrap" that was never implemented (its `.update()` only writes `last_market_cap_m`; Finnhub `profile2` carries no avg volume). So 0 seeds passed the gate → empty list → both virtual tabs stuck in "warming up". The IB `/iserver/marketdata/history` 503s seen at the same time were a *separate* off-hours (≈03:10 ET) issue, not the blocker.
+  - **`cron/curatedListCron.ts`** — `loadSeeds` drops the `universe` join + volume pre-filter; returns all `intraday_range_trader` seeds, top `MAX_CANDIDATES` by score. `dailyAtrPct` → `dailyMetrics`, which from one daily-bar pull (`ibHistory 3m/1d`) computes BOTH the ATR% and the **30d median ADV** (`median` of the last-30 `bars[].v`, finite & >0). `CuratedCandidate.avgDailyVolume` is now the bar-derived median; the early-stop counter + `buildCuratedList` gate on `medAdv >= MIN_AVG_VOLUME` as before.
+  - **`services/curatedList/buildCuratedList.ts`** — gate logic unchanged (already gated on `avgDailyVolume`); header comment updated. Its 5 vitest cases still pass (the gate contract is intact).
+  - **`config/curatedList.ts`** — `MIN_AVG_VOLUME` comment clarifies the bar-derived source.
+  - **`cron/marketCapRefreshCron.ts`** — dropped the misleading "+ last_avg_volume bootstrap" header line.
+- **Design decisions (settled with the user):**
+  - **A over B/C.** A = median ADV from the IB bars already pulled for ATR (zero marginal API cost, internally consistent with ATR, honors the gate's documented "30d median" intent). B (precompute `universe.last_avg_volume` from Polygon) deferred to **Batch X4** — its payoff is scale/robustness (cheap universe-wide pre-filter, survives IB outages, feeds `catalystReversal`), not data quality. C (single-day `last_volume` fallback) **rejected** — noisy, not decision-grade.
+  - **No fallback when IB history is down** — the list stays empty rather than admit low-quality-gated names. Quality-first, per the user's "don't just show stuff."
+- **Spec:** `spec/signals/curated-list.md` → Membership rule + new *Volume source (2026-06-06)* note (commit 8924f43).
+- **Verification:** `pnpm typecheck:server` clean; `vitest run` **169/169**. Live verification pending — needs the deploy + IB history available (the curated cron is 12h-from-boot + boot-kick, IB-gated). After `git pull && ./bin/upside rebuild api` on the VPS, `curated_list` should climb above 0 once a probe cycle runs with history serving (likely at US pre-market/RTH, not the 03:10 ET off-hours window where history was 503ing).
+- **Follow-up:** Batch X4 (deferred) — precompute `universe.last_avg_volume`.
 
 ### Batch X2 — Watchlist virtual lists: Intraday / Swing (2026-06-06)
 - Owner: claude
