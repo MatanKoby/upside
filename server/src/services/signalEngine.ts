@@ -114,10 +114,16 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     }
     if (isHeld) {
       const minMktValue = Number(prefs?.signal_min_market_value ?? 1000);
-      const mktValue =
-        num(position.market_value) ??
-        (num(position.shares) ?? 0) * (num(position.current_price) ?? 0);
-      if (mktValue < minMktValue) {
+      // Price SSOT (Batch X5): market value = quotes.canonical_price × shares.
+      const heldConid = position.conid != null ? Number(position.conid) : null;
+      let heldPrice: number | null = null;
+      if (heldConid != null && Number.isFinite(heldConid)) {
+        const { data: q } = await db.from('quotes').select('canonical_price').eq('conid', heldConid).maybeSingle();
+        heldPrice = num(q?.canonical_price);
+      }
+      const mktValue = heldPrice != null ? (num(position.shares) ?? 0) * heldPrice : null;
+      // Only skip when we can actually price it below the floor; proceed if unpriced.
+      if (mktValue != null && mktValue < minMktValue) {
         console.log(`[signalEngine] ${sym} held value ${mktValue} < ${minMktValue} — skipping`);
         return;
       }
@@ -166,11 +172,22 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       companyName = companyName ?? contractRow.company_name ?? null;
     }
 
-    // --- Current price (IB snapshot, fall back to stored price) ----------
-    let currentPrice: number | null = num(position?.current_price);
+    // --- Current price (IB snapshot, fall back to canonical quote) -------
+    // Price SSOT (Batch X5): the fallback is quotes.canonical_price by conid,
+    // not a positions column.
+    let currentPrice: number | null = null;
+    {
+      const { data: q } = await db.from('quotes').select('canonical_price').eq('conid', conid).maybeSingle();
+      currentPrice = num(q?.canonical_price);
+    }
     const snap = await ibSnapshot([conid]).catch(() => []);
     const live = num(snap[0]?.['31']);
     if (live != null) currentPrice = live;
+
+    // Held P&L% recomputed from the live price + avg cost (was positions.unrealized_pnl_pct).
+    const heldAvgCost = isHeld ? (num(position.avg_cost) ?? 0) : 0;
+    const heldPnlPct =
+      isHeld && heldAvgCost > 0 && currentPrice != null ? (currentPrice / heldAvgCost - 1) * 100 : null;
 
     // --- IB history → feature pack (the LLM's grounding) -----------------
     const daily = await ibHistory(conid, '1y', '1d');
@@ -217,7 +234,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     const inProfitTakingZone = inZone
       ? {
           thresholdPct,
-          currentPnlPct: num(position?.unrealized_pnl_pct) ?? 0,
+          currentPnlPct: heldPnlPct ?? 0,
           viaGap: Boolean((position as Record<string, unknown>)?.['entered_zone_via_gap']),
         }
       : null;
@@ -231,7 +248,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
         ? {
             shares: num(position.shares) ?? 0,
             avgCost: num(position.avg_cost) ?? 0,
-            unrealizedPnlPct: num(position.unrealized_pnl_pct),
+            unrealizedPnlPct: heldPnlPct,
           }
         : null,
       featurePack,

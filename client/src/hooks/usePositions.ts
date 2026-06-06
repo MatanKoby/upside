@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import type { Position } from '../types';
+
+// Price SSOT (Batch X5): `positions` holds holding facts only; the per-share
+// price + P&L are recomputed from `quotes.canonical_price` × shares. This hook
+// joins the two tables client-side (positions ⨝ quotes by conid) and subscribes
+// to both Realtime channels so cards stay live as the quote ticks.
 
 interface DbPosition {
   conid: number | null;
@@ -9,17 +14,16 @@ interface DbPosition {
   company_name: string | null;
   shares: number | string;
   avg_cost: number | string;
-  current_price: number | string | null;
-  market_value: number | string | null;
-  unrealized_pnl: number | string | null;
-  unrealized_pnl_pct: number | string | null;
-  today_change: number | string | null;
-  today_change_pct: number | string | null;
   vwap_value: number | string | null;
   industry: string | null;
   category: string | null;
   zone_entered_at: string | null;
   entered_zone_via_gap: boolean | null;
+}
+
+interface QuoteRow {
+  canonical_price: number | string | null;
+  today_change_pct: number | string | null;
 }
 
 function n(v: number | string | null | undefined): number {
@@ -28,19 +32,29 @@ function n(v: number | string | null | undefined): number {
   return Number.isFinite(x) ? x : 0;
 }
 
-function rowToPosition(r: DbPosition): Position {
+function rowToPosition(r: DbPosition, q: QuoteRow | undefined): Position {
+  const shares = n(r.shares);
+  const avgCost = n(r.avg_cost);
+  const price = n(q?.canonical_price);
+  const pct = n(q?.today_change_pct);
+  const marketValue = price * shares;
+  const costBasis = avgCost * shares;
+  const unrealizedPnL = price > 0 ? marketValue - costBasis : 0;
+  const unrealizedPnLPercent = price > 0 && costBasis !== 0 ? (unrealizedPnL / costBasis) * 100 : 0;
+  // Per-share $ change derived from the % (prevClose = price / (1 + pct/100)).
+  const todayChange = price > 0 && pct !== 0 ? price - price / (1 + pct / 100) : 0;
   return {
     conid: r.conid ?? null,
     symbol: r.symbol,
     name: r.company_name ?? r.symbol,
-    shares: n(r.shares),
-    avgCost: n(r.avg_cost),
-    currentPrice: n(r.current_price),
-    marketValue: n(r.market_value),
-    unrealizedPnL: n(r.unrealized_pnl),
-    unrealizedPnLPercent: n(r.unrealized_pnl_pct),
-    todayChange: n(r.today_change),
-    todayChangePercent: n(r.today_change_pct),
+    shares,
+    avgCost,
+    currentPrice: price,
+    marketValue,
+    unrealizedPnL,
+    unrealizedPnLPercent,
+    todayChange,
+    todayChangePercent: pct,
     vwap: n(r.vwap_value),
     sparkline: [],            // populated by PositionCard via /sparkline endpoint
     signal: undefined,        // signals merged in by PortfolioHome via useSignals (Batch 14)
@@ -59,9 +73,11 @@ export function usePositions(): UsePositionsResult {
   const [positions, setPositions] = useState<Position[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const heldConids = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     let alive = true;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function loadInitial() {
       const { data: session } = await supabase.auth.getSession();
@@ -77,8 +93,7 @@ export function usePositions(): UsePositionsResult {
       const { data, error: fetchError } = await supabase
         .from('positions')
         .select('*')
-        .eq('user_id', userId)
-        .order('market_value', { ascending: false });
+        .eq('user_id', userId);
 
       if (!alive) return;
       if (fetchError) {
@@ -87,8 +102,32 @@ export function usePositions(): UsePositionsResult {
         return;
       }
       const rows = (data ?? []) as DbPosition[];
-      setPositions(rows.map(rowToPosition));
+
+      // Pull the canonical price for the held conids from `quotes` (the one
+      // price home) and recompute market value + P&L.
+      const conids = rows.map((r) => Number(r.conid)).filter((c) => Number.isFinite(c));
+      heldConids.current = new Set(conids);
+      const quoteByConid = new Map<number, QuoteRow>();
+      if (conids.length > 0) {
+        const { data: quotes } = await supabase
+          .from('quotes')
+          .select('conid, canonical_price, today_change_pct')
+          .in('conid', conids);
+        for (const q of quotes ?? []) {
+          const c = Number((q as { conid: number | string | null }).conid);
+          if (Number.isFinite(c)) quoteByConid.set(c, q as QuoteRow);
+        }
+      }
+      if (!alive) return;
+      const mapped = rows.map((r) => rowToPosition(r, quoteByConid.get(Number(r.conid))));
+      mapped.sort((a, b) => b.marketValue - a.marketValue);
+      setPositions(mapped);
       setIsLoading(false);
+    }
+
+    function scheduleReload() {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => void loadInitial(), 250);
     }
 
     void loadInitial();
@@ -98,16 +137,24 @@ export function usePositions(): UsePositionsResult {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'positions' },
-        () => {
-          // Realtime fires per-row; simplest is to re-pull the whole set since
-          // we want them sorted + de-duplicated anyway.
-          void loadInitial();
+        () => scheduleReload(),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quotes' },
+        (payload) => {
+          // The quotes table ticks for the whole watchlist/curated universe;
+          // only reload when a *held* conid changed.
+          const row = (payload.new ?? payload.old) as { conid?: number | string } | null;
+          const conid = row?.conid != null ? Number(row.conid) : NaN;
+          if (Number.isFinite(conid) && heldConids.current.has(conid)) scheduleReload();
         },
       )
       .subscribe();
 
     return () => {
       alive = false;
+      if (reloadTimer) clearTimeout(reloadTimer);
       void supabase.removeChannel(channel);
     };
   }, []);

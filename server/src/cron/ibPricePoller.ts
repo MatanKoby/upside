@@ -304,15 +304,25 @@ async function assemblePosition(
   };
 }
 
-function finalizePortfolioMetrics(rows: AssembledPosition[]): void {
-  const total = rows.reduce((acc, r) => acc + (r.market_value || 0), 0);
-  if (total <= 0) return;
-  for (const r of rows) {
-    r.portfolio_weight = r.market_value / total;
-    if (r.unrealized_pnl_pct != null) {
-      r.portfolio_contribution = (r.unrealized_pnl_pct / 100) * r.portfolio_weight;
-    }
-  }
+// Columns persisted to `positions` (Batch X5): holding facts only. Price + P&L
+// (current_price / market_value / unrealized_pnl[_pct] / today_change[_pct] /
+// daily_return / portfolio_weight / portfolio_contribution) live in `quotes` /
+// are recomputed by readers, so they're dropped from the write even though the
+// assembled object still carries them in-memory for the quotes mirror + MTD +
+// zone math below.
+const POSITION_WRITE_COLUMNS = [
+  'user_id', 'conid', 'account_id', 'symbol', 'company_name', 'shares', 'avg_cost',
+  'realized_pnl', 'vwap_value', 'vwap_updated_at', 'trading_days_held',
+  'first_seen_at', 'first_seen_source', 'currency', 'asset_class', 'industry',
+  'category', 'price_source', 'last_price_update_at', 'updated_at',
+  'zone_entered_at', 'zone_exited_at', 'last_zone_notification_at', 'entered_zone_via_gap',
+] as const;
+
+function toPositionRow(a: AssembledPosition): Record<string, unknown> {
+  const src = a as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of POSITION_WRITE_COLUMNS) out[k] = src[k];
+  return out;
 }
 
 async function pollCycle(userId: string, accountId: string): Promise<void> {
@@ -333,7 +343,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   // change-detection skip below, and prior profit-taking-zone state.
   const { data: existing } = await supabase()
     .from('positions')
-    .select('symbol, current_price, market_value, unrealized_pnl, vwap_value, shares, avg_cost, first_seen_at, first_seen_source, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
+    .select('symbol, vwap_value, shares, avg_cost, first_seen_at, first_seen_source, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
     .eq('user_id', userId);
 
   const existingMap = new Map<string, Record<string, unknown>>();
@@ -380,7 +390,6 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     }
     assembled.push(a);
   }
-  finalizePortfolioMetrics(assembled);
 
   // MTD: stamp the portfolio value at the start of each calendar month so
   // /api/portfolio/summary can compute month-to-date return. Fire-and-forget;
@@ -405,11 +414,10 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     // source='ib_transactions' the resolver short-circuits, so this fires at
     // most once per real resolution — no thrash. (trading_days_held +
     // daily_return derive from first_seen_at and ride along on the same write.)
+    // Price/P&L moved to `quotes` (Batch X5) — the positions row only changes
+    // on holding facts: vwap, shares/avg_cost, entry provenance, zone state.
     if (
-      Number(e.current_price) !== r.current_price
-      || Number(e.market_value) !== r.market_value
-      || Number(e.unrealized_pnl) !== r.unrealized_pnl
-      || Number(e.vwap_value ?? NaN) !== (r.vwap_value ?? NaN)
+      Number(e.vwap_value ?? NaN) !== (r.vwap_value ?? NaN)
       || Number(e.shares) !== r.shares
       || Number(e.avg_cost) !== r.avg_cost
       || String(e.first_seen_source ?? '') !== r.first_seen_source
@@ -434,7 +442,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
 
   const { error } = await supabase()
     .from('positions')
-    .upsert(toUpsert, { onConflict: 'user_id,symbol' });
+    .upsert(toUpsert.map(toPositionRow), { onConflict: 'user_id,symbol' });
   if (error) void notifyError('ibPricePoller.positions.upsert', error.message);
 
   // Mirror held prices into the canonical `quotes` table (Batch A1). IB is

@@ -111,24 +111,22 @@ function ratioInRange(price: number, low: number | null, high: number | null): n
   return Math.max(0, Math.min(1, (price - low) / (high - low)));
 }
 
+// Price SSOT (Batch X5): positions holds holding facts only; price + P&L come
+// from `quotes.canonical_price` × shares, computed here.
 interface DbPosition {
   conid: number | null;
   symbol: string;
   company_name: string | null;
   shares: number | string;
   avg_cost: number | string;
-  current_price: number | string | null;
-  market_value: number | string | null;
-  unrealized_pnl: number | string | null;
-  unrealized_pnl_pct: number | string | null;
-  today_change: number | string | null;
-  today_change_pct: number | string | null;
-  portfolio_weight: number | string | null;
-  portfolio_contribution: number | string | null;
   trading_days_held: number | string | null;
-  daily_return: number | string | null;
   first_seen_source: string | null;
   first_seen_at: string | null;
+}
+
+interface QuoteRow {
+  canonical_price: number | string | null;
+  today_change_pct: number | string | null;
 }
 
 function num(v: number | string | null | undefined): number {
@@ -137,26 +135,29 @@ function num(v: number | string | null | undefined): number {
   return Number.isFinite(x) ? x : 0;
 }
 
-function rowToTickerDetail(r: DbPosition, totalPortfolioValue: number): TickerDetailData {
-  const marketValue = num(r.market_value);
-  const portfolioWeightFromRow = num(r.portfolio_weight);
-  // `portfolio_weight` on the row is in [0, 1] (pricePoller writes it that
-  // way). Surface as a percent for the UI.
-  const weightPct =
-    portfolioWeightFromRow > 0
-      ? portfolioWeightFromRow * 100
-      : totalPortfolioValue > 0
-        ? (marketValue / totalPortfolioValue) * 100
-        : 0;
-  const contributionPct = num(r.portfolio_contribution) * 100;
+function rowToTickerDetail(r: DbPosition, q: QuoteRow | undefined, totalPortfolioValue: number): TickerDetailData {
+  const shares = num(r.shares);
+  const avgCost = num(r.avg_cost);
+  const price = num(q?.canonical_price);
+  const pct = num(q?.today_change_pct);
+  const marketValue = price * shares;
+  const costBasis = avgCost * shares;
+  const unrealizedPnL = price > 0 ? marketValue - costBasis : 0;
+  const unrealizedPnLPercent = price > 0 && costBasis !== 0 ? (unrealizedPnL / costBasis) * 100 : 0;
+  const weightPct = totalPortfolioValue > 0 ? (marketValue / totalPortfolioValue) * 100 : 0;
+  // contribution = position P&L% weighted by portfolio share (weight in [0,1]).
+  const contributionPct = unrealizedPnLPercent * (weightPct / 100);
+  // Per-share $ change derived from the % (prevClose = price / (1 + pct/100)).
+  const todayChange = price > 0 && pct !== 0 ? price - price / (1 + pct / 100) : 0;
+  const daysHeld = num(r.trading_days_held);
 
   return {
     conid: r.conid ?? null,
     symbol: r.symbol,
     company: r.company_name ?? r.symbol,
-    price: num(r.current_price),
-    todayChange: num(r.today_change),
-    todayChangePercent: num(r.today_change_pct),
+    price,
+    todayChange,
+    todayChangePercent: pct,
     // Base values — the snapshot fetch (below) merges real day range +
     // Market Stats over these once it resolves.
     dayLow: 0,
@@ -165,20 +166,18 @@ function rowToTickerDetail(r: DbPosition, totalPortfolioValue: number): TickerDe
     marketStats: [],
     signal: null,
     positionStats: {
-      shares: num(r.shares),
-      avgCost: num(r.avg_cost),
+      shares,
+      avgCost,
       marketValue,
-      unrealizedPnL: num(r.unrealized_pnl),
-      unrealizedPnLPercent: num(r.unrealized_pnl_pct),
-      // dayPnL is technically num(shares * todayChange); todayChange in our
-      // schema is *per-share* delta. Compute both for consistency with mock.
-      dayPnL: num(r.shares) * num(r.today_change),
-      dayPnLPercent: num(r.today_change_pct),
+      unrealizedPnL,
+      unrealizedPnLPercent,
+      dayPnL: shares * todayChange,
+      dayPnLPercent: pct,
       portfolioWeightPercent: weightPct,
       contributionPercent: contributionPct,
-      daysHeld: num(r.trading_days_held),
+      daysHeld,
       daysHeldSource: r.first_seen_source === 'ib_transactions' ? 'ib_transactions' : 'observed',
-      dailyReturnPercent: r.daily_return == null ? null : num(r.daily_return),
+      dailyReturnPercent: daysHeld > 0 ? unrealizedPnLPercent / daysHeld : null,
       entryDate: r.first_seen_at,
     },
     indicators: [],
@@ -243,10 +242,28 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
       }
 
       const rows = (data ?? []) as DbPosition[];
-      const total = rows.reduce((acc, r) => acc + num(r.market_value), 0);
+      // Canonical price per held conid from `quotes` (price SSOT, Batch X5),
+      // for both this ticker's P&L and the portfolio total (weight calc).
+      const conids = rows.map((r) => Number(r.conid)).filter((c) => Number.isFinite(c));
+      const quoteByConid = new Map<number, QuoteRow>();
+      if (conids.length > 0) {
+        const { data: quotes } = await supabase
+          .from('quotes')
+          .select('conid, canonical_price, today_change_pct')
+          .in('conid', conids);
+        for (const q of quotes ?? []) {
+          const c = Number((q as { conid: number | string | null }).conid);
+          if (Number.isFinite(c)) quoteByConid.set(c, q as QuoteRow);
+        }
+      }
+      if (!alive) return;
+      const total = rows.reduce(
+        (acc, r) => acc + num(quoteByConid.get(Number(r.conid))?.canonical_price) * num(r.shares),
+        0,
+      );
       const target = symbol ? rows.find((r) => r.symbol.toUpperCase() === symbol.toUpperCase()) : undefined;
       if (target) {
-        setResult({ state: 'loaded', detail: rowToTickerDetail(target, total) });
+        setResult({ state: 'loaded', detail: rowToTickerDetail(target, quoteByConid.get(Number(target.conid)), total) });
         return;
       }
 

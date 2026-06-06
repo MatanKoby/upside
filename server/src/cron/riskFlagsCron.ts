@@ -46,12 +46,13 @@ async function workingSet(): Promise<Target[]> {
   const db = supabase();
   const byConid = new Map<number, Target>();
 
-  // Held positions.
-  const { data: positions } = await db.from('positions').select('conid, symbol, current_price');
+  // Held positions. Price comes from the canonical quote (Batch X5 — positions
+  // no longer carries current_price); the quotes-fill loop below sets it.
+  const { data: positions } = await db.from('positions').select('conid, symbol');
   for (const p of positions ?? []) {
     const conid = num(p.conid);
     if (conid == null) continue;
-    byConid.set(conid, { conid, symbol: String(p.symbol), price: num(p.current_price) });
+    byConid.set(conid, { conid, symbol: String(p.symbol), price: null });
   }
 
   // Active-watchlist conids (excluding the held ones we already have).
