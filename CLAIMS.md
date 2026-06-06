@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X3 — Curated-list volume gate: median ADV from IB bars
+- Owner: claude
+- Started: 2026-06-06 07:56
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
