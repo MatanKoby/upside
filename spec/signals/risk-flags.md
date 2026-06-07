@@ -30,8 +30,10 @@ Each flag = `{ key, severity, since, payload }`. Every input is already pulled t
 | `near_52w_high_surge` | within **W%** of 52-week high **AND** `price_surge` active | W = 5% | `pctFrom52wHigh` (feature pack) | WARNING |
 | `micro_cap` | market cap < **$C** | C = $500M | Finnhub `marketCapitalization` | WARNING |
 | `earnings_imminent` | next earnings < **D** days away | D = 5 | Finnhub `/calendar/earnings` (already wired) | WARNING |
+| `bad_news` | news sentiment ≤ **newsBearishScore** over trailing 48h | −0.35 | `news_sentiment.score` (lexicon, Batch X7) | WARNING |
 
 Notes:
+- **`bad_news` (Batch X7)** — never CRITICAL (it's not a pump, so it's not in the `CORROBORATING` set and never escalates / clamps). Payload carries `{ news_score, articles }` (numbers only); the **headline** lives in `news_sentiment` (the flag payload can't hold strings) — the virtual-list news chip surfaces it, and the Risk-flags section reading the headline is a deferred follow-up. Input is optional on `RiskFlagInputs` (`newsScore`, default null), so a caller that doesn't score news simply raises no `bad_news`. See `news-signal.md`.
 - **`price_surge` is the spine** — the explicit "this rose on momentum, with no fundamental anchor" signal the feature pack doesn't carry today (it has `pctFrom52wHigh` and `priceVsSma*` but no trailing-N-session return). One small computed addition over bars we already fetch.
 - **`near_52w_high_surge` is deliberately compound** (near-high ∧ surged-to-get-there) — the "bought at the peak" risk. A stock sitting quietly near its 52w high *without* a surge is not flagged.
 - **`micro_cap`** — `universeFilter` already drops sub-$150M names from the screener universe, but held/watchlist names in the $150M–$500M band are still thin enough to flag.
@@ -62,4 +64,4 @@ Going forward, "is a flag actually useful?" rides on the forward-tracking backbo
 
 ## Deferred — new-data flags (v2)
 
-Each needs a **new data source**, so each is its own data-plumbing slice — deferred to the roadmap, not dropped. See `../roadmap.md` → Risk flags v2: short-interest / % of float (squeeze risk), spread / liquidity (slippage), binary-catalyst calendar (FDA PDUFA / trial readout), news-narrative spike (headline-only move). Build each when a v1 flag in actual use proves it wants the extra signal.
+Each needs a **new data source**, so each is its own data-plumbing slice — deferred to the roadmap, not dropped. See `../roadmap.md` → Risk flags v2: short-interest / % of float (squeeze risk), spread / liquidity (slippage), binary-catalyst calendar (FDA PDUFA / trial readout). ~~news-narrative spike (headline-only move)~~ **shipped as `bad_news` (Batch X7 — see `news-signal.md`).** Build each when a v1 flag in actual use proves it wants the extra signal.

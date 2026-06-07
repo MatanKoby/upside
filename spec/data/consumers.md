@@ -32,7 +32,8 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 | `entryZonesCron` | `quotes` | `entry_zones` | — | per poll cycle |
 | `dipBounceCron` *(service)* | `quotes`, `intraday_stats`, `band_state`, `entry_zones`, `curated_list` (via `computeSet`), `daily_bars` (swing pack) | `signal_fires` | Discord webhooks | 60s |
 | `signalOutcomesCron` | `signal_fires`, `quotes` | `signal_outcomes` | — | 5min |
-| `riskFlagsCron` | `user_preferences`, `positions`, `quotes` | `risk_flags` | Finnhub `basicFinancials` + `earningsCalendar` | daily |
+| `riskFlagsCron` | `user_preferences`, `positions`, `quotes`, `news_sentiment` (bad_news flag input, Batch X7) | `risk_flags` | Finnhub `basicFinancials` + `earningsCalendar` | daily |
+| `newsSentimentCron` | `positions`, `watchlist_items`, `curated_list` | `news_sentiment` | Finnhub `companyNews` (per-ticker, 48h) | daily (not IB-gated) |
 | `ibPricePoller` | `contracts`, `positions` | `contracts`, `positions` (holding facts only), `quotes` (price) | IB positions + snapshot | poll loop (IB up) |
 | `finnhubPricePoller` | `positions` | `quotes` (price), `positions` (price-source metadata + zone state) | Finnhub `getQuote` | poll loop (IB down) |
 | `watchlistQuotePoller` | `positions` | `quotes` (via `services/quotes`) | Finnhub `getQuote` | poll loop |
@@ -88,7 +89,7 @@ Legend: **R** = reads table · **W** = writes table · *(src)* = external source
 | `useChartHistory` | — | `/api/marketdata/history` |
 | `useSparkline` | — | `/api/marketdata/sparkline` |
 | `useWatchlistData` | `watchlist_lists`, `watchlist_items`, `quotes`, `watchlist_markers`, `entry_zones`, `intraday_stats` | `/api/watchlists/*` |
-| `useVirtualList` | `curated_list`, `trait_scores`, `quotes`, `band_state`, `signal_fires`, `signal_outcomes` | — |
+| `useVirtualList` | `curated_list`, `trait_scores`, `quotes`, `band_state`, `signal_fires`, `signal_outcomes`, `news_sentiment` (chip + rank nudge, Batch X7) | — |
 | `useRiskFlags` / `useRiskFlagConfig` | `risk_flags` | — |
 | `useSignals` | `signals`, `analyses` | `/api/signals/analyze` |
 | `useAnalysisLock` | `analysis_locks` | — |

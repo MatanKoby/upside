@@ -63,9 +63,8 @@ IB is connected, which is why it owns fundamentals + the price fallback.
 | `/quote` | `getQuote` | last/high/low/open/prevClose/change (**no volume**) | `positions.current_price`, `quotes` (fallback) | `finnhubPricePoller`, `watchlistQuotePoller`, `universeCron` |
 | `/calendar/earnings?from&to` | `earningsCalendarRange` | bulk earnings dates (epsActual/estimate, hour) | **ephemeral** → `trait_scores` | `catalystReversalProducer`, `postEarningsDriftProducer` |
 | `/calendar/earnings?symbol` | `earningsCalendar` | per-symbol next/last earnings | **ephemeral** (earnings-imminent flag, analyses) | `riskFlagsCron`, `signalEngine` |
-| `/company-news` | `companyNews` | headlines for the LLM | **ephemeral** (analyses) | `signalEngine` |
+| `/company-news` | `companyNews` | headlines + summaries → LLM context **and** lexicon sentiment | **ephemeral** (analyses) → `news_sentiment` (Batch X7 scored) | `signalEngine`, `newsSentimentCron` |
 | `/stock/insider-transactions` | `insiderTransactions` | insider activity for the LLM | **ephemeral** (analyses) | `signalEngine` |
-| `/news-sentiment` | `newsSentiment` | aggregated sentiment score | — | **none — defined but unused** (see *Observations*) |
 
 **`/stock/candle` is paid-tier only** (403 on free as of 2026-05) — Finnhub is
 **not** a bar source. Bars come from IB (and, per the plan, Polygon).
@@ -160,7 +159,7 @@ export async function yahooChart(symbol: string): Promise<DailyOhlcv | null>;
 | Live intraday price | IB snapshot → `positions.current_price` / `quotes.canonical_price` | Finnhub `/quote` | ✅ wired |
 | Fundamentals (cap, 52w, PE…) | Finnhub | SEC EDGAR API (planned) | ✅ wired |
 | Earnings calendar | Finnhub | — | ✅ wired (single-source) |
-| News / catalyst | Finnhub | SEC/PR/FDA RSS (planned) | ⚠️ thin |
+| News / catalyst | Finnhub `companyNews` → `news_sentiment` (lexicon, Batch X7) | SEC/PR/FDA RSS (planned); LLM scoring (deferred) | ⚠️ thin (headline-lexicon only) |
 | Universe daily price+volume | Polygon | Yahoo (gap-fill) | ✅ wired |
 | Daily OHLCV bars → ATR / ADV / swing packs / sparkline | **Polygon → `daily_bars`** (Batch X4) | Yahoo (gap-fill) | ✅ wired |
 
@@ -178,7 +177,7 @@ volume for `catalyst_reversal` Stage-1 stays IB for the same reason.
 
 1. ~~**Daily bars are the only un-fallback'd source**~~ — **RESOLVED (Batch X4):** the `daily_bars` table (Polygon-primary, Yahoo gap-fill) is the daily-grain SSOT; curated cron / swing pack / sparkline read it instead of IB history. Band engine + entry-zone cron stay IB (they need intraday 5-min bars).
 2. ~~**`universe.last_avg_volume` specced but never written**~~ — **RESOLVED (Batch X4):** derived from `daily_bars` via `refresh_universe_avg_volume()` (30d median per conid). Column widened `integer → bigint`.
-3. **`newsSentiment` is defined in `finnhub.ts` but called by nothing** — dead code or an unfinished `catalyst_reversal` input. Decide: wire it or delete it.
+3. ~~**`newsSentiment` is defined in `finnhub.ts` but called by nothing**~~ — **RESOLVED (Batch X7):** probed 2026-06-07 → **403 premium** on our free key, so it's unusable; **deleted**. News-as-signal instead scores `companyNews` headlines with an LM-inspired lexicon into `news_sentiment` (`signals/news-signal.md`).
 4. ~~**Current price has two homes**~~ — **RESOLVED (Batch X5):** `quotes` is the single price home. `migration 030` dropped `positions.current_price` + all price/P&L-derived columns; market value + unrealized P&L are recomputed from `quotes.canonical_price × shares` by every reader. The pollers still write the quote; they write only price-source metadata onto `positions`.
 5. **Three price pollers** (`ibPricePoller`, `finnhubPricePoller`, `watchlistQuotePoller`) — confirm the held-vs-watchlist division is clean and not double-fetching.
 6. ~~**`earningsCalendarRange` pulled twice**~~ — **RESOLVED (Batch X6):** both producers now read one shared once-per-day pull via `services/earningsCalendar.ts` (`getEarningsWindow`), each filtering to its own lookback.
