@@ -8,6 +8,11 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X7 — News-as-signal: lexicon sentiment → bad-news risk flag + rank nudge
+- Owner: claude
+- Started: 2026-06-07 05:35
+- **Design settled with user (2026-06-07):** risk-flags-modifier shape (not a universe trait — no bulk news endpoint, so it runs over held ∪ watchlist ∪ curated only); LM-inspired finance **lexicon** over `companyNews` (Finnhub `/news-sentiment` probed → **403 premium**, dead; LLM scoring deferred). New `news_sentiment` SSOT table consumed by the risk-flags engine (`bad_news` WARNING flag) + `useVirtualList` (news chip + good/bad rank nudge). Decay window 48h. Deletes the dead `newsSentiment` fn.
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
