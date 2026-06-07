@@ -65,8 +65,9 @@ export function buildRiskFlagInputs(opts: {
   metric: FinnhubMetrics | null;
   earningsRaw: unknown;
   config: RiskFlagConfig;
+  newsScore?: number | null; // Batch X7 — bad_news input; omit/null → no bad_news flag
 }): RiskFlagInputs {
-  const { closes, volumes, high52w, currentPrice, metric, earningsRaw, config } = opts;
+  const { closes, volumes, high52w, currentPrice, metric, earningsRaw, config, newsScore } = opts;
   return {
     currentPrice,
     surgePct: surgePctFromBars(closes, currentPrice, config.surgeWindowSessions),
@@ -75,5 +76,6 @@ export function buildRiskFlagInputs(opts: {
     high52w,
     marketCapUsd: marketCapUsdFromMetric(metric),
     earningsDays: earningsDaysFromCalendar(earningsRaw),
+    newsScore: newsScore ?? null,
   };
 }

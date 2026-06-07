@@ -13,7 +13,8 @@ export type RiskFlagKey =
   | 'rsi_overbought'
   | 'near_52w_high_surge'
   | 'micro_cap'
-  | 'earnings_imminent';
+  | 'earnings_imminent'
+  | 'bad_news';
 
 export type RiskSeverity = 'warning' | 'critical';
 
@@ -25,6 +26,7 @@ export interface RiskFlagConfig {
   near52wHighPct: number; // W — within this % of the 52w high for near_52w_high_surge
   microCapUsd: number; // C — market-cap floor (USD) for micro_cap
   earningsDays: number; // D — days-to-earnings ceiling for earnings_imminent
+  newsBearishScore: number; // news sentiment at/below which bad_news fires (Batch X7; matches config/news NEWS_BEARISH_SCORE)
 }
 
 export const RISK_FLAG_DEFAULTS: RiskFlagConfig = {
@@ -35,6 +37,7 @@ export const RISK_FLAG_DEFAULTS: RiskFlagConfig = {
   near52wHighPct: 5,
   microCapUsd: 500_000_000,
   earningsDays: 5,
+  newsBearishScore: -0.35,
 };
 
 // Merge a partial user override (user_preferences.risk_flag_config) over the
@@ -52,6 +55,7 @@ export function resolveRiskFlagConfig(override: unknown): RiskFlagConfig {
     near52wHighPct: numOr(o.near52wHighPct, RISK_FLAG_DEFAULTS.near52wHighPct),
     microCapUsd: numOr(o.microCapUsd, RISK_FLAG_DEFAULTS.microCapUsd),
     earningsDays: numOr(o.earningsDays, RISK_FLAG_DEFAULTS.earningsDays),
+    newsBearishScore: numOr(o.newsBearishScore, RISK_FLAG_DEFAULTS.newsBearishScore),
   };
 }
 

@@ -20,6 +20,7 @@ const CLEAN: RiskFlagInputs = {
   high52w: 130,
   marketCapUsd: 50_000_000_000,
   earningsDays: 40,
+  newsScore: 0,
 };
 
 function keys(row: ReturnType<typeof computeRiskFlags>): string[] {
@@ -68,6 +69,24 @@ describe('computeRiskFlags — tiers + gating', () => {
     const row = computeRiskFlags({ ...CLEAN, earningsDays: 3 }, CFG, ASOF);
     expect(keys(row)).toEqual(['earnings_imminent']);
     expect(row?.severity).toBe('warning');
+  });
+
+  it('bad_news alone is WARNING (never escalates a pump)', () => {
+    const row = computeRiskFlags({ ...CLEAN, newsScore: -0.6 }, CFG, ASOF);
+    expect(keys(row)).toEqual(['bad_news']);
+    expect(row?.severity).toBe('warning');
+    expect(row?.flags[0]?.payload.news_score).toBe(-0.6);
+  });
+
+  it('bad_news does NOT corroborate a surge into CRITICAL', () => {
+    const row = computeRiskFlags({ ...CLEAN, surgePct: 30, newsScore: -0.6 }, CFG, ASOF);
+    expect(keys(row)).toEqual(['bad_news', 'price_surge']);
+    expect(row?.severity).toBe('warning'); // surge alone is WARNING; bad_news can't escalate it
+  });
+
+  it('positive / null news raises no flag', () => {
+    expect(computeRiskFlags({ ...CLEAN, newsScore: 0.8 }, CFG, ASOF)).toBeNull();
+    expect(computeRiskFlags({ ...CLEAN, newsScore: null }, CFG, ASOF)).toBeNull();
   });
 });
 

@@ -18,6 +18,7 @@ import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGatew
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
 import { buildFeaturePack, type Bars, type FeaturePack } from './technicals.js';
 import { buildRiskFlagInputs } from './riskFlags/inputs.js';
+import { scoreNews, type NewsArticle } from './news/scoreNews.js';
 import { evaluateAndStore, riskFlagAsofDate } from './riskFlags/engine.js';
 import { resolveRiskFlagConfig, CRITICAL_QUALITY_CAP } from '../config/riskFlags.js';
 import { incrLlmCallsToday } from './redis.js';
@@ -224,6 +225,9 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       metric,
       earningsRaw: earnings,
       config: riskConfig,
+      // Batch X7 — score the headlines we already pulled for the LLM (freshest,
+      // zero extra call) so Analyze raises bad_news on the spot.
+      newsScore: scoreNews(news as NewsArticle[]).score,
     });
     const riskRow = await evaluateAndStore(conid, riskInputs, riskConfig, riskFlagAsofDate());
 

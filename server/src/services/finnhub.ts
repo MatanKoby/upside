@@ -80,11 +80,6 @@ export async function companyNews(symbol: string, from: string, to: string): Pro
   return Array.isArray(data) ? data : [];
 }
 
-export async function newsSentiment(symbol: string): Promise<unknown> {
-  const { data } = await call('news', symbol, '/news-sentiment', { symbol });
-  return data;
-}
-
 export async function earningsCalendar(symbol: string): Promise<unknown> {
   const { data } = await call('earnings', symbol, '/calendar/earnings', { symbol });
   return data;

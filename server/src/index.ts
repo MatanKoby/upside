@@ -18,6 +18,7 @@ import { startFinnhubPricePoller } from './cron/finnhubPricePoller.js';
 import { startWatchlistQuotePoller } from './cron/watchlistQuotePoller.js';
 import { startEntryZonesCron } from './cron/entryZonesCron.js';
 import { startRiskFlagsCron } from './cron/riskFlagsCron.js';
+import { startNewsSentimentCron } from './cron/newsSentimentCron.js';
 import { startIntradayStatsCron } from './cron/intradayStatsCron.js';
 import { startUniverseCron } from './cron/universeCron.js';
 import { startUniverseQuoteProducer } from './cron/universeQuoteProducer.js';
@@ -91,6 +92,7 @@ app.listen(env.port, () => {
   startWatchlistQuotePoller();
   startEntryZonesCron();
   startRiskFlagsCron();
+  startNewsSentimentCron(); // Batch X7 — news-as-signal producer (not IB-gated)
   startIntradayStatsCron();
   startUniverseCron();
   startUniverseQuoteProducer();

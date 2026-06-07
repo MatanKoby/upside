@@ -21,6 +21,7 @@ export interface RiskFlagInputs {
   high52w: number | null;
   marketCapUsd: number | null;
   earningsDays: number | null; // days until next earnings (>= 0), null if unknown
+  newsScore: number | null; // aggregate news sentiment ∈ ~[-1,+1] (Batch X7), null if unscored
 }
 
 export interface ActiveFlag {
@@ -51,7 +52,8 @@ export function computeRiskFlags(
     flags.push({ key, since: prevSince[key] ?? asofDate, payload });
   };
 
-  const { currentPrice, surgePct, rsi14, relVolume, high52w, marketCapUsd, earningsDays } = inputs;
+  const { currentPrice, surgePct, rsi14, relVolume, high52w, marketCapUsd, earningsDays, newsScore } =
+    inputs;
 
   // price_surge — the spine: rose on momentum over the trailing window.
   const surging = surgePct != null && surgePct >= config.surgePct;
@@ -90,6 +92,14 @@ export function computeRiskFlags(
   // earnings_imminent — binary event + IV crush risk right before a report.
   if (earningsDays != null && earningsDays >= 0 && earningsDays < config.earningsDays) {
     raise('earnings_imminent', { days: round(earningsDays), threshold: config.earningsDays });
+  }
+
+  // bad_news — recent headline flow skews bearish (Batch X7). WARNING only:
+  // it is NOT in CORROBORATING, so it never escalates to CRITICAL / clamps the
+  // LLM (a bad headline isn't a pump). The headline itself lives in
+  // news_sentiment (the payload is numbers-only); the FE joins it.
+  if (newsScore != null && newsScore <= config.newsBearishScore) {
+    raise('bad_news', { news_score: round(newsScore), threshold: config.newsBearishScore });
   }
 
   if (flags.length === 0) return null;

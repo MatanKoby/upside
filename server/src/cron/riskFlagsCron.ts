@@ -88,6 +88,22 @@ async function tick(): Promise<void> {
   const targets = await workingSet();
   if (targets.length === 0) return;
 
+  // Batch X7 — today's news scores (written by newsSentimentCron) for the
+  // bad_news flag. One read for the whole working set; absent = unscored = null.
+  const newsByConid = new Map<number, number>();
+  {
+    const { data } = await supabase()
+      .from('news_sentiment')
+      .select('conid, score')
+      .eq('asof_date', asof)
+      .in('conid', targets.map((t) => t.conid));
+    for (const r of data ?? []) {
+      const c = num(r.conid);
+      const s = num(r.score);
+      if (c != null && s != null) newsByConid.set(c, s);
+    }
+  }
+
   for (const { conid, symbol, price } of targets) {
     try {
       const daily = await ibHistory(conid, '1y', '1d');
@@ -105,6 +121,7 @@ async function tick(): Promise<void> {
         metric,
         earningsRaw: earnings,
         config,
+        newsScore: newsByConid.get(conid) ?? null,
       });
       await evaluateAndStore(conid, inputs, config, asof);
     } catch (e) {

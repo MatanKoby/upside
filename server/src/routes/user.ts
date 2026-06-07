@@ -28,6 +28,7 @@ const BOUNDS: Record<keyof RiskFlagConfig, { min: number; max: number; int?: boo
   near52wHighPct: { min: 0, max: 50 },
   microCapUsd: { min: 1_000_000, max: 100_000_000_000 },
   earningsDays: { min: 0, max: 60, int: true },
+  newsBearishScore: { min: -1, max: 0 }, // Batch X7 — bad_news fires at/below this sentiment
 };
 
 const KEYS = Object.keys(BOUNDS) as (keyof RiskFlagConfig)[];
