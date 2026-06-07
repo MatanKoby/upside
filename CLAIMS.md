@@ -8,11 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X7 — News-as-signal: lexicon sentiment → bad-news risk flag + rank nudge
-- Owner: claude
-- Started: 2026-06-07 05:35
-- **Design settled with user (2026-06-07):** risk-flags-modifier shape (not a universe trait — no bulk news endpoint, so it runs over held ∪ watchlist ∪ curated only); LM-inspired finance **lexicon** over `companyNews` (Finnhub `/news-sentiment` probed → **403 premium**, dead; LLM scoring deferred). New `news_sentiment` SSOT table consumed by the risk-flags engine (`bad_news` WARNING flag) + `useVirtualList` (news chip + good/bad rank nudge). Decay window 48h. Deletes the dead `newsSentiment` fn.
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -43,6 +38,26 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X7 — News-as-signal: lexicon sentiment → bad_news flag + rank nudge (2026-06-07)
+- Owner: claude
+- Started: 2026-06-07 05:35 · Finished: 2026-06-07 06:00
+- Commit: fbd2da6 / ed1020d / f123138 (code) · 8c69d21 (spec) · e57d130 (queue)
+- **Design settled with user (2026-06-07):** risk-flags-**modifier** shape, *not* a universe trait — decided on API economics: there is no bulk news endpoint (`companyNews` is per-ticker), so it can only run over the small set (held ∪ watchlist ∪ curated), which is exactly the risk-flags working-set domain. **Scoring = LM-inspired finance lexicon** over `companyNews` headlines/summaries: Finnhub `/news-sentiment` was **probed live → 403 premium** on our free key (dead, deleted); EDGAR carries no sentiment; Alpha Vantage's free tier is too rate-capped; LLM scoring is the deferred upgrade. Also corrected a false premise in the old spec: `catalyst_reversal` keys off the **earnings calendar**, not news, so there was no dedup problem — news-as-signal is purely additive (it *is* the "news-sentiment sweep" that producer deferred).
+- **What shipped:**
+  - **Migration `031_news_sentiment.sql`** — `news_sentiment(conid, asof_date, score numeric, label text check bullish/neutral/bearish, article_count int, top_headline text, top_url text, source text default 'lexicon', computed_at)` PK `(conid, asof_date)` + `(asof_date desc)` index. Realtime-published (the FE chip subscribes), instrument-keyed grants (service_role write / authenticated read). The SSOT for the news fact, two consumers.
+  - **`services/news/` (new)** — `lexicon.ts` (curated LM-inspired neg/pos finance term sets + a severe ×2 tier; space-padded boundary matcher so `lossless`≠`loss`) + `scoreNews.ts` (pure: 48h window, recency weight last-24h ×1 / 24–48h ×0.5, per-article saturated to ±1 so one hyperbolic headline can't dominate, weighted-mean aggregate ∈ ~[-1,+1], top headline = max-|contribution| danger-first). `scoreNews.test.ts` — 13 cases (boundary/phrase/severe matching, label thresholds, recency sign-flip, window exclusion, saturation, undated handling).
+  - **`cron/newsSentimentCron.ts` (new)** — sole producer; **not IB-gated** (news is Finnhub-only, must work weekends). Working set = held ∪ active-watchlist ∪ today's curated_list (curated symbols resolved from `quotes`); per-ticker `companyNews(48h)` → score → upsert today's row (skips no-news names); 7-day retention. 12h cadence. Registered in `index.ts`.
+  - **`bad_news` risk flag** — added to `RiskFlagKey` + `RiskFlagConfig.newsBearishScore` (default −0.35, Settings-tunable, bounds added in `routes/user`). `computeRiskFlags` raises it when `newsScore ≤ threshold`; **WARNING only** — NOT in `CORROBORATING`, so it never escalates to CRITICAL or clamps the LLM (a bad headline isn't a pump). Payload `{ news_score, threshold }` (numbers); the headline lives in `news_sentiment`. `RiskFlagInputs.newsScore` is optional via `buildRiskFlagInputs` (default null → no flag, so untouched callers keep working). `riskFlagsCron` batch-reads today's `news_sentiment.score` for the working set; `signalEngine` scores its *already-pulled* `companyNews` (freshest, zero extra call) so Analyze raises it on the spot. 3 new `computeRiskFlags` tests.
+  - **FE** — `useVirtualList` joins `news_sentiment` (today, UTC) → a `news` field + a `weights.news × score × 100` composite-rank term (good lifts / bad sinks) + a `news_sentiment` Realtime subscription. `VirtualListRow` renders a directional `news ▲/▼` chip (headline in the title; neutral shows nothing). `utils/riskFlags` gains `bad_news` name/badge/explanation/threshold/priority. `config/virtualList` gains the `news` weight + `NEWS_RANK_SCALE`.
+  - **Cleanup** — deleted the unreachable `newsSentiment()` from `finnhub.ts`.
+- **Verification:** server `pnpm typecheck:server` clean (incl. scripts tsconfig); `vitest run` **194/194** (178 baseline + 13 scorer + 3 bad_news); client `pnpm build` clean. UI is user-driven (`feedback_user_drives_ui_testing`).
+- **Manual prereqs for live-flip:** (1) **Apply `031_news_sentiment.sql`** in the Supabase SQL editor (additive — no ordering constraint with the deploy). (2) `git pull && ./bin/upside rebuild api` on the VPS; the FE deploys via Vercel on push. No env/Discord changes (`FINNHUB_API_KEY` already set).
+- **Verification post-live-flip:**
+  - `bin/upside-psql -c "select label, count(*) from news_sentiment where asof_date = (now() at time zone 'utc')::date group by label;"` — rows accumulate after the first `newsSentimentCron` tick (~60s after boot, then 12h). Works with **IB down** (weekend-testable).
+  - A held/watchlist name with bearish recent headlines shows the amber danger badge + a "Negative news" Risk-flags row; the Intraday/Swing virtual lists show a `news ▲/▼` chip and the name's rank shifts with sentiment.
+  - Analyze on a name with bad headlines raises `bad_news` immediately (on-demand top-up) and the flag appears in the LLM prompt context.
+- **Follow-ups deferred:** LLM headline scoring (quality upgrade on the same table/consumers); headline into the Risk-flags section + the LLM prompt (today the section shows the score, the chip carries the headline); un-gate `riskFlagsCron` from IB by repointing it to X4's `daily_bars` (would refresh the flag off-hours too); forward-track `bad_news` raises into `signal_fires` (`risk_flag_bad_news`) once the risk-flag→signal_fires port lands.
 
 ### Batch X5 — Price SSOT: quotes is the only price table (2026-06-06)
 - Owner: claude
