@@ -15,15 +15,30 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)** and the **price SSOT (X5)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **X7** (news-as-signal — already specced in `spec/signals/news-signal.md`, the next fresh feature) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)** and the **price SSOT (X5)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **X7** (news-as-signal — design settled 2026-06-07, **in progress**, see `CLAIMS.md`) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
-## Batch X7 (deferred): News-as-signal
+## Batch X7: News-as-signal (design settled 2026-06-07)
 
-**Depends on:** Finnhub news (already wired: `companyNews`; `newsSentiment` currently unused — `sources.md` Observation 3).
+**Depends on:** Finnhub `companyNews` (already wired). Full design: `spec/signals/news-signal.md`.
 
-**Why deferred / what:** news should raise/lower a stock's potential the way earnings do — good news ≈ a good report, bad news ≈ a bad one. Design in `spec/signals/news-signal.md`. Build after the daily-grain + price-SSOT work; spec'd now so it isn't lost. Wires `newsSentiment` (today dead code) into trait/curated ranking and/or `risk-flags`.
+**Decisions settled with user (2026-06-07):**
+- **Shape = risk-flags modifier**, not a universe trait (no bulk news endpoint → runs over held ∪ watchlist ∪ curated only).
+- **Scoring = LM-inspired finance lexicon** over `companyNews` headlines/summaries. Finnhub `/news-sentiment` probed → **403 premium** (dead, delete it); LLM scoring deferred.
+- New **`news_sentiment` SSOT table** consumed by (1) the risk-flags engine → `bad_news` WARNING flag, (2) `useVirtualList` → news chip + good/bad rank nudge. 48h decay window.
+
+**Deliverables:**
+1. Migration `031_news_sentiment.sql` (table + index + Realtime + grants).
+2. `services/news/` — `lexicon.ts` (weighted neg/pos term sets + severe tier) + `scoreNews.ts` (pure, tested scorer → `{ score, label, article_count, top_headline, top_url }`).
+3. `cron/newsSentimentCron.ts` — held ∪ watchlist ∪ curated; per-ticker `companyNews(48h)` → score → upsert `news_sentiment`. **Not** IB-gated.
+4. Risk-flags wiring: `RiskFlagKey += 'bad_news'`, `RiskFlagConfig.newsBearishScore` (default −0.35), optional `RiskFlagInputs.newsScore`, the raise in `computeRiskFlags`; `riskFlagsCron` reads `news_sentiment.score`, `signalEngine` scores its already-pulled `news`.
+5. FE: `client/src/utils/riskFlags.ts` `bad_news` labels; `useVirtualList` + `config/virtualList.ts` news rank term + chip; `VirtualListRow.tsx` + CSS.
+6. Delete dead `newsSentiment()` from `finnhub.ts`.
+
+**Files this batch creates/edits:** `supabase/migrations/031_*`, `server/src/services/news/*`, `server/src/cron/newsSentimentCron.ts`, `server/src/services/finnhub.ts`, `server/src/services/riskFlags/{inputs,computeRiskFlags}.ts`, `server/src/config/riskFlags.ts`, `server/src/services/signalEngine.ts`, `server/src/cron/riskFlagsCron.ts`, `server/src/index.ts`, `client/src/utils/riskFlags.ts`, `client/src/hooks/useVirtualList.ts`, `client/src/config/virtualList.ts`, `client/src/components/Watchlist/VirtualListRow.tsx`, `client/src/styles/components.css`.
+
+**⚠️ Migration to run:** `031_news_sentiment.sql` (additive — no ordering constraint with code deploy).
 
 ---
 
