@@ -118,6 +118,7 @@ export function VirtualListRow({
               )}
             </span>
           )}
+          <NewsChip news={row.news} />
           <HitRate hitRate={row.hitRate} />
         </div>
       </div>
@@ -136,6 +137,22 @@ export function VirtualListRow({
         {row.source && <span className="watchlist-item-src">{row.source}</span>}
       </div>
     </div>
+  );
+}
+
+// Today's news lean (Batch X7). Renders only a directional chip for a
+// bullish/bearish read; neutral news adds no chip (it's noise). The top headline
+// is the title tooltip — the full text isn't on the flag payload server-side.
+function NewsChip({ news }: { news: VirtualRow['news'] }) {
+  if (!news || news.label === 'neutral') return null;
+  const arrow = news.label === 'bullish' ? '▲' : '▼';
+  return (
+    <span
+      className={`news-chip news-chip-${news.label}`}
+      title={news.headline ?? `News skews ${news.label} (${news.score.toFixed(2)})`}
+    >
+      news {arrow}
+    </span>
   );
 }
 

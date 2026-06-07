@@ -24,6 +24,7 @@ export const INTRADAY_WEIGHTS = {
   catalyst: 0.8, // catalyst_reversal trait score (event, both-lists)
   fired: 0.6, // +100 when an intraday_dip_bounce fire is live (within cooldown)
   hitRate: 0.4, // rolling-30d intraday hit-rate %
+  news: 0.5, // news sentiment nudge (Batch X7) — good lifts / bad sinks
 } as const;
 
 export const SWING_WEIGHTS = {
@@ -32,7 +33,12 @@ export const SWING_WEIGHTS = {
   character: 0.5, // intraday_range_trader score — weak swing base (liquid ATR names)
   fired: 0.6, // +100 when a swing_dip_bounce fire is live (within cooldown)
   hitRate: 0.4, // rolling-30d swing hit-rate %
+  news: 0.5, // news sentiment nudge (Batch X7) — good lifts / bad sinks
 } as const;
+
+// news_sentiment.score is ∈ ~[-1,+1]; scale it onto the same ~[-100,100] range
+// the other rank terms use before weighting.
+export const NEWS_RANK_SCALE = 100;
 
 // A fire counts as "live" (drives the ⚡ marker + the fired rank boost) while
 // inside the scorer's cooldown window — matches the BE cooldowns so the FE and

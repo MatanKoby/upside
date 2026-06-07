@@ -1611,6 +1611,16 @@
 .band-chip-regime { font-weight: var(--fw-medium); }
 .band-chip-vol { color: var(--text-tertiary); font-family: var(--font-mono); }
 
+/* News-sentiment chip (Batch X7) — directional lean; title carries the headline. */
+.news-chip {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 6px; border-radius: var(--radius-pill);
+  font-size: 10px; line-height: 1.2; white-space: nowrap;
+  border: 0.5px solid transparent;
+}
+.news-chip-bullish { background: var(--pill-buy-bg);  color: var(--pill-buy-text); }
+.news-chip-bearish { background: var(--pill-sell-bg); color: var(--pill-sell-text); }
+
 /* Rolling-30d hit-rate column. */
 .hit-rate {
   display: inline-flex; align-items: baseline; gap: 2px;
@@ -1626,4 +1636,5 @@
 /* Keep the virtual-row chip cluster on one line like imported rows. */
 .virtual-row .reason-chip,
 .virtual-row .band-chip,
+.virtual-row .news-chip,
 .virtual-row .hit-rate { white-space: nowrap; }

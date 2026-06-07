@@ -11,7 +11,8 @@ export type RiskFlagKey =
   | 'rsi_overbought'
   | 'near_52w_high_surge'
   | 'micro_cap'
-  | 'earnings_imminent';
+  | 'earnings_imminent'
+  | 'bad_news';
 
 export type RiskSeverity = 'warning' | 'critical';
 
@@ -35,6 +36,7 @@ const PRIORITY: RiskFlagKey[] = [
   'price_surge',
   'micro_cap',
   'earnings_imminent',
+  'bad_news',
   'near_52w_high_surge',
   'rsi_overbought',
   'volume_spike',
@@ -48,6 +50,7 @@ const FLAG_NAME: Record<RiskFlagKey, string> = {
   near_52w_high_surge: 'Near 52-week high',
   micro_cap: 'Micro-cap',
   earnings_imminent: 'Earnings imminent',
+  bad_news: 'Negative news',
 };
 
 function n(v: number | null | undefined): number | null {
@@ -72,6 +75,8 @@ export function flagBadgeLabel(flag: ActiveFlag): string {
       const d = n(flag.payload.days);
       return d == null ? 'Earnings' : `Earnings ${Math.round(d)}d`;
     }
+    case 'bad_news':
+      return 'Bad news';
   }
 }
 
@@ -111,6 +116,10 @@ export function flagExplanation(flag: ActiveFlag): string {
       const days = d == null ? '?' : Math.round(d);
       return `Earnings in ${days} ${days === 1 ? 'day' : 'days'} — binary event + IV-crush risk.`;
     }
+    case 'bad_news': {
+      const s = n(p.news_score);
+      return `Recent headlines skew bearish${s == null ? '' : ` (sentiment ${s.toFixed(2)})`} — negative news flow.`;
+    }
   }
 }
 
@@ -132,6 +141,8 @@ export function flagThreshold(flag: ActiveFlag): string {
       return t == null ? '' : `< ${formatCompact(t)} cap`;
     case 'earnings_imminent':
       return t == null ? '' : `< ${t} days out`;
+    case 'bad_news':
+      return t == null ? '' : `≤ ${t} sentiment`;
   }
 }
 

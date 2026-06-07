@@ -27,6 +27,7 @@ import {
   FIRE_LIVE_WINDOW_HOURS,
   HIT_RATE_WINDOW_DAYS,
   HIT_RATE_DEF,
+  NEWS_RANK_SCALE,
 } from '../config/virtualList';
 
 export interface VirtualBand {
@@ -34,6 +35,13 @@ export interface VirtualBand {
   volScalar: number | null;
   lowBand: number | null;
   highBand: number | null;
+}
+
+export type NewsLabel = 'bullish' | 'neutral' | 'bearish';
+export interface VirtualNews {
+  label: NewsLabel;
+  score: number; // ∈ ~[-1,+1]
+  headline: string | null;
 }
 
 export interface VirtualRow {
@@ -49,6 +57,7 @@ export interface VirtualRow {
   justFired: boolean; // a live fire of THIS list's kind (within cooldown)
   band: VirtualBand | null;
   hitRate: { pct: number; sample: number } | null; // null = no graded fires in 30d
+  news: VirtualNews | null; // today's news sentiment (Batch X7), null = no news
   score: number; // composite rank value (descending)
 }
 
@@ -140,8 +149,8 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
         return;
       }
 
-      // 2) quotes (symbol + price), band_state, recent fires + their outcomes
-      const [quotesRes, bandRes, firesRes] = await Promise.all([
+      // 2) quotes (symbol + price), band_state, recent fires + their outcomes, news
+      const [quotesRes, bandRes, firesRes, newsRes] = await Promise.all([
         supabase
           .from('quotes')
           .select('conid, symbol, canonical_price, canonical_source, today_change_pct, today_open, sparkline_closes')
@@ -157,7 +166,20 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
           .eq('signal_kind', fireKind)
           .gte('fire_ts', hitRateCutoff)
           .in('conid', conids),
+        supabase
+          .from('news_sentiment')
+          .select('conid, score, label, top_headline')
+          .eq('asof_date', asof)
+          .in('conid', conids),
       ]);
+
+      // today's news sentiment per conid (Batch X7) → chip + rank nudge
+      const newsByConid = new Map<number, VirtualNews>();
+      for (const r of (newsRes.data ?? []) as Array<{ conid: number | string; score: number | string | null; label: NewsLabel; top_headline: string | null }>) {
+        const score = num(r.score);
+        if (score == null) continue;
+        newsByConid.set(Number(r.conid), { label: r.label, score, headline: r.top_headline });
+      }
 
       interface QRow {
         conid: number | string;
@@ -231,6 +253,8 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
         const hitRate = hitRateByConid.get(conid) ?? null;
         const justFired = liveFiredConids.has(conid);
         const hr = hitRate?.pct ?? 0;
+        const news = newsByConid.get(conid) ?? null;
+        const newsTerm = (news?.score ?? 0) * NEWS_RANK_SCALE; // good lifts / bad sinks
 
         let score: number;
         if (kind === 'intraday') {
@@ -239,7 +263,8 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
             w.character * a.character +
             w.catalyst * a.catalyst +
             w.fired * (justFired ? 100 : 0) +
-            w.hitRate * hr;
+            w.hitRate * hr +
+            w.news * newsTerm;
         } else {
           const w = SWING_WEIGHTS;
           score =
@@ -247,7 +272,8 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
             w.catalyst * a.catalyst +
             w.character * a.character +
             w.fired * (justFired ? 100 : 0) +
-            w.hitRate * hr;
+            w.hitRate * hr +
+            w.news * newsTerm;
         }
 
         out.push({
@@ -265,6 +291,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
           justFired,
           band: band ? { sessionRegime: band.sessionRegime, volScalar: band.volScalar, lowBand: band.lowBand, highBand: band.highBand } : null,
           hitRate,
+          news,
           score,
         });
       }
@@ -293,6 +320,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
       .on('postgres_changes', { event: '*', schema: 'public', table: 'trait_scores' }, scheduleReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'band_state' }, scheduleReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'news_sentiment' }, scheduleReload)
       .subscribe();
 
     return () => {
