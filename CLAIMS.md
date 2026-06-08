@@ -25,12 +25,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **Re-test verified (2026-05-27, post-prompt-fix):** BBAI 2-leg playbook (sell at_or_above 4.29 = pivot resistance → rebuy at_or_below 4.06 = support, conf 80→40, signalQuality 60, multiday 1-2 weeks). Geometric condition rule landed (leg 1 = "wait for the resistance push," not sell-now). Float noise gone. The remaining gap is *judgment quality*: the `structure` feature mislabels coiling-near-the-lows as a downtrend (BBAI's "lower-lows" label came from a last-two-swings comparison ignoring that the absolute lowest swing was the OLDEST, with recent low above it = a higher low off the bottom). And a separate data-correctness bug surfaced — three analyses captured ~$4.17 over 10h while live was $4.37 because `signalEngine` was reading a stale cold IB snapshot over the poller's fresh value. Both findings are spec'd as deferred follow-ups (`spec/roadmap.md` → Track 1 → Deferred; `spec/signals/playbook.md` → Freshness guard). Implementation waits behind the watchlist pivot.
 - **Closed under the 2026-05-28 pivot.** Engine itself is validated; remaining sharpening lives in the deferred queue.
 
-### Batch 14h — Live leg tracking + Refine follow-up (planned, after 14g)
-- Owner: claude (queued)
-- **Half A:** pollers mark each active playbook leg `hit/missed/pending` + actual extreme on every price write (no LLM, no cron) → mechanical "on track / diverged"; feeds 14b.
-- **Half B:** a second, manually-triggered **Refine** analyze mode — sends fresh feature pack + prior playbook + realized outcomes + anti-anchoring instruction → revised playbook; supersedes + records `refined_from_analysis_id`. Two buttons when an active signal exists (Refine / Re-analyze fresh).
-- Deliberately split from 14g: validate base playbook quality on real tickers before building the refinement loop.
-
 ## Known issues (deferred fixes)
 
 - **Signal quality poor → 14b + 14d deferred (2026-05-26)** — the unified SELL+BUY analyses we're getting are low quality. Hypothesis: the prompt asks for both directions at once, splitting the LLM's focus; switching to **single-direction** analysis (ask for SELL *or* BUY per run, not both) may sharpen them. Until signals improve there's no point measuring them, so **Batch 14b (accuracy cron) is deferred**, and **Batch 14d (signal-range pings) is deferred** with it. Revisit the single-direction redesign before un-deferring 14b/14d. (User call, 2026-05-26.)
