@@ -91,6 +91,31 @@ composite now. Revisit membership-level blending from v1 hit-rate data.
 
 No mid-session refresh — character signals don't change in hours.
 
+## Population & freshness (Batch X9)
+
+Two seams were broken at ship and are fixed here (the lists weren't populating):
+
+1. **Build race / date-coupling.** `curatedListCron` keyed strictly on
+   `trait_scores (asof_date = today)`, but the trait producer writes today's rows
+   *after* the cron's first tick → 0 seeds → the list never built. Fix: the cron
+   **seeds from the latest available `intraday_range_trader` date** (and is
+   sequenced after the producer), and consumers (`useVirtualList`) read the
+   **latest** `curated_list` / `trait_scores` date, not strictly today.
+2. **Staleness, surfaced not hidden.** "Latest" is bounded — past a **staleness
+   cap (~2-3 trading days)** the list shows a "data stale" state instead of
+   silently serving old membership. When the latest date ≠ today the FE shows an
+   **"as of <date>" age badge** (`../screens/watchlist.md`). Membership is
+   slow-moving *character* data, so days-old membership is safe to *display*;
+   money-safety lives at the firing gate, not here — see `dip-bounce-scorer.md`
+   → Fresh-price firing gate.
+3. **Curated names get a `quotes` row.** The virtual lists *and* the scorer read
+   `quotes`, but nothing wrote curated prices there (only held/watchlist were
+   quoted) → curated rows were dropped on the join. Fix: seed `quotes` for the
+   curated set from `universe.last_price` + latest `daily_bars` (close +
+   sparkline), `canonical_source` daily-grain with an honest (stale) timestamp;
+   the live pollers overwrite during session. Seeded/stale prices **render** but
+   never **fire**.
+
 ## Persistence
 
 `curated_list` table — see `../schema.md`. Keyed by `(conid, asof_date)`.

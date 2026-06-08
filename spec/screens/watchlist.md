@@ -51,6 +51,8 @@ Two always-present virtual tabs Upside maintains (no IB import) — the dip-boun
 
 **Living, not frozen.** Rows re-rank on the poll cycle through the session (scores update every cycle; the walking band ticks every 5 min). A name that loses its potential falls in rank and loses its live marker — so an end-of-day glance reflects EoD, not the open. The underlying pool is rebuilt daily (`../signals/curated-list.md`); the *ranking* is intraday.
 
+**Membership age badge (Batch X9).** The lists render the **latest available** daily pool, not strictly today's. When that pool is older than today (weekend / pre-market / a missed sweep), the tab shows an **"as of <date>" badge**; past the staleness cap (~2-3 trading days) it goes to a "data stale" state rather than silently serving old membership. Stale membership can *display*; only a fresh price can *fire* a marker (`../signals/dip-bounce-scorer.md` → Fresh-price firing gate).
+
 **Why a ticker is on the list — reason chips.** Each row carries one or more `why` chips for the trait(s) that qualified it (`../signals/screener-universe.md`):
 - `dip` — `intraday_range_trader` character → **Intraday**.
 - `catalyst` — `catalyst_reversal` event → **BOTH lists** (day-long volume spikes are intraday-tradeable *and* can run for days).

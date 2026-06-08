@@ -114,6 +114,17 @@ for tickers in `curated ∪ active-watchlist ∪ held` (~10s during IB-on regula
 session, ~5min Finnhub fallback). The scoring step is cheap — pure table reads, no IB / Finnhub
 calls.
 
+## Fresh-price firing gate (Batch X9)
+
+A scorer **fires only on a fresh quote.** Curated names carry a *seeded*
+daily-close `quotes` row off-hours (see `curated-list.md` → Population &
+freshness) so they render in the virtual lists — but a stale/seeded price must
+never trigger a signal. Before firing, the scorer checks the quote's freshness
+(`canonical_source` + age); a stale price still scores for *display* but is
+skipped for *firing* and writes no `signal_fires` row. This is the dip-bounce
+analogue of the LLM engine's fresh-or-stop guard (`playbook.md`): stale data
+can populate a list, only a fresh price can recommend.
+
 ## Forward-tracking (durable hit-rate infrastructure)
 
 The single most important property of this batch is the forward-tracking
