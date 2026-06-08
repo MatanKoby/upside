@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X9 — Populate the virtual lists (build race + curated quotes)
-- Owner: claude
-- Started: 2026-06-08 05:16
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -42,6 +38,27 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X9 — Populate the virtual lists (build race + curated quotes) (2026-06-08)
+- Owner: claude
+- Started: 2026-06-08 05:16 · Finished: 2026-06-08 05:35
+- Commit: 76e5b35 (code) · a34f909 (spec) · 76e5b35 incl. queue meta in earlier f8af32a (claim)
+- **Diagnosed (live DB):** Intraday/Swing lists never populate. `curated_list` empty (0 rows ever); `quotes` only 41 (held+watchlist). Two seams: (a) **build race** — `curatedListCron` read `trait_scores(asof_date=today)` at boot+90s but `intradayRangeTraderProducer` writes today's rows at boot+6min → 0 seeds → never built (strict `asof_date=today` also blanked the FE off-hours); (b) **quotes gap** — the virtual lists *and* the dip-bounce scorer read `quotes`, but nothing wrote curated prices there (they lived in `universe.last_price` + `daily_bars`), so curated rows dropped on the join and the scorer couldn't score them → empty `signal_fires`.
+- **What shipped:**
+  - **`services/curatedList/asof.ts` (new)** — `latestTraitAsof` / `latestCuratedAsof` / `isStale` (STALENESS_CAP_DAYS=4). The single "latest available date" resolver; membership is slow-moving character data so latest-available is safe (money-safety is the firing gate, not membership).
+  - **`curatedListCron`** — seeds from the **latest** `intraday_range_trader` date (not `utcDate()`), persists curated_list under it, then calls `seedDailyQuotes(curated conids)`.
+  - **`quotes.seedDailyQuotes()` (new)** — seeds a daily-close `quotes` row for curated names from `universe.last_price` + `daily_bars` (batched closes → 20pt sparkline), `canonical_source='daily'` with the bar date as an honest stale timestamp; **never clobbers** a live ib/finnhub row.
+  - **`computeSet.loadComputeSet()`** — now resolves the latest curated date internally (no `asof` arg); callers `dipBounceCron` + `bandEngineCron` updated.
+  - **Fresh-price firing gate** — `dipBounceCron.loadQuotes` reads `canonical_source` + `canonical_updated_at`; a scorer fires only when the quote is `ib`/`finnhub` and ≤15min old. Seeded/stale prices render but never fire.
+  - **FE** — `useVirtualList` resolves the latest pool date + returns `{asof, stale}`; `VirtualList` shows an "as of <date>" badge / "data stale" banner (~4-day cap); `'daily'` added to the source type; CSS for the badge/banner.
+  - **Migration `032_quotes_daily_source.sql`** — extends `quotes_canonical_source_check` to allow `'daily'`.
+- **Verification:** server typecheck clean; client build clean; 194/194 server tests pass.
+- **Manual prereqs for live-flip:** (1) **Apply `032_quotes_daily_source.sql`** in the Supabase SQL editor *before* the deploy (seedDailyQuotes writes `canonical_source='daily'`, which the old check rejects). (2) `git pull && ./bin/upside rebuild api` on the VPS; FE deploys via Vercel on push. The curated cron rebuilds at boot+90s.
+- **Verification post-live-flip:**
+  - `bin/upside-psql -c "select count(*) from curated_list;"` → non-zero after the curated cron's first tick (~90s after boot).
+  - `bin/upside-psql -c "select canonical_source, count(*) from quotes group by 1;"` → a `daily` bucket appears (curated seed).
+  - FE: Intraday/Swing tabs render rows, with an "as of <date>" badge when the pool isn't today's.
+- **Follow-ups deferred:** (1) **Live curated pricing** — curated names only have the daily seed, so the fresh-fire gate keeps them from firing; they need a live intraday poller over the compute set before `signal_fires` fills from curated names (held/watchlist names already fire). This is the safe default (no stale recommendations) and has IB-budget implications (see Batch 13.3). (2) `newsSentimentCron` still keys its curated portion on today's date — repoint to `latestCuratedAsof` so the news chip covers the rendered set. (3) X8 (signal lab) consumes this data once fires accumulate.
 
 ### Batch X7 — News-as-signal: lexicon sentiment → bad_news flag + rank nudge (2026-06-07)
 - Owner: claude
