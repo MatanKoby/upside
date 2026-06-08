@@ -10,10 +10,15 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <script>
       (function () {
-        var html = document.documentElement;
-        if (!html.dataset.theme) {
-          html.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        }
+        // Apply the saved theme (or the OS preference when 'system') before
+        // first paint to avoid a flash. Keep the key in sync with
+        // src/services/theme.ts.
+        var saved = null;
+        try { saved = localStorage.getItem('upside-theme'); } catch (e) {}
+        var theme = saved === 'light' || saved === 'dark'
+          ? saved
+          : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = theme;
       })();
     </script>
   </head>

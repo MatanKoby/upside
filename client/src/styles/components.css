@@ -1029,6 +1029,24 @@
   flex: 1;
   margin-left: var(--sp-12);
 }
+.settings-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-10);
+  flex: 1;
+  margin-left: var(--sp-12);
+  min-width: 0;
+}
+.settings-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--text-primary);
+}
+.settings-slider-wrap .settings-value {
+  min-width: 3.5em;
+  text-align: right;
+  flex: none;
+}
 
 /* --- Watchlist page (Batch A1) --- */
 .watchlist-page {

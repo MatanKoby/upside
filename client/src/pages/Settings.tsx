@@ -2,15 +2,23 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useLlmConfig } from '../hooks/useLlmConfig';
 import { useRiskFlagConfig, type RiskFlagConfig } from '../hooks/useRiskFlagConfig';
+import { useUserPreferences, type UseUserPreferencesResult } from '../hooks/useUserPreferences';
+import { useMarketSession } from '../hooks/useMarketSession';
+import { IbStatusIndicator } from '../components/common/IbStatusIndicator';
+import { getThemePref, applyTheme, type ThemePref } from '../services/theme';
 
-// Minimal Settings screen. Carries the account identity + the analysis-engine
-// and risk-flag controls. Batch 15 fleshes this out (IB connection, signal
-// thresholds, theme, etc.).
+// App-shell Settings screen (Batch 15). Composes the IB connection control, the
+// profit-zone threshold, risk-flag thresholds, the analysis-engine picker,
+// theme, and account. The signal-generation / Analyze-flow knobs live with the
+// LLM-analysis track (spec/roadmap.md → Track 4 item 9), not here. Prefs that
+// persist to user_preferences write through PUT /api/user/preferences (see the
+// hooks); theme is a per-device localStorage concern. See spec/screens/settings.md.
 //
 // Security: this page only ever renders inside <AuthGuard> (authenticated +
 // whitelisted — i.e. just the owner).
 export default function Settings() {
   const [email, setEmail] = useState<string | null>(null);
+  const prefs = useUserPreferences();
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -22,18 +30,158 @@ export default function Settings() {
     <div className="settings">
       <h1 className="settings-title">Settings</h1>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">Account</h2>
-        <p className="settings-row">
-          <span className="settings-label">Signed in as</span>
-          <span className="settings-value">{email ?? '—'}</span>
-        </p>
-      </section>
-
-      <AnalysisEngineSection />
-
+      <IbConnectionSection />
+      <ProfitZoneSection prefs={prefs} />
       <RiskFlagsSettingsSection />
+      <AnalysisEngineSection />
+      <ThemeSection />
+      <AccountSection email={email} />
     </div>
+  );
+}
+
+// --- IB connection -------------------------------------------------------
+// The IbStatusIndicator IS the connect/disconnect control (tappable). We give
+// it its own market-session poller here since the Portfolio header (the other
+// host) isn't mounted on this route.
+function IbConnectionSection() {
+  const { session, refresh } = useMarketSession();
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">IB connection</h2>
+      <p className="settings-hint">
+        Interactive Brokers gateway. Tap the indicator to connect or disconnect; connecting
+        prompts 2FA on your phone.
+      </p>
+      <div className="settings-row">
+        <span className="settings-label">Status</span>
+        <IbStatusIndicator status={session} onChange={refresh} />
+      </div>
+    </section>
+  );
+}
+
+// --- Profit-taking zone threshold ----------------------------------------
+function ProfitZoneSection({ prefs }: { prefs: UseUserPreferencesResult }) {
+  const { prefs: p, loading, save } = prefs;
+  const [val, setVal] = useState(2);
+  const [init, setInit] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (p && !init) {
+      setVal(p.profitZoneThresholdPct);
+      setInit(true);
+    }
+  }, [p, init]);
+
+  if (loading || !p) return <LoadingSection title="Profit-taking zone" />;
+
+  const dirty = val !== p.profitZoneThresholdPct;
+
+  async function onSave() {
+    setBusy(true);
+    setErr(null);
+    const r = await save({ profitZoneThresholdPct: val });
+    setBusy(false);
+    if (r.ok) {
+      setFlash(true);
+      setTimeout(() => setFlash(false), 2000);
+    } else setErr(r.error);
+  }
+
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">Profit-taking zone</h2>
+      <p className="settings-hint">
+        A held position lands in the profit-taking zone once it's this far above your cost basis.
+      </p>
+      <label className="settings-row">
+        <span className="settings-label">Threshold</span>
+        <span className="settings-slider-wrap">
+          <input
+            className="settings-slider"
+            type="range"
+            min={0.5}
+            max={10}
+            step={0.5}
+            value={val}
+            onChange={(e) => setVal(Number(e.target.value))}
+            aria-label="Profit-taking zone threshold (%)"
+          />
+          <span className="settings-value">{val.toFixed(1)}%</span>
+        </span>
+      </label>
+      <button className="settings-button" onClick={() => void onSave()} disabled={busy || !dirty}>
+        {busy ? 'Saving…' : flash ? 'Saved ✓' : 'Save'}
+      </button>
+      {err && <p className="settings-error">{err}</p>}
+    </section>
+  );
+}
+
+// --- Theme ---------------------------------------------------------------
+// Per-device only (localStorage), applied immediately. The palette lives in
+// styles/tokens.css; applyTheme just flips data-theme. See services/theme.ts.
+function ThemeSection() {
+  const [pref, setPref] = useState<ThemePref>(() => getThemePref());
+
+  function onChange(next: ThemePref) {
+    setPref(next);
+    applyTheme(next);
+  }
+
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">Theme</h2>
+      <label className="settings-row">
+        <span className="settings-label">Appearance</span>
+        <select
+          className="settings-select"
+          value={pref}
+          onChange={(e) => onChange(e.target.value as ThemePref)}
+        >
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+    </section>
+  );
+}
+
+// --- Account -------------------------------------------------------------
+function AccountSection({ email }: { email: string | null }) {
+  const [busy, setBusy] = useState(false);
+
+  async function onSignOut() {
+    setBusy(true);
+    // AuthGuard redirects to the login screen once the session clears.
+    await supabase.auth.signOut();
+  }
+
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">Account</h2>
+      <p className="settings-row">
+        <span className="settings-label">Signed in as</span>
+        <span className="settings-value">{email ?? '—'}</span>
+      </p>
+      <button className="settings-button" onClick={() => void onSignOut()} disabled={busy}>
+        {busy ? 'Signing out…' : 'Sign out'}
+      </button>
+    </section>
+  );
+}
+
+function LoadingSection({ title }: { title: string }) {
+  return (
+    <section className="settings-section">
+      <h2 className="settings-section-title">{title}</h2>
+      <p className="settings-hint">Loading…</p>
+    </section>
   );
 }
 
