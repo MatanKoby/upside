@@ -380,6 +380,13 @@ This is reference-only. No claim or finish protocol writes here.
   - **Watchlist row is too thin** — currently just symbol + price + source. Spec calls for company name (lookup from `contracts`) · today's change · sparkline · source pill. Polish slice queued after A2 + A+ per user direction (2026-05-28).
   - **Analyze on non-held tickers** still reads `positions.current_price` in signalEngine — produces honest `no_signal "live price stale"` for watchlist tickers. Small follow-up: switch engine's canonical-price read to `quotes.canonical_price`. Not urgent since LLM signals are deferred behind the watchlist pivot.
 
+### Batch 14g — Single-direction playbook engine (2026-05-26, closed under the 2026-05-28 pivot)
+- Owner: claude
+- Started: 2026-05-26 · Commits: 8631379 (code) · ce6166f (spec/schema) · 68fe0ea / 595cb90 (prompt fixes)
+- Replaced the unified SELL+BUY analysis (14a) with a **single-direction playbook**: direction by holding (held→SELL, not-held→BUY), a computed feature pack in `technicals.buildFeaturePack` (pivots / swing H-L / 20d+52w H-L / ATR / SMA-EMA / RSI / MACD / Bollinger / VWAP / rel-vol / position-relative), a Zod playbook output (legs + per-leg confidence + horizon), one `analyses` + one `signals` row (leg[0]→`price_range_*`, full legs→`playbook jsonb`), level-anchored single-direction prompt with the profit-zone trigger wired in. Migration `010_playbook.sql` (+ `analyses.refined_from_analysis_id`, reserved for the Refine follow-up → now roadmap Track 4 item 8). FE renders ordered legs in SignalSection.
+- **Live-validated (BBAI, 2026-05-27):** well-formed multi-leg playbooks; fixed float-noise in `price_range_low` (round to 4dp) and a "sell-now" bias (geometric condition rule + resting-order framing). Remaining gap is *judgment quality* (the `structure` feature mislabels coiling-near-lows) — spec'd as a deferred follow-up in `spec/signals/playbook.md` + `spec/roadmap.md`.
+- **Closed under the 2026-05-28 watchlist pivot:** the engine is validated; remaining sharpening lives in the deferred queue (LLM-analysis roadmap Track 4). Durable design in `spec/signals/playbook.md`.
+
 ### Batch 14.5 — Schema cleanup: remove `position_history` (2026-05-26)
 - Owner: claude
 - Started: 2026-05-26 · Finished: 2026-05-26

@@ -26,11 +26,16 @@ The full procedure. AGENTS.md carries only the 2-line policy pointer to this fil
 
 3. Add a "What shipped" summary under the entry — what changed, where, the manual prereqs for live-flip if any, verification steps, follow-ups deferred. Look at existing entries in `## Completed` for the format. The point is that a future agent (or you, after `/compact`) can reconstruct the batch's outcome from this entry alone.
 
-4. Commit `meta: complete batch-N` and `git push origin dev`.
+4. **Move the batch out of `BUILD_QUEUE.md`.** That file lists only *un-done* batches (see its "How this works") — a completed batch must not linger there, or the next agent re-reads it as open work. Three edits:
+   - Delete the batch's full section from `BUILD_QUEUE.md`.
+   - Add a one-paragraph summary to `BUILD_QUEUE_DONE.md` (match the existing entries' compact style — what shipped + key migration/commit).
+   - Drop the batch from the **pick-order pointer** line at the top of `BUILD_QUEUE.md`'s "Un-done batches".
+
+5. Commit `meta: complete batch-N` — covering `CLAIMS.md` **+ `BUILD_QUEUE.md` + `BUILD_QUEUE_DONE.md`** — and `git push origin dev`.
 
 ## Hand the context back — compose a *specific* `/compact` suggestion
 
-5. Prompt the user to run `/compact` with **concrete** keep-args, not a generic "preserve relevant threads." A useful suggestion has three pieces:
+6. Prompt the user to run `/compact` with **concrete** keep-args, not a generic "preserve relevant threads." A useful suggestion has three pieces:
 
    - **2–4 named items worth keeping.** Things the next batch's reasoning will lean on: durable artifacts shipped (new skills, new patterns, new infrastructure), design decisions made or reaffirmed in this session, forward pointers (next likely batch and why).
    - **A one-line rationale** explaining what's being dropped vs. preserved — the *shape* of the trim, not a list of every excluded thread.
@@ -50,4 +55,4 @@ The full procedure. AGENTS.md carries only the 2-line policy pointer to this fil
 
 ## Next
 
-6. Decide: claim the next eligible batch (invoke the `claim-batch` skill) or stop. Either is fine — don't auto-chain unless the user has asked you to.
+7. Decide: claim the next eligible batch (invoke the `claim-batch` skill) or stop. Either is fine — don't auto-chain unless the user has asked you to.

@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X10** (per-action job gates infra + catalyst gate-and-defer + event-alerts channel rename — fixes catalyst producing 0 rows) · **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (Settings — app-shell only: IB / profit-zone / theme / account; alerts + signal-generation knobs moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap), 14h (live leg tracking + Refine → `spec/roadmap.md` Track 4 items 7–8). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — now incl. a job/task trigger + precondition audit that absorbed the scrapped X10 catalyst fix) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -42,7 +42,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Batch 13.9: Finnhub call inventory + per-category cadence tuning
 
-**Depends on:** none outstanding — all live Finnhub callers already exist via the shipped X-track (the original 14a–14d dependency is moot now those are shipped/closed). Ready to claim.
+**Depends on:** none outstanding — all live Finnhub callers already exist via the shipped X-track. Ready to claim.
 
 **Scope:** Now that all Finnhub callers in the codebase are real, inventory them and set sensible per-category min-intervals on the queue.
 
@@ -76,38 +76,9 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
-## Batch 15: Settings wired
-
-**Depends on:** none outstanding (the `app_config` LLM picker + the R2 `/api/user/preferences` route already exist).
-
-**Scope:** Replace the Settings `ComingSoon` placeholder with the real app-shell Settings screen. **Alerts removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → Alerts surface, gated on the signal lab (X8) proving signal quality. **Signal-generation / Analyze-flow knobs removed (2026-06-08)** — the signal-generation threshold, min market value, and suppressed-symbols controls are part of the LLM-analysis track → `spec/roadmap.md` → Track 4 item 9; don't build them here. Batch 15 ships only the app-shell settings (IB connection, profit-zone threshold, theme, account) plus the already-shipped Analysis-engine + Risk-flags sections. Card/ticker badges stay exactly as they are. See `spec/screens/settings.md`.
-
-### Deliverables
-
-1. **Settings (`/settings`)** — app-shell (per spec):
-   - **IB Connection**: status indicator + Connect/Disconnect button (reuse `IbStatusIndicator` + `useMarketSession`).
-   - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
-   - **Theme** (Dark / Light / System; per-device localStorage, applied via `data-theme` — the light/dark palettes already exist in `styles/tokens.css`).
-   - **Analysis engine** — provider + model picker. **Already shipped in Batch 14a**: lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced. Stays in the layout — no rebuild.
-   - **Risk flags** — the R2 thresholds section (already shipped). Stays.
-   - **Sign out** button.
-
-2. **`PUT /api/user/preferences`** — extend the existing R2 preferences route (which already handles `risk_flag_config`) to also accept `profit_zone_threshold_pct` under a `preferences` object. FE writes through this rather than directly to Supabase to keep validation centralized.
-
-### Files this batch creates/edits
-- `client/src/pages/Settings.tsx`, `client/src/hooks/useUserPreferences.ts`, `client/src/services/theme.ts`, `client/index.html` (apply saved theme pre-paint), `client/src/styles/components.css` (slider), `server/src/routes/user.ts` (extend the existing preferences route).
-
-### Verification
-- Tap settings cog → Settings screen renders. Change theme → applied immediately and survives reload.
-- Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
-- IB section: tap Connect/Disconnect → status reflects the transition.
-- Sign out → returns to login.
-
----
-
 ## Batch 16: UI/UX polish + a11y
 
-**Depends on:** Batch 15.
+**Depends on:** none outstanding (Batch 15 shipped).
 
 **Scope:** Final pre-MVP user-facing sweep — loading/error/empty states, the shared global app header, mobile install guidance, accessibility. **PWA push removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → PWA push (gated behind the Alerts surface). **Engineering-quality work** (server DRY/SOLID, the 24-cron → shared base, perf, FE code dedup, test expansion) is **not** here — it lives in Batch ARCH so a refactor doesn't destabilize the MVP-milestone batch.
 
@@ -129,29 +100,6 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
 
 **🎯 Milestone: MVP per spec.**
-
----
-
-## Batch X10: Per-action job gates (gate-and-defer) + catalyst fix
-
-**Depends on:** none. Full design: `spec/job-queue.md` → Per-action preconditions (gates).
-
-**Why:** `catalyst_reversal` produces **0 rows ever** — diagnosed 2026-06-08. Its Stage-1 jobs (66, all `failed`: "snapshot missing price/open") run at the producer's boot+10min tick, which last landed at **01:48 ET (overnight)**. IBKR field `7295` (today's open) doesn't exist outside RTH, so every live snapshot fails. The pool gate (IB connected) is too coarse — it can't express "needs the session open." The other event traits survive because they read IB *daily history*, not a live snapshot. So both virtual lists lose all catalyst differentiation.
-
-**Decision (settled 2026-06-08):** keep catalyst on IB (it's a genuine live-intraday signal — don't downgrade to end-of-day daily_bars), but add a **general per-action gate infra**: a job declares a precondition; the worker evaluates it **after claim, before execute**; on not-ready it **defers** (reschedule `scheduled_for`, **don't** increment `attempts`) instead of failing. IB-connect wakes the pool and drains the now-eligible backlog.
-
-### Deliverables
-1. **Gate infra in the worker loop** — an action may register a `gate(payload, ctx) → { ready } | { ready:false, retryAt }`. Worker checks it post-claim; on not-ready, status→`queued`, `scheduled_for=retryAt`, attempts unchanged (deferral ≠ failure, never hits retry/give-up). Composes after the pool gate.
-2. **Gate kinds (v1):** `requiresRthOpen` (defer to next 09:30 ET if before open), `requiresMarketOpen`, + a generic predicate slot. Pure + tested.
-3. **Apply to catalyst:** `eval_catalyst_stage1` / `_stage2` declare `requiresRthOpen`. Verify the 66 stuck names defer instead of fail and run once IB is up during RTH.
-4. **Channel rename:** `DISCORD_WEBHOOK_CATALYST_ALERTS` / `#upside-catalyst-alerts` → `…_EVENT_ALERTS` / `#upside-event-alerts` (it always carried both catalyst + post-earnings; the name misled). Keep the old env var as a fallback alias so the deploy doesn't break.
-
-### Files this batch creates/edits
-- `server/src/services/jobs/*` (gate registry + worker-loop defer path), `server/src/cron/catalystReversalProducer.ts` (declare gates), `server/src/services/notify.ts` + `server/src/env.ts` (channel rename + alias).
-
-### Verification
-- A catalyst Stage-1 job claimed overnight defers (status back to `queued`, `scheduled_for` = next 09:30 ET, `attempts` unchanged) — no "missing price/open" failure row.
-- With IB up during RTH, Stage-1 → Stage-2 complete and `trait_scores(catalyst_reversal)` rows appear; the swing/intraday lists gain catalyst names.
 
 ---
 
@@ -179,7 +127,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 **Depends on:** the X1 forward-tracking backbone (shipped). Full design: `spec/signals/signal-lab.md`.
 
-**Scope:** The un-deferred **Batch 14b**, applied to the **LLM-free engine signals that actually ship** (dip-bounce now; entry-zone / stats-band / marker / zone-entry once ported) — *not* the LLM analysis track (parked in `roadmap.md` → Track 4). Built on `signal_fires` / `signal_outcomes`; no parallel plumbing. **No pruning** — all fires/outcomes kept (cheap). Read-first: the lab measures and **recommends**; knob changes are recommend-then-approve, never auto-applied (v1).
+**Scope:** Signal-accuracy measurement applied to the **LLM-free engine signals that actually ship** (dip-bounce now; entry-zone / stats-band / marker / zone-entry once ported) — *not* the LLM analysis track (parked in `roadmap.md` → Track 4). Built on `signal_fires` / `signal_outcomes`; no parallel plumbing. **No pruning** — all fires/outcomes kept (cheap). Read-first: the lab measures and **recommends**; knob changes are recommend-then-approve, never auto-applied (v1).
 
 ### Deliverables
 
@@ -211,10 +159,11 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ### Deliverables (a findings doc + proposed follow-up batches)
 1. **Cron architecture** — 24 crons (~4k lines) are hand-rolled `start*()` with per-file interval/locking/IB-gating/notify/compute-set logic. Evaluate a shared `defineCron({ name, intervalMs, lock, ibGated, run })` base for DRY **and stability** (one correct place for lock/retry/notify).
-2. **Server DRY/SOLID** — duplication across producers (the `curated ∪ watchlist ∪ held` compute-set, Finnhub/IB read patterns, Discord notify).
-3. **Performance / loading times** — FE query waterfalls, Realtime reconnection, DB indexes, bundle.
-4. **FE code polish** — component/hook dedup, dead code.
-5. **Test gaps** — server + FE coverage beyond the X16 smoke tests.
+2. **Job/task triggering + preconditions** — the cron→job model where cron jobs enqueue tasks that then need to be **triggered by the right trigger** and **evaluate their conditions when triggered, before executing** (a task that needs the session open shouldn't fail overnight — it should defer until the precondition holds). Audit whether `server/src/services/jobs/*` actually does this. **Motivating symptom:** `catalyst_reversal` produces 0 rows because its Stage-1 jobs run overnight when IBKR field `7295` (today's open) doesn't exist, and the coarse pool gate (IB connected) can't express "needs RTH open" → every snapshot fails instead of deferring. This **absorbs the scrapped Batch X10** (per-action gate-and-defer infra + the catalyst fix + the `…_CATALYST_ALERTS`→`…_EVENT_ALERTS` channel rename). Design reference: `spec/job-queue.md` → Per-action preconditions (gates). Propose the gate-and-defer infra as a follow-up batch if the audit confirms it's needed.
+3. **Server DRY/SOLID** — duplication across producers (the `curated ∪ watchlist ∪ held` compute-set, Finnhub/IB read patterns, Discord notify).
+4. **Performance / loading times** — FE query waterfalls, Realtime reconnection, DB indexes, bundle.
+5. **FE code polish** — component/hook dedup, dead code.
+6. **Test gaps** — server + FE coverage beyond the X16 smoke tests.
 
 ### Output
 - A markdown findings doc (committed) ranking each item by impact/risk, plus drafted follow-up batch entries for the ones worth doing. No production code change in this batch.
@@ -309,9 +258,3 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 - Temporarily corrupt `ib_password.txt` → reconciler attempts start, IBeam fails to auth, container exits → reconciler backs off exponentially (not a tight loop). Status dot shows red + reason; Discord critical ping fires once for the failure streak.
 - Fix the password → next reconciler tick succeeds; status returns to green.
 
----
-
-## Closed / superseded
-
-- **Batch 14b** (daily hindsight accuracy cron) — **reframed → Batch X8 (Signal Lab)** on 2026-06-08. The essence (measure whether signals actually work) now applies to the live LLM-free engines via the `signal_fires` / `signal_outcomes` backbone, not the LLM `signals` table. LLM-track accuracy stays parked in `spec/roadmap.md` → Track 4.
-- **Batch 14d** (signal-range Discord pings) — **closed** 2026-06-08. Range/level-entry pings already shipped across the live engines (markers / entry-zones / stats / zone / dip-bounce all fire on trigger). The only unbuilt piece was range pings on the LLM `signals` table — deferred with the rest of the LLM analysis track to `spec/roadmap.md`.

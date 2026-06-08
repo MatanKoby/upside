@@ -124,3 +124,9 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 ## Meta (Batch M1)
 
 - **M1** — agent context efficiency: read-counter hook + `bin/upside-readstats`; split `BUILD_QUEUE_DONE.md` / `CLAIMS_DONE.md` out of the active files; extracted claim-batch / finish-batch / spec-edit skills; hierarchical `spec/` README index; slimmed `AGENTS.md`.
+
+---
+
+## MVP app-shell (Batch 15)
+
+- **15** — app-shell Settings screen: added **IB connection** (reuses `IbStatusIndicator` + `useMarketSession`), a **profit-taking zone** slider (→ `user_preferences.profit_zone_threshold_pct`), a **theme** picker (System/Light/Dark via `data-theme`, palettes already in `tokens.css`, applied pre-paint in `index.html`), and **sign out** — on top of the already-shipped Analysis-engine + Risk-flags sections. Extended `PUT /api/user/preferences` to carry `profit_zone_threshold_pct` under a `preferences` object (new `useUserPreferences` hook + `services/theme.ts`). The signal-generation / Analyze-flow knobs (signal threshold, min market value, suppressed symbols) were scraped out to the LLM-analysis roadmap (`spec/roadmap.md` → Track 4 item 9). No migration. Commit 54670fb.
