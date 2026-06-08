@@ -3,9 +3,11 @@ import { IconArrowLeft } from '@tabler/icons-react';
 import { TickerDetail } from '../components/TickerDetail/TickerDetail';
 import { useTickerDetail } from '../hooks/useTickerDetail';
 
-// Loading / error / not-held / no-symbol all keep the screen header (back +
-// symbol title) visible — only the body area shows the state message.
-// Avoids the prior "whole screen says coming-soon" pattern.
+// Loading / error / no-symbol all keep the screen header (back + symbol title)
+// visible — only the body area shows the state message. Avoids the prior "whole
+// screen says coming-soon" pattern. TickerDetail opens for ANY ticker (held,
+// watchlist, or virtual-curated) — see useTickerDetail; there is no "not held"
+// dead-end.
 
 function TickerDetailShell({
   symbol,
@@ -53,13 +55,6 @@ export default function TickerDetailPage() {
           symbol={symbol}
           tone="error"
           body={<p>Couldn’t load this ticker: {result.error}</p>}
-        />
-      );
-    case 'not-held':
-      return (
-        <TickerDetailShell
-          symbol={symbol}
-          body={<p>{symbol.toUpperCase()} is not in your portfolio.</p>}
         />
       );
     case 'loaded':

@@ -186,7 +186,6 @@ function rowToTickerDetail(r: DbPosition, q: QuoteRow | undefined, totalPortfoli
 
 export type UseTickerDetailResult =
   | { state: 'loading' }
-  | { state: 'not-held'; symbol: string }
   | { state: 'loaded'; detail: TickerDetailData }
   | { state: 'error'; error: string };
 
@@ -267,33 +266,44 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
         return;
       }
 
-      // Not held — fall back to the watchlist surface (Batch A1). Find the
-      // conid via watchlist_items by symbol, then read the canonical price
-      // from `quotes`. positionStats stays null; TickerDetail hides that
-      // section when null.
+      // Not held — TickerDetail still opens for ANY ticker (watchlist, virtual
+      // curated, or just searched). Resolve the conid + price from `quotes` by
+      // symbol (the price SSOT; held / watchlist / curated names all have a row,
+      // curated via the daily seed). Day range + Market Stats come from the
+      // /snapshot fetch (works for any symbol), so even a name with no quote row
+      // yet renders — positionStats stays null and TickerDetail hides that
+      // section. We never block the screen on "not held".
       const sym = symbol!.toUpperCase();
-      const wlItem = await supabase
-        .from('watchlist_items')
-        .select('conid, symbol')
-        .eq('symbol', sym)
-        .limit(1)
-        .maybeSingle();
-      if (!wlItem.data) {
-        setResult({ state: 'not-held', symbol: sym });
-        return;
-      }
-      const quote = await supabase
+      const { data: qrows } = await supabase
         .from('quotes')
-        .select('canonical_price, canonical_source, canonical_updated_at')
-        .eq('conid', wlItem.data.conid)
-        .maybeSingle();
+        .select('conid, symbol, canonical_price')
+        .eq('symbol', sym)
+        .order('canonical_updated_at', { ascending: false })
+        .limit(1);
+      let conid: number | null = null;
+      let price = 0;
+      if (qrows && qrows.length > 0) {
+        conid = num((qrows[0] as { conid: number | string | null }).conid) || null;
+        price = num((qrows[0] as { canonical_price: number | string | null }).canonical_price);
+      } else {
+        // No quote row yet — resolve a conid from watchlist_items so the screen
+        // still opens; price falls back to the snapshot's last (merged below).
+        const wl = await supabase
+          .from('watchlist_items')
+          .select('conid')
+          .eq('symbol', sym)
+          .limit(1)
+          .maybeSingle();
+        if (wl.data) conid = num(wl.data.conid) || null;
+      }
+      if (!alive) return;
       setResult({
         state: 'loaded',
         detail: {
-          conid: typeof wlItem.data.conid === 'number' ? wlItem.data.conid : Number(wlItem.data.conid),
+          conid,
           symbol: sym,
-          company: sym,                   // no company name on watchlist_items yet
-          price: num(quote.data?.canonical_price as number | null | undefined),
+          company: sym,                   // no company name off-position yet
+          price,
           todayChange: 0,
           todayChangePercent: 0,
           dayLow: 0,
@@ -338,13 +348,17 @@ export function useTickerDetail(symbol: string | undefined): UseTickerDetailResu
 
   if (result.state !== 'loaded' || !snapshot) return result;
   const { detail } = result;
+  // For an off-position name with no quote row, the headline price falls back to
+  // the snapshot's last so the screen isn't priced at 0.
+  const price = detail.price > 0 ? detail.price : num(snapshot.last);
   return {
     state: 'loaded',
     detail: {
       ...detail,
+      price,
       dayLow: snapshot.dayLow ?? 0,
       dayHigh: snapshot.dayHigh ?? 0,
-      currentInRange: ratioInRange(detail.price, snapshot.dayLow, snapshot.dayHigh),
+      currentInRange: ratioInRange(price, snapshot.dayLow, snapshot.dayHigh),
       marketStats: stats,
     },
   };

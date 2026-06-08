@@ -59,11 +59,10 @@ export function VirtualList({
   );
 }
 
+// Fixed dd/mm — locale-independent (no browser-locale month names). asof is a
+// plain YYYY-MM-DD pool date.
 function formatAsOf(asof: string | null): string {
   if (!asof) return '—';
-  return new Date(`${asof}T00:00:00Z`).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
+  const [, m, d] = asof.split('-');
+  return m && d ? `${d}/${m}` : asof;
 }

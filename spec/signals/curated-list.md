@@ -115,13 +115,16 @@ Two seams were broken at ship and are fixed here (the lists weren't populating):
    slow-moving *character* data, so days-old membership is safe to *display*;
    money-safety lives at the firing gate, not here — see `dip-bounce-scorer.md`
    → Fresh-price firing gate.
-3. **Curated names get a `quotes` row.** The virtual lists *and* the scorer read
-   `quotes`, but nothing wrote curated prices there (only held/watchlist were
-   quoted) → curated rows were dropped on the join. Fix: seed `quotes` for the
-   curated set from `universe.last_price` + latest `daily_bars` (close +
-   sparkline), `canonical_source` daily-grain with an honest (stale) timestamp;
-   the live pollers overwrite during session. Seeded/stale prices **render** but
-   never **fire**.
+3. **The rendered union gets a `quotes` row.** The virtual lists *and* the
+   scorer read `quotes`, but nothing wrote these prices there (only held/watchlist
+   were quoted) → rows were dropped on the join. Fix: seed `quotes` from
+   `universe.last_price` + latest `daily_bars` (close + sparkline),
+   `canonical_source` daily-grain with an honest (stale) timestamp; the live
+   pollers overwrite during session. Seeded/stale prices **render** but never
+   **fire**. The seed set is the **whole rendered union — curated ∪ the latest
+   event-trait names** (`catalyst_reversal`, `post_earnings_drift`), not just
+   curated: an event name with no quote is dropped, which collapses the **swing
+   list onto the curated set** (both lists then show the same tickers).
 
 ## Persistence
 

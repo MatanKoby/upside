@@ -31,6 +31,12 @@ const FIRST_RUN_DELAY_MS = 90_000;
 const MAX_CANDIDATES = TARGET_SIZE * 3; // cap IB probes (top-N by score that pass volume)
 const CHUNK = 900;
 
+// The virtual lists render curated_list ∪ these event traits (catalyst → both
+// lists, post-earnings → swing). They need a `quotes` row too or the FE drops
+// them on the join — without this the swing list collapses onto the curated set.
+// Mirrors useVirtualList's EVENT_TRAITS.
+const EVENT_TRAITS = ['catalyst_reversal', 'post_earnings_drift'] as const;
+
 function num(v: unknown): number | null {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
@@ -113,6 +119,33 @@ async function persist(asof: string, rows: ReturnType<typeof buildCuratedList>):
   }
 }
 
+// The latest event-trait conids (catalyst_reversal / post_earnings_drift) the FE
+// will render in the swing/intraday union. Resolved at the latest date across
+// the event traits — matching useVirtualList's traitAsof — so the names it
+// shows get a seeded quote and aren't dropped on the join.
+async function loadEventTraitConids(): Promise<number[]> {
+  const db = supabase();
+  const { data: latest } = await db
+    .from('trait_scores')
+    .select('asof_date')
+    .in('trait', EVENT_TRAITS as unknown as string[])
+    .order('asof_date', { ascending: false })
+    .limit(1);
+  const asof = (latest?.[0] as { asof_date?: string } | undefined)?.asof_date;
+  if (!asof) return [];
+  const { data } = await db
+    .from('trait_scores')
+    .select('conid')
+    .eq('asof_date', asof)
+    .in('trait', EVENT_TRAITS as unknown as string[]);
+  const out: number[] = [];
+  for (const r of data ?? []) {
+    const c = num((r as { conid: unknown }).conid);
+    if (c != null) out.push(c);
+  }
+  return out;
+}
+
 async function retention(): Promise<void> {
   const cutoff = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
   await supabase().from('curated_list').delete().lt('asof_date', cutoff);
@@ -159,11 +192,15 @@ async function tick(): Promise<void> {
   const rows = buildCuratedList(candidates);
   await persist(asof, rows);
   await retention();
-  // Seed daily-close quotes for the curated set so the virtual lists + the
-  // dip-bounce scorer have a `quotes` row to read (Batch X9). Live pollers
-  // overwrite during session; the fresh-price gate keeps these from firing.
-  const seeded = await seedDailyQuotes(rows.map((r) => r.conid));
-  console.log(`[curatedListCron] asof=${asof} seeds=${seeds.length} probed=${candidates.length} curated=${rows.length} quotesSeeded=${seeded}`);
+  // Seed daily-close quotes for the whole rendered union — curated ∪ the latest
+  // event-trait names (Batch X9). The virtual lists + dip-bounce scorer read
+  // `quotes`; an event name with no row is dropped on the join, collapsing the
+  // swing list onto the curated set. Live pollers overwrite during session; the
+  // fresh-price gate keeps these from firing.
+  const eventConids = await loadEventTraitConids();
+  const seedConids = [...new Set([...rows.map((r) => r.conid), ...eventConids])];
+  const seeded = await seedDailyQuotes(seedConids);
+  console.log(`[curatedListCron] asof=${asof} seeds=${seeds.length} probed=${candidates.length} curated=${rows.length} eventNames=${eventConids.length} quotesSeeded=${seeded}`);
 }
 
 export function startCuratedListCron(): void {
