@@ -134,6 +134,48 @@ The pool name lives on the job row so a single worker process can serve
 multiple pools, or each pool can be its own process — implementation
 choice. For MVP, one process per pool inside the api container is fine.
 
+## Per-action preconditions (gates)
+
+The pool gate above is **coarse** — it answers "is this upstream available at
+all?" Some actions need a **finer, per-action precondition** the pool can't
+express. The motivating case: `eval_catalyst_stage1` needs a *live RTH snapshot*
+— IBKR field `7295` (today's open) only exists after the 09:30 ET open, so even
+with the `ib` pool open the job **fails overnight/premarket** ("snapshot missing
+price/open"). Without this layer the job runs the instant it's claimed and
+fails, burning a retry attempt and polluting the failed set with work that was
+never going to succeed *yet*.
+
+So an action may declare a **gate** — a mechanical "can this run *now*?"
+predicate, evaluated by the worker **after claim, before execute**:
+
+```
+gate(payload, ctx) → { ready: true }
+                    | { ready: false, retryAt: timestamptz }
+```
+
+On `ready: false` the worker **defers** rather than fails:
+
+- status → back to `queued`, `scheduled_for = retryAt`, and **`attempts` is NOT
+  incremented**. A deferral is not a failure — it never reaches the producer's
+  retry / give-up policy, so a name that's simply out-of-window doesn't get
+  "given up" after N tries.
+- The claim filter (`scheduled_for <= now()`) then naturally skips the job until
+  the window opens; the pool drains it when IB reconnects inside that window
+  (IB-connect → pool wakes → drains the now-eligible backlog).
+
+Gates stay within the **producers-gate / workers-execute** split: a gate is
+mechanical (like the pool gate), not business logic — the worker still never
+decides whether the work is *relevant*, only whether its preconditions are
+*met*. Gates compose with the pool gate (pool first, then per-action).
+
+Gate kinds (v1): `requiresRthOpen` (defer to the next 09:30 ET if before open),
+`requiresMarketOpen`, and a generic predicate slot for data-freshness
+preconditions (e.g. "needs today's `daily_bars` row"). `catalyst_*` declares
+`requiresRthOpen` — the fix for the overnight-fail (see
+`signals/screener-universe.md` → catalyst_reversal). Every action that depends
+on a specific timeframe or data-availability condition should declare its gate
+rather than fail-and-retry into the void.
+
 ## Lifecycle
 
 ```

@@ -52,6 +52,24 @@ Atomic UI renderers. Each takes a `size: 'sm' | 'md' | 'lg'` prop so it can scal
 
 Sparkline note: TickerDetail uses Lightweight Charts (the real chart), NOT Sparkline. Sparkline is for compact card/list contexts only.
 
+## Global app header (shell)
+
+One shared header for **every** screen, rendered once in the app shell
+(`App.tsx`, above `<Outlet>`) — not re-implemented per screen. Today only
+Portfolio renders the IB status + market badge (`PortfolioHome/Header.tsx`,
+`.ph-header`); Watchlist and TickerDetail have their own bare headers. The
+`useMarketSession()` hook already lives in the shell, so everything the header
+needs is there.
+
+The global bar carries the **cross-screen** affordances: the Upside logo, the
+**IB connection status** (see `architecture.md` → Connection Status Header), the
+**market-period badge** ("Pre-Market" etc.), and the Alerts + Settings icons.
+Per-screen headers shrink to **only their own content** (Watchlist: title +
+glossary/gear; TickerDetail: back button + symbol/price) and sit **below** the
+global bar. No screen re-declares the IB/market controls.
+
+Folded into **Batch 16** (UI/UX polish) — see `BUILD_QUEUE.md`.
+
 ## Aesthetic Direction
 
 Refined minimalism with a financial-grade feel. Bloomberg terminal meets modern mobile. Dense but not cluttered. Every pixel earns its place.

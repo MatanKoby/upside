@@ -92,6 +92,10 @@ Abandoned approaches (kept in `archive.md` so the next agent doesn't redo them):
 - Amber dot + "Reconnecting..." → mid-session retry in progress.
 - Red dot + "Session expired" → user action required.
 
+Lives in the **shared global app header** so the IB status + market badge are
+present on every screen, not just Portfolio — see `screens/_design-system.md` →
+Global app header (folded into Batch 16).
+
 ## Multi-source price polling (IB primary, Finnhub fallback)
 
 The "real-time loop" is implemented as two cooperating pollers writing to the same `positions` row:
@@ -114,6 +118,28 @@ Both pollers recompute zone state on every write (see `signals/zone.md`). The FE
 **History:** the MVP shipped price on `positions.current_price` (held-only); Batch A1 promoted the canonical to `quotes` while keeping `positions.current_price` as a denormalized mirror; **Batch X5 removed the mirror + all price/P&L columns from `positions`** so price has exactly one home.
 
 **Origin (2026-05-27):** a 14g live test exposed `signalEngine` overriding the poller's fresh value with its own cold IB snapshot (returning the prior close right after Connect), producing three BBAI analyses stuck at ~$4.17 while live was $4.37. The fix is structural — one writer, all readers — not a patch on the snapshot path.
+
+## Frontend data caching
+
+The main data hooks — `usePositions`, `useWatchlistData`, `useVirtualList` — are
+each plain `useState` + a Supabase Realtime subscription: they **refetch from
+scratch on every mount** and hold no state across unmount. So every route change
+or sub-tab switch that unmounts a consumer (e.g. leaving an imported watchlist
+for the Intraday virtual tab) shows a **loading flash** and re-queries Supabase,
+even though the data was just on screen.
+
+**Principle:** these surfaces are cheap-to-revalidate, slow-to-feel — they
+should be **cached and shown instantly, then revalidated** (stale-while-
+revalidate). A shared lightweight cache (module-level, keyed by the hook's query
+identity; *not* a new dependency for v1) holds the last result per
+`(hook, key)`; on mount the hook paints the cached rows synchronously (no
+loading state when a cache hit exists) while its existing Realtime subscription
++ a background reload bring it current. Realtime writes update the cache so a
+remount is always warm. Applies uniformly to positions, watchlists, and the
+virtual lists — one pattern, not per-hook bespoke logic.
+
+This is FE-only (no schema/Realtime change). `react-query` / SWR is the heavier
+alternative if the module cache proves limiting — deferred until measured need.
 
 ## Three Loops in the Node.js app
 
