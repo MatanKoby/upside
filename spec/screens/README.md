@@ -9,7 +9,7 @@ One file per screen + a shared design system. When two sections always change in
 - **`ticker-detail.md`** — Ticker Detail (works for held AND watchlist tickers).
 - **`watchlist.md`** — Watchlist tab (Track 1, moved into MVP via the 2026-05-28 pivot).
 - **`screener.md`** — **Retired 2026-06-05** (redirect). The Screener tab folded into the Watchlist screen as Upside-curated virtual lists (Intraday / Swing) — see `watchlist.md` → Upside-curated virtual lists.
-- **`alerts.md`** — Alerts feed.
+- **`alerts.md`** — **Deferred from MVP 2026-06-08** (redirect). Alerts pulled from Batch 15 (now Settings-only); the surface + new direction live in `../roadmap.md` → Deferred from MVP → Alerts surface, gated on `../signals/signal-lab.md`.
 - **`settings.md`** — App-level Settings.
 
 ## Cross-references

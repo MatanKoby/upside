@@ -1,5 +1,13 @@
 # Alerts Feed
 
+> **Deferred from MVP (2026-06-08).** Batch 15 is now Settings-only; the Alerts surface
+> moved to `../roadmap.md` → Deferred from MVP → Alerts surface. We need *measured* signals
+> (`../signals/signal-lab.md`) before an alert surface earns its place, and the current
+> direction (held-position-first "set a limit sell at $X near target," swing-first, three-tier
+> IA) supersedes the chronological-firehose design below. The content here is kept as
+> reference for what *not* to rebuild verbatim. Card/ticker badges are unaffected — they were
+> never part of this surface.
+
 Chronological list of signal events, zone-entries, marker hits, and entry-zone firings. Accessed via bell icon in header (not bottom nav).
 
 ## Top Controls

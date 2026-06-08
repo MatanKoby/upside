@@ -119,10 +119,17 @@ calls.
 The single most important property of this batch is the forward-tracking
 layer. It's generic across signal kinds — `band-engine.md`'s band-touch
 events plug into the same tables once ported, as do `markers.md` fires.
+**Measuring, tuning, and explaining these fires (expectancy, lift,
+component attribution, per-regime split, the knob editor, per-ticker
+suppress, live + historical explainability) lives in `signal-lab.md`
+(Batch X8) — this section is just the capture layer it reads.**
 
 - Every fire writes a `signal_fires` row capturing: `conid`, `signal_kind`,
-  `score`, the `components` jsonb (per-rule 0/1 breakdown so failures are
-  diagnosable), `price_at_fire`, `fire_ts`.
+  `score`, the `components` jsonb, `market_regime` (the proxy state at fire
+  time — see `signal-lab.md`), `price_at_fire`, `fire_ts`. The `components`
+  jsonb is the **explainable** breakdown `{ fired, weight, added, why }` per
+  rule — `why` snapshots the raw engine values behind each rule so a fire is
+  legible after the fact (see `signal-lab.md` → Explainability).
 - `signalOutcomesCron` snapshots `quotes.canonical_price` for each fire at
   +30m / +2h / +1d / +3d and writes a `signal_outcomes` row per offset.
   `return_pct = (snapshot_price − price_at_fire) / price_at_fire × 100`.

@@ -14,8 +14,9 @@ One file per signal concern. When two sections always change in tandem, they bel
 - **`band-engine.md`** — **Post-MVP screener track:** three adaptive band layers (session_regime classifier, today's vol scalar, walking band-state machine). Turns surfaced screener tickers + held positions into walking buy/sell bands.
 - **`curated-list.md`** — **Dip-bounce track:** auto-maintained ~200-300-name high-potential pool; membership = top-N by `intraday_range_trader` + liquidity + ATR floor. The alert pool + character-source for the Intraday / Swing virtual lists (`../screens/watchlist.md`). Closes the membership gap `band-engine.md` flagged.
 - **`dip-bounce-scorer.md`** — **Dip-bounce track:** two pure-function scorers (intraday + swing), two Discord channels, forward-tracking infra (`signal_fires` + `signal_outcomes`) + hit-rate definitions. Composes inputs from `stats.md` / `entry-zones.md` / `band-engine.md`.
+- **`signal-lab.md`** — **Signal-effectiveness track (Batch X8):** measure / tune / explain the live engine signals. Expectancy + lift + component attribution + per-regime split over the forward-tracking backbone; market-regime proxy (SPY/QQQ/IWM/VIX) + `etf_constituents`; recommend-then-approve knob editor with replay; per-ticker keep/suppress; live + historical explainability. The un-deferred 14b applied to the live engines, not the LLM track.
 - **`llm-provider.md`** — Provider abstraction (Groq / Mistral / OpenAI / Gemini), runtime selection, failure classification.
-- **`news-signal.md`** — **Deferred (Batch X7):** news as a potential raiser/lowerer (good news ≈ good earnings). Wires Finnhub `newsSentiment` (today unused) into trait/curated ranking and/or risk-flags.
+- **`news-signal.md`** — **Shipped (Batch X7):** news as a raiser/lowerer via an LM-inspired finance lexicon over Finnhub `companyNews` → `news_sentiment` SSOT; consumed by the risk-flags engine (`bad_news` flag) + the virtual-list news chip/rank nudge.
 
 > Data sources moved to [`../data/sources.md`](../data/sources.md) (2026-06-06) — the catalog spans the whole app (UI + portfolio), not just signals. See also [`../data/consumers.md`](../data/consumers.md).
 

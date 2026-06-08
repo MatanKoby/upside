@@ -22,6 +22,41 @@ The pattern keeps the app-level Settings screen clean. When adding a new screen 
 
 ---
 
+## Deferred from MVP (2026-06-08)
+
+Two items pulled out of the MVP finish (Batches 15 + 16). Both are real, just gated on the
+signals being good enough to be worth interrupting the user over.
+
+### Alerts surface
+
+Pulled from **Batch 15** (now Settings-only — see `BUILD_QUEUE.md`). The original
+chronological-feed design (`../screens/alerts.md`) was a firehose by construction once all
+the LLM-free engines fire. **Rationale for deferral:** we need *better, measured* signals
+(see `../signals/signal-lab.md`) before an alert surface earns its place — interrupt only on
+what demonstrably works.
+
+Current direction when it un-defers (don't over-build until signal quality is proven):
+- **Actionable, held-position-first.** The seed idea: *"your held position is about to reach
+  its intraday/swing target → set a limit sell at $X."* Likely **swing-first** (intraday is
+  too fast to act on by hand). Other necessities will surface from live use.
+- Three-tier information architecture to avoid the firehose: **interrupt** (Discord/push, only
+  high-value actionable) · **feed** (pull, in-app, grouped/deduped, default actionable-only) ·
+  **inline row state** (chips/badges — no alert at all). Most ambient signals belong in the
+  third tier.
+- The card/ticker-card **badges and markings stay as they are** — they were never part of the
+  Alerts surface.
+
+### PWA push notifications
+
+Pulled from **Batch 16** (now polish + a11y only). Service-worker push subscription, VAPID
+key generation, backend dispatch via `web-push`, quiet hours in Settings. Subscribed devices
+get notified on the same triggers Discord uses; Discord stays the dev/admin channel, push is
+the user-facing one. Gated behind the Alerts surface above (no point pushing alerts we haven't
+decided are worth interrupting on). The "What changed" digest (Track 4 item 2) rides the same
+push infrastructure.
+
+---
+
 ## Track 1: Watchlists + BUY Signals UI — MOVED INTO MVP (2026-05-28 pivot)
 
 > **Track 1 was promoted into MVP** by the watchlist pivot. The watchlist surface plus its LLM-free signal primitives ship as Batches A1 (watchlists + quotes table), A2 (manual markers + dip-buy alerts), A+ (dynamic entry-zone engine), and B (intraday-stats engine). See `screens/watchlist.md`, `signals/markers.md`, `signals/entry-zones.md`. The original Track-1 BUY-signal UI (auto-populated "Active Watchlist" driven by the LLM playbook engine) remains here as forward-spec for when LLM-signal quality is sharpened post-pivot.

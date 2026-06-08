@@ -117,6 +117,27 @@ Listed so downstream batches have a known plan; none wired yet.
 
 ---
 
+## 6. ETF constituents + market-regime proxies (signal-lab, Batch X8)
+
+Feeds `etf_constituents` + `regime_proxy` (see `../schema.md`, `../signals/signal-lab.md`).
+
+- **ETF issuer holdings files** — the **free, complete, authoritative** constituent source.
+  The JSON holdings APIs (Finnhub `/etf/holdings`, API Ninjas, FMP) **paywall the actual
+  holdings array** — verified 2026-06-07. The issuers themselves publish full daily holdings
+  as machine-readable downloads, no key, no rate limit:
+  - **IWM** → iShares/BlackRock holdings CSV (~2,000 names).
+  - **SPY** → State Street (SSGA) holdings file.
+  - **QQQ** → Invesco holdings CSV.
+
+  A weekly cron downloads each, parses → `etf_constituents` (one row per membership; the
+  full list normalizes to ~2,600 rows, fits a plain table — no blob/Storage needed). Exact
+  download URLs are stable but rev occasionally; confirm at build time.
+- **Regime-proxy bars** — SPY / QQQ / IWM ride the existing `daily_bars` Polygon pull (3 more
+  symbols); **VIX** is index-only (no constituents) and may need VIXY or SPY realized-vol if
+  the free tiers don't carry `^VIX`.
+
+---
+
 ## S0.5 universe-coverage decision (2026-06-02)
 
 The screener needs price + volume on the ~3,000-ticker universe. Finnhub `/quote`
