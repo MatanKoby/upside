@@ -101,7 +101,7 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 
 ---
 
-## Dip-bounce + data-SSOT track (Batches X1–X6)
+## Dip-bounce + data-SSOT track (Batches X1–X7, X9)
 
 - **X1** — dip-bounce track: `curated_list` pool, intraday + swing scorers → two suggestion channels, and the durable `signal_fires` / `signal_outcomes` / `signal_hit_rate_30d` forward-tracking backbone. Migration `028`. Compute-set widening (curated ∪ active-watchlist ∪ held).
 - **X2** — Watchlist virtual lists (Intraday ✨ / Swing ✨ leaderboards) rendering X1's outputs in the Watchlist screen; retired the standalone Screener tab. Pure FE (`useVirtualList`, `VirtualList*`). No migration.
@@ -109,6 +109,8 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 - **X4** — `daily_bars` layer: Polygon-primary daily-grain SSOT (one call → whole universe, weekend-safe), 30d bootstrap + Yahoo gap-fill; repointed curated cron / swing pack / sparkline off IB history; `universe.last_avg_volume` derived from it. Migration `029`.
 - **X5** — price SSOT: `quotes` is the only price table; dropped 9 price/P&L columns from `positions` (migration `030`); market value + P&L recomputed from `quotes.canonical_price × shares` in the FE hooks + portfolio summary + signalEngine.
 - **X6** — earnings calendar single shared daily pull (`services/earningsCalendar.ts` memo) — two Finnhub calls/day → one. No migration.
+- **X7** — news-as-signal: LM-inspired finance-lexicon scorer over `companyNews` → `news_sentiment` SSOT → `bad_news` WARNING risk flag + FE news chip / rank nudge on the virtual lists. Migration `031`.
+- **X9** — populate the virtual lists: fixed the curated-list build race (latest-available date, not strict today) + seeded daily-close `quotes` for curated names (`seedDailyQuotes`); fresh-price firing gate (stale renders, never fires) + FE "as of" / stale badge. Migration `032`.
 
 ---
 
