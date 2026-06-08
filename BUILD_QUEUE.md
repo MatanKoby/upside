@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X10** (per-action job gates infra + catalyst gate-and-defer + event-alerts channel rename — fixes catalyst producing 0 rows) · **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -110,7 +110,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 **Depends on:** Batch 15.
 
-**Scope:** Final pre-MVP user-facing sweep — loading/error/empty states, mobile install guidance, accessibility. **PWA push removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → PWA push (gated behind the Alerts surface). **Engineering-quality work** (server DRY/SOLID, the 24-cron → shared base, perf, FE code dedup, test expansion) is **not** here — it lives in Batch ARCH so a refactor doesn't destabilize the MVP-milestone batch.
+**Scope:** Final pre-MVP user-facing sweep — loading/error/empty states, the shared global app header, mobile install guidance, accessibility. **PWA push removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → PWA push (gated behind the Alerts surface). **Engineering-quality work** (server DRY/SOLID, the 24-cron → shared base, perf, FE code dedup, test expansion) is **not** here — it lives in Batch ARCH so a refactor doesn't destabilize the MVP-milestone batch.
 
 ### Deliverables
 
@@ -120,15 +120,59 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
 5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored. Tooltip semantics on the zone icon verified.
 6. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
+7. **Shared global app header** — one header in the app shell (`App.tsx`, above `<Outlet>`) carrying the Upside logo · IB connection status · market-period badge · Alerts + Settings icons, present on **every** screen (today only Portfolio's `.ph-header` has the IB/market controls). Per-screen headers shrink to their own content (Watchlist title + glossary/gear; TickerDetail back + symbol) below the global bar. `useMarketSession()` already lives in the shell. See `spec/screens/_design-system.md` → Global app header + `spec/architecture.md` → Connection Status Header.
 
 ### Files this batch creates/edits
-- Scattered touches across `client/src/`.
+- Scattered touches across `client/src/`; for the header: a new `client/src/components/common/AppHeader.tsx` + `App.tsx` shell, trimming `PortfolioHome/Header.tsx`, `pages/Watchlist.tsx` header, `pages/TickerDetailPage.tsx` header.
 
 ### Verification
 - Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
 
 **🎯 Milestone: MVP per spec.**
+
+---
+
+## Batch X10: Per-action job gates (gate-and-defer) + catalyst fix
+
+**Depends on:** none. Full design: `spec/job-queue.md` → Per-action preconditions (gates).
+
+**Why:** `catalyst_reversal` produces **0 rows ever** — diagnosed 2026-06-08. Its Stage-1 jobs (66, all `failed`: "snapshot missing price/open") run at the producer's boot+10min tick, which last landed at **01:48 ET (overnight)**. IBKR field `7295` (today's open) doesn't exist outside RTH, so every live snapshot fails. The pool gate (IB connected) is too coarse — it can't express "needs the session open." The other event traits survive because they read IB *daily history*, not a live snapshot. So both virtual lists lose all catalyst differentiation.
+
+**Decision (settled 2026-06-08):** keep catalyst on IB (it's a genuine live-intraday signal — don't downgrade to end-of-day daily_bars), but add a **general per-action gate infra**: a job declares a precondition; the worker evaluates it **after claim, before execute**; on not-ready it **defers** (reschedule `scheduled_for`, **don't** increment `attempts`) instead of failing. IB-connect wakes the pool and drains the now-eligible backlog.
+
+### Deliverables
+1. **Gate infra in the worker loop** — an action may register a `gate(payload, ctx) → { ready } | { ready:false, retryAt }`. Worker checks it post-claim; on not-ready, status→`queued`, `scheduled_for=retryAt`, attempts unchanged (deferral ≠ failure, never hits retry/give-up). Composes after the pool gate.
+2. **Gate kinds (v1):** `requiresRthOpen` (defer to next 09:30 ET if before open), `requiresMarketOpen`, + a generic predicate slot. Pure + tested.
+3. **Apply to catalyst:** `eval_catalyst_stage1` / `_stage2` declare `requiresRthOpen`. Verify the 66 stuck names defer instead of fail and run once IB is up during RTH.
+4. **Channel rename:** `DISCORD_WEBHOOK_CATALYST_ALERTS` / `#upside-catalyst-alerts` → `…_EVENT_ALERTS` / `#upside-event-alerts` (it always carried both catalyst + post-earnings; the name misled). Keep the old env var as a fallback alias so the deploy doesn't break.
+
+### Files this batch creates/edits
+- `server/src/services/jobs/*` (gate registry + worker-loop defer path), `server/src/cron/catalystReversalProducer.ts` (declare gates), `server/src/services/notify.ts` + `server/src/env.ts` (channel rename + alias).
+
+### Verification
+- A catalyst Stage-1 job claimed overnight defers (status back to `queued`, `scheduled_for` = next 09:30 ET, `attempts` unchanged) — no "missing price/open" failure row.
+- With IB up during RTH, Stage-1 → Stage-2 complete and `trait_scores(catalyst_reversal)` rows appear; the swing/intraday lists gain catalyst names.
+
+---
+
+## Batch X11: FE data cache — stale-while-revalidate for the main hooks
+
+**Depends on:** none. Full design: `spec/architecture.md` → Frontend data caching.
+
+**Why:** `usePositions` / `useWatchlistData` / `useVirtualList` are each `useState` + Realtime, refetching from scratch on every mount. Any route/sub-tab switch that unmounts a consumer (e.g. imported watchlist → Intraday virtual tab) shows a **loading flash** and re-queries Supabase for data that was just on screen.
+
+### Deliverables
+1. **Shared module-level cache** keyed by `(hook, queryKey)`, holding the last result. No new dependency (no react-query/SWR in v1).
+2. **Stale-while-revalidate**: on mount, paint the cached rows synchronously (no `loading` state on a cache hit) while the existing Realtime sub + a background reload bring it current. Realtime writes update the cache so remounts stay warm.
+3. **Apply uniformly** to the three hooks — one pattern, not per-hook bespoke.
+
+### Files this batch creates/edits
+- `client/src/hooks/` (a small shared cache util + the three hooks). FE-only; no schema/Realtime change.
+
+### Verification
+- Switch imported-watchlist ↔ Intraday/Swing repeatedly → no loading flash after the first load; rows still update live via Realtime.
+- Cold load (no cache) still shows the loading state once.
 
 ---
 
