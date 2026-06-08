@@ -8,10 +8,6 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch 15 — Settings wired
-- Owner: claude
-- Started: 2026-06-08 11:05
-
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
@@ -36,6 +32,21 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` (Batch 14a) but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch 15 — Settings wired (app-shell) (2026-06-08)
+- Owner: claude
+- Started: 2026-06-08 11:05 · Finished: 2026-06-08 14:25
+- Commit: 54670fb (code) · 8d300f8 (spec+queue rescope) · 3868993 (claim)
+- **Scope reframed mid-batch (user, 2026-06-08):** anything tied to the LLM **Analyze flow** belongs in the roadmap's LLM-analysis track, not MVP. So the signal-generation knobs were **scraped out of Batch 15** into `spec/roadmap.md` → Track 4 item 9 (signal-generation quality threshold + its unbuilt engine enforcement, signal min market value control, suppressed-symbols editor + hiding the TickerDetail Analyze button). A `signal_threshold` engine gate I had started in `signalEngine.ts` was **reverted**. `settings.md` drops them from MVP scope to a roadmap pointer.
+- **What shipped (app-shell Settings only):**
+  - **`Settings.tsx`** — added **IB connection** (reuses `IbStatusIndicator` + `useMarketSession`; the indicator is the tappable connect/disconnect control), **Profit-taking zone** slider (0.5–10%, → `user_preferences.profit_zone_threshold_pct`), **Theme** picker (System/Light/Dark), and **Sign out**. Kept the already-shipped Analysis-engine + Risk-flags sections.
+  - **`useUserPreferences.ts` (new)** — reads/writes the general prefs (today just `profitZoneThresholdPct`) via the prefs route; `save` returns `{ ok, error }` so a shared instance doesn't leak errors across sections.
+  - **`services/theme.ts` (new)** + **`index.html`** — theme is per-device localStorage applied via `data-theme` (light/dark palettes already in `tokens.css`); index.html honors the saved choice pre-paint to avoid a flash; updates `<meta name=theme-color>`.
+  - **`server/src/routes/user.ts`** — extended `GET`/`PUT /api/user/preferences` to also carry `profit_zone_threshold_pct` under a `preferences` object alongside the existing `risk_flag_config` (partial PUT = partial override; backward-compatible response shape).
+  - **`components.css`** — slider styles.
+- **Verification:** server+client typecheck clean; client build clean; 194/194 server tests pass. No migration (all `user_preferences` columns already exist).
+- **User-drives-UI verification (pending):** tap settings cog → screen renders; theme change applies + survives reload; profit-zone save → next zone-cross uses it; IB connect/disconnect reflects; Sign out → login.
+- **Follow-ups (now in roadmap Track 4 item 9):** wire `signal_threshold` enforcement (note: default 70 vs current ~50–65 signal quality would hide most signals — revisit default), build the min-market-value + suppressed-symbols Settings controls, and hide the Analyze button on TickerDetail for suppressed symbols.
 
 ### Batch X9 — Populate the virtual lists (build race + curated quotes) (2026-06-08)
 - Owner: claude
