@@ -101,6 +101,13 @@ Two seams were broken at ship and are fixed here (the lists weren't populating):
    **seeds from the latest available `intraday_range_trader` date** (and is
    sequenced after the producer), and consumers (`useVirtualList`) read the
    **latest** `curated_list` / `trait_scores` date, not strictly today.
+   **Each membership source resolves its own latest date independently** — the
+   two tables advance on different schedules (curated rebuilds every 12h; the
+   event traits refresh at boot), so a single global `max(asof)` applied to both
+   blanks the curated-only intraday list whenever `trait_scores` is a day ahead.
+   The trait date is scoped to the **event traits** (`catalyst_reversal`,
+   `post_earnings_drift`); `intraday_range_trader` is the curated *seed*, not a
+   list member, and must not drag the date forward.
 2. **Staleness, surfaced not hidden.** "Latest" is bounded — past a **staleness
    cap (~2-3 trading days)** the list shows a "data stale" state instead of
    silently serving old membership. When the latest date ≠ today the FE shows an

@@ -82,16 +82,29 @@ function isStaleDate(asof: string): boolean {
 // The pipeline is daily-grain and may lag today (build race, weekends,
 // pre-market). Render the LATEST available pool, not strictly today (Batch X9);
 // the UI badges its age. See spec/signals/curated-list.md → Population & freshness.
-async function latestPoolDate(): Promise<string> {
+//
+// The two membership sources advance on DIFFERENT schedules — `curated_list`
+// rebuilds on a 12h cron while the event traits refresh at each boot — so each
+// must resolve its OWN latest date. Coupling them to a single global max blanks
+// the (curated-only) intraday list whenever trait_scores is a day ahead. The
+// trait date is scoped to the EVENT traits only; `intraday_range_trader` is the
+// curated seed (not a list member) and would otherwise drag the date forward.
+const EVENT_TRAITS = ['catalyst_reversal', 'post_earnings_drift'] as const;
+
+async function latestPoolDates(): Promise<{ curated: string | null; trait: string | null }> {
   const [cur, trait] = await Promise.all([
     supabase.from('curated_list').select('asof_date').order('asof_date', { ascending: false }).limit(1),
-    supabase.from('trait_scores').select('asof_date').order('asof_date', { ascending: false }).limit(1),
+    supabase
+      .from('trait_scores')
+      .select('asof_date')
+      .in('trait', EVENT_TRAITS as unknown as string[])
+      .order('asof_date', { ascending: false })
+      .limit(1),
   ]);
-  const dates = [
-    (cur.data?.[0] as { asof_date?: string } | undefined)?.asof_date,
-    (trait.data?.[0] as { asof_date?: string } | undefined)?.asof_date,
-  ].filter((d): d is string => typeof d === 'string');
-  return dates.length ? dates.sort().reverse()[0] : utcToday();
+  return {
+    curated: (cur.data?.[0] as { asof_date?: string } | undefined)?.asof_date ?? null,
+    trait: (trait.data?.[0] as { asof_date?: string } | undefined)?.asof_date ?? null,
+  };
 }
 
 const FIRE_KIND: Record<VirtualKind, keyof typeof FIRE_LIVE_WINDOW_HOURS> = {
@@ -118,7 +131,14 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function load() {
-      const asof = await latestPoolDate();
+      // Each membership source resolves its OWN latest date (they advance on
+      // different schedules). The badge reflects the newest pool actually shown.
+      const dates = await latestPoolDates();
+      const curatedAsof = dates.curated ?? utcToday();
+      const traitAsof = dates.trait ?? utcToday();
+      const asof =
+        [dates.curated, dates.trait].filter((d): d is string => typeof d === 'string').sort().reverse()[0] ??
+        utcToday();
       if (alive) {
         setAsof(asof);
         setStale(isStaleDate(asof));
@@ -128,17 +148,18 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
       const liveCutoff = Date.now() - FIRE_LIVE_WINDOW_HOURS[fireKind] * 3600_000;
       const hitRateCutoff = new Date(Date.now() - HIT_RATE_WINDOW_DAYS * 86_400_000).toISOString();
 
-      // 1) union members — curated (dip) + event traits (catalyst / post-earnings)
+      // 1) union members — curated (dip) + event traits (catalyst / post-earnings).
+      // Each queried at its own latest date (see latestPoolDates).
       const [curatedRes, traitRes] = await Promise.all([
         supabase
           .from('curated_list')
           .select('conid, intraday_range_trader_score')
-          .eq('asof_date', asof),
+          .eq('asof_date', curatedAsof),
         supabase
           .from('trait_scores')
           .select('conid, trait, score')
-          .eq('asof_date', asof)
-          .in('trait', ['catalyst_reversal', 'post_earnings_drift']),
+          .eq('asof_date', traitAsof)
+          .in('trait', EVENT_TRAITS as unknown as string[]),
       ]);
 
       const acc = new Map<number, Acc>();
