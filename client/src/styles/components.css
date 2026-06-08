@@ -1007,17 +1007,6 @@
   cursor: pointer;
 }
 .settings-button:disabled { opacity: 0.5; cursor: default; }
-.settings-token-field {
-  width: 100%;
-  box-sizing: border-box;
-  padding: var(--sp-8);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-}
 .settings-error {
   margin: 0;
   font-size: var(--fs-12);
