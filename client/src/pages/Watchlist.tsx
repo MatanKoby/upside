@@ -35,6 +35,15 @@ interface ImportResult {
   totalItems: number;
 }
 
+const TAB_STORAGE_KEY = 'upside_watchlist_tab';
+function readStoredTab(): string {
+  try {
+    return localStorage.getItem(TAB_STORAGE_KEY) ?? 'virtual:intraday';
+  } catch {
+    return 'virtual:intraday';
+  }
+}
+
 async function postSync(): Promise<{ ok: boolean; reason?: string; result?: ImportResult; status: number }> {
   const res = await apiFetch('/api/watchlists/sync', { method: 'POST' });
   const body = (await res.json().catch(() => ({}))) as { reason?: string; imported?: number; newLists?: number; totalItems?: number };
@@ -65,8 +74,18 @@ export default function Watchlist() {
   const [markerSheet, setMarkerSheet] = useState<MarkerSheetState | null>(null);
   // Selected sub-tab: a virtual list (`virtual:intraday` / `virtual:swing`) or
   // an imported list id. The two virtual tabs are always present and lead the
-  // strip, so Intraday is the default landing tab.
-  const [selectedKey, setSelectedKey] = useState<string>('virtual:intraday');
+  // strip, so Intraday is the default landing tab. Persisted to localStorage so
+  // a refresh keeps you on the tab you were viewing (a stale imported-list id
+  // falls back gracefully via the currentList resolution below).
+  const [selectedKey, setSelectedKey] = useState<string>(readStoredTab);
+  const pickTab = (key: string) => {
+    setSelectedKey(key);
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, key);
+    } catch {
+      // localStorage unavailable (private mode etc.) — selection just won't persist.
+    }
+  };
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
@@ -133,7 +152,7 @@ export default function Watchlist() {
         <p className="watchlist-empty">Loading…</p>
       ) : (
         <>
-          <SubTabStrip lists={activeLists} selectedKey={selectedKey} onPick={setSelectedKey} />
+          <SubTabStrip lists={activeLists} selectedKey={selectedKey} onPick={pickTab} />
           {lists.length === 0 && <ImportHint syncing={syncing} message={syncMessage} onSync={runSync} />}
           {virtualKind ? (
             <VirtualList

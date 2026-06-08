@@ -124,6 +124,17 @@ Enabled on: `positions`, `signals`, `analysis_locks`, `app_config`. Watchlist-pi
 
 Enforced on every user-data table. Service role bypasses RLS for backend writes.
 
+**Instrument / signal tables need an explicit read *policy*, not just a grant.**
+Supabase enables RLS on every table at create, and with RLS on a `SELECT` grant
+to `authenticated` is **necessary but not sufficient** — with no policy the role
+reads **0 rows, silently** (no error). Market-wide tables the FE reads directly
+(`quotes`, `curated_list`, `trait_scores`, `band_state`, `signal_fires`,
+`signal_outcomes`, `news_sentiment`) each carry a `… : authenticated read`
+policy `for select to authenticated using (true)`. Migration `033` backfilled
+the six that were created with the grant but no policy — the latent cause of the
+empty virtual lists (only `quotes` had shipped with its policy). When adding a
+new FE-read instrument table, add its read policy in the same migration.
+
 ### Dropped tables
 
 `position_history` — originally planned for daily snapshots. Removed because MTD comes from a Redis-cached month-start portfolio value, and accuracy tracking lives on the `signals` row itself. If post-MVP historical P&L charts ever need this, IB transactions API can rebuild the data on demand — no live retention required.
