@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)** and **news-as-signal (X7)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)** and **news-as-signal (X7)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X9** (populate the virtual lists — fix the curated-list build race + seed curated `quotes`; prerequisite for the lists rendering *and* for X8 having data) · **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -152,6 +152,27 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
 
 **🎯 Milestone: MVP per spec.**
+
+---
+
+## Batch X9: Populate the virtual lists (build race + curated quotes)
+
+**Depends on:** none. **Prerequisite for the Intraday/Swing lists rendering at all, and for X8 to have data.** Full design: `spec/signals/curated-list.md` → Population & freshness; `spec/signals/dip-bounce-scorer.md` → Fresh-price firing gate; `spec/screens/watchlist.md` → Membership age badge.
+
+**Root cause (diagnosed 2026-06-08, live DB):** `curated_list` is empty (0 rows ever) and `quotes` holds only held+watchlist (~41). Two seams:
+- **Build race:** `curatedListCron` reads `trait_scores(asof_date=today)` at boot+90s, but `intradayRangeTraderProducer` writes today's rows at boot+6min → 0 seeds → never builds. Strict `asof_date=today` also blanks the FE off-hours.
+- **Quotes gap:** the virtual lists + dip-bounce scorer read `quotes`, but nothing writes curated prices there (they live in `universe.last_price` + `daily_bars`) → curated rows dropped on the join; scorer can't score them → empty `signal_fires`.
+
+### Deliverables
+1. **Decouple from "today":** `curatedListCron` seeds from the **latest available** `intraday_range_trader` date (and is sequenced after the producer); `useVirtualList` reads the **latest** `curated_list` / `trait_scores` date, not `utcToday()`.
+2. **Staleness cap + age badge:** reject membership older than ~2-3 trading days (→ "data stale" state); when latest ≠ today, FE shows an "as of <date>" badge.
+3. **Seed `quotes` for the curated set** from `universe.last_price` + latest `daily_bars` (close + sparkline), `canonical_source` daily-grain with an honest (stale) timestamp; live pollers overwrite during session.
+4. **Fresh-price firing gate:** the dip-bounce scorer fires (writes `signal_fires`) only on a fresh quote; seeded/stale prices render but never fire.
+
+### Verification
+- `curated_list` builds (~rows for the latest trait date); Intraday/Swing lists render rows in the FE.
+- Curated names have `quotes` rows; FE no longer drops them.
+- Off-hours: lists show with an "as of" badge, no fires on stale prices. During session: live prices, fires resume → `signal_fires` starts filling.
 
 ---
 
