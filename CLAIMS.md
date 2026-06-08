@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch X9 — Populate the virtual lists (build race + curated quotes)
+- Owner: claude
+- Started: 2026-06-08 05:16
+
 ### Batch 14g — Single-direction playbook engine
 - Owner: claude
 - Started: 2026-05-26
