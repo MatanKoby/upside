@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X10** (per-action job gates infra + catalyst gate-and-defer + event-alerts channel rename — fixes catalyst producing 0 rows) · **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap), 14h (live leg tracking + Refine → `spec/roadmap.md` Track 4 items 7–8). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)**, **news-as-signal (X7)** and **populate-the-virtual-lists (X9)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X10** (per-action job gates infra + catalyst gate-and-defer + event-alerts channel rename — fixes catalyst producing 0 rows) · **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (Settings — app-shell only: IB / profit-zone / theme / account; alerts + signal-generation knobs moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap), 14h (live leg tracking + Refine → `spec/roadmap.md` Track 4 items 7–8). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -80,29 +80,28 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 **Depends on:** none outstanding (the `app_config` LLM picker + the R2 `/api/user/preferences` route already exist).
 
-**Scope:** Replace the Settings `ComingSoon` placeholder with the real app-level Settings screen. **Alerts removed from this batch (2026-06-08)** — deferred to `spec/roadmap.md` → Deferred from MVP → Alerts surface, gated on the signal lab (X8) proving signal quality. We don't want an alert surface until there are signals worth interrupting on. Card/ticker badges stay exactly as they are. See `spec/screens/settings.md`.
+**Scope:** Replace the Settings `ComingSoon` placeholder with the real app-shell Settings screen. **Alerts removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → Alerts surface, gated on the signal lab (X8) proving signal quality. **Signal-generation / Analyze-flow knobs removed (2026-06-08)** — the signal-generation threshold, min market value, and suppressed-symbols controls are part of the LLM-analysis track → `spec/roadmap.md` → Track 4 item 9; don't build them here. Batch 15 ships only the app-shell settings (IB connection, profit-zone threshold, theme, account) plus the already-shipped Analysis-engine + Risk-flags sections. Card/ticker badges stay exactly as they are. See `spec/screens/settings.md`.
 
 ### Deliverables
 
-1. **Settings (`/settings`)** — app-level (per spec):
-   - **IB Connection**: status indicator + Connect/Disconnect button.
-   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`).
-   - **Signal min market value** ($, persists to `user_preferences.signal_min_market_value`).
-   - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
+1. **Settings (`/settings`)** — app-shell (per spec):
+   - **IB Connection**: status indicator + Connect/Disconnect button (reuse `IbStatusIndicator` + `useMarketSession`).
    - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
-   - **Theme** (Dark / Light / System, persists).
-   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a**: lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced. Batch 15 just folds it into the final Settings layout — no rebuild.
+   - **Theme** (Dark / Light / System; per-device localStorage, applied via `data-theme` — the light/dark palettes already exist in `styles/tokens.css`).
+   - **Analysis engine** — provider + model picker. **Already shipped in Batch 14a**: lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced. Stays in the layout — no rebuild.
+   - **Risk flags** — the R2 thresholds section (already shipped). Stays.
    - **Sign out** button.
 
-2. **`PUT /api/user/preferences`** — extend the existing R2 preferences route (which already handles `risk_flag_config`) to the rest of the prefs. FE writes through this rather than directly to Supabase to keep validation centralized.
+2. **`PUT /api/user/preferences`** — extend the existing R2 preferences route (which already handles `risk_flag_config`) to also accept `profit_zone_threshold_pct` under a `preferences` object. FE writes through this rather than directly to Supabase to keep validation centralized.
 
 ### Files this batch creates/edits
-- `client/src/pages/Settings.tsx`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (extend the existing preferences route).
+- `client/src/pages/Settings.tsx`, `client/src/hooks/useUserPreferences.ts`, `client/src/services/theme.ts`, `client/index.html` (apply saved theme pre-paint), `client/src/styles/components.css` (slider), `server/src/routes/user.ts` (extend the existing preferences route).
 
 ### Verification
-- Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
+- Tap settings cog → Settings screen renders. Change theme → applied immediately and survives reload.
 - Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
-- Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
+- IB section: tap Connect/Disconnect → status reflects the transition.
+- Sign out → returns to login.
 
 ---
 
