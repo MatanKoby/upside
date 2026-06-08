@@ -5,6 +5,7 @@
 
 import { supabase } from '../supabase.js';
 import { activeWatchlistOnlyConids } from '../quotes.js';
+import { latestCuratedAsof } from '../curatedList/asof.js';
 
 export interface ComputeMember {
   conid: number;
@@ -17,9 +18,13 @@ function fin(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadComputeSet(asof: string): Promise<ComputeMember[]> {
+export async function loadComputeSet(): Promise<ComputeMember[]> {
   const db = supabase();
   const byConid = new Map<number, ComputeMember>();
+  // Curated portion keys on the LATEST available curated date, not today —
+  // the list builds under the latest trait date (Batch X9), which may lag today
+  // off-hours. Held + watchlist are date-independent.
+  const asof = await latestCuratedAsof();
 
   // Held positions.
   const { data: pos } = await db.from('positions').select('conid, symbol');
@@ -34,17 +39,19 @@ export async function loadComputeSet(asof: string): Promise<ComputeMember[]> {
     if (!byConid.has(conid)) byConid.set(conid, { conid, symbol, isHeld: false });
   }
 
-  // Curated list for today — symbols resolved via universe.real_conid.
-  const { data: cur } = await db.from('curated_list').select('conid').eq('asof_date', asof);
-  const curConids = (cur ?? []).map((r) => fin((r as { conid: unknown }).conid)).filter((c): c is number => c != null);
-  const missing = curConids.filter((c) => !byConid.has(c));
-  for (let i = 0; i < missing.length; i += 900) {
-    const chunk = missing.slice(i, i + 900);
-    const { data: u } = await db.from('universe').select('real_conid, symbol').in('real_conid', chunk);
-    for (const row of u ?? []) {
-      const c = fin((row as { real_conid: unknown }).real_conid);
-      if (c != null && !byConid.has(c)) {
-        byConid.set(c, { conid: c, symbol: String((row as { symbol: unknown }).symbol ?? ''), isHeld: false });
+  // Curated list (latest date) — symbols resolved via universe.real_conid.
+  if (asof) {
+    const { data: cur } = await db.from('curated_list').select('conid').eq('asof_date', asof);
+    const curConids = (cur ?? []).map((r) => fin((r as { conid: unknown }).conid)).filter((c): c is number => c != null);
+    const missing = curConids.filter((c) => !byConid.has(c));
+    for (let i = 0; i < missing.length; i += 900) {
+      const chunk = missing.slice(i, i + 900);
+      const { data: u } = await db.from('universe').select('real_conid, symbol').in('real_conid', chunk);
+      for (const row of u ?? []) {
+        const c = fin((row as { real_conid: unknown }).real_conid);
+        if (c != null && !byConid.has(c)) {
+          byConid.set(c, { conid: c, symbol: String((row as { symbol: unknown }).symbol ?? ''), isHeld: false });
+        }
       }
     }
   }

@@ -1059,6 +1059,8 @@
   text-align: center;
 }
 .watchlist-empty-msg { font-size: var(--fs-11); color: var(--text-tertiary); margin: 0; }
+.watchlist-asof-badge { font-size: var(--fs-11); color: var(--text-tertiary); margin: 0 0 6px; padding: 0 2px; }
+.watchlist-stale-banner { font-size: var(--fs-11); color: var(--color-warning, #d08700); margin: 0 0 6px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--color-warning, #d08700) 12%, transparent); }
 
 .watchlist-tabstrip {
   display: flex; gap: 6px; overflow-x: auto;

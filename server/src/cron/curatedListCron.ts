@@ -22,6 +22,8 @@ import { notifyError } from '../services/notify.js';
 import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';
 import { buildCuratedList, type CuratedCandidate } from '../services/curatedList/buildCuratedList.js';
+import { latestTraitAsof } from '../services/curatedList/asof.js';
+import { seedDailyQuotes } from '../services/quotes.js';
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../config/curatedList.js';
 
 const CADENCE_MS = 12 * 3600 * 1000;
@@ -38,10 +40,6 @@ function median(nums: number[]): number {
   const s = [...nums].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
-
-function utcDate(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 interface Seed {
@@ -121,10 +119,19 @@ async function retention(): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  const asof = utcDate();
+  // Seed from the LATEST available trait date, not strictly today — the trait
+  // producer writes today's rows after this cron's first tick, so keying on
+  // today raced to 0 seeds and the list never built (Batch X9). Membership is
+  // slow-moving character data; latest-available is correct, and the FE surfaces
+  // its age. See spec/signals/curated-list.md → Population & freshness.
+  const asof = await latestTraitAsof('intraday_range_trader');
+  if (!asof) {
+    console.log('[curatedListCron] no intraday_range_trader trait scores yet; nothing to curate');
+    return;
+  }
   const seeds = await loadSeeds(asof);
   if (seeds.length === 0) {
-    console.log('[curatedListCron] no intraday_range_trader seeds for today');
+    console.log(`[curatedListCron] no intraday_range_trader seeds for asof=${asof}`);
     return;
   }
 
@@ -152,7 +159,11 @@ async function tick(): Promise<void> {
   const rows = buildCuratedList(candidates);
   await persist(asof, rows);
   await retention();
-  console.log(`[curatedListCron] asof=${asof} seeds=${seeds.length} probed=${candidates.length} curated=${rows.length}`);
+  // Seed daily-close quotes for the curated set so the virtual lists + the
+  // dip-bounce scorer have a `quotes` row to read (Batch X9). Live pollers
+  // overwrite during session; the fresh-price gate keeps these from firing.
+  const seeded = await seedDailyQuotes(rows.map((r) => r.conid));
+  console.log(`[curatedListCron] asof=${asof} seeds=${seeds.length} probed=${candidates.length} curated=${rows.length} quotesSeeded=${seeded}`);
 }
 
 export function startCuratedListCron(): void {

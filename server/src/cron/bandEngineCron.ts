@@ -429,8 +429,8 @@ async function tickAll(): Promise<void> {
 
   // Compute set widened (Batch X1): curated ∪ active-watchlist ∪ held, so every
   // ticker on a visible imported list gets a walking band, not just curated names.
-  const asof = new Date().toISOString().slice(0, 10);
-  const members = await loadComputeSet(asof);
+  // loadComputeSet resolves the latest curated date internally (Batch X9).
+  const members = await loadComputeSet();
   if (members.length === 0) {
     console.log('[bandEngineCron] no compute-set tickers; nothing to walk');
     return;

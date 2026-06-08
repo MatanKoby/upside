@@ -49,7 +49,7 @@ export interface VirtualRow {
   symbol: string;
   companyName: string | null;
   price: number | null;
-  source: 'ib' | 'finnhub' | null;
+  source: 'ib' | 'finnhub' | 'daily' | null;
   todayChangePct: number | null;
   todayOpen: number | null;
   sparklineCloses: number[] | null;
@@ -71,6 +71,29 @@ function utcToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Days past which the latest pool is treated as stale (covers a weekend).
+const STALENESS_CAP_DAYS = 4;
+
+function isStaleDate(asof: string): boolean {
+  const ageDays = (Date.now() - Date.parse(`${asof}T00:00:00Z`)) / 86_400_000;
+  return ageDays > STALENESS_CAP_DAYS;
+}
+
+// The pipeline is daily-grain and may lag today (build race, weekends,
+// pre-market). Render the LATEST available pool, not strictly today (Batch X9);
+// the UI badges its age. See spec/signals/curated-list.md → Population & freshness.
+async function latestPoolDate(): Promise<string> {
+  const [cur, trait] = await Promise.all([
+    supabase.from('curated_list').select('asof_date').order('asof_date', { ascending: false }).limit(1),
+    supabase.from('trait_scores').select('asof_date').order('asof_date', { ascending: false }).limit(1),
+  ]);
+  const dates = [
+    (cur.data?.[0] as { asof_date?: string } | undefined)?.asof_date,
+    (trait.data?.[0] as { asof_date?: string } | undefined)?.asof_date,
+  ].filter((d): d is string => typeof d === 'string');
+  return dates.length ? dates.sort().reverse()[0] : utcToday();
+}
+
 const FIRE_KIND: Record<VirtualKind, keyof typeof FIRE_LIVE_WINDOW_HOURS> = {
   intraday: 'intraday_dip_bounce',
   swing: 'swing_dip_bounce',
@@ -84,16 +107,22 @@ interface Acc {
   lowBand: number | null; // for marker prefill
 }
 
-export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading: boolean } {
+export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading: boolean; asof: string | null; stale: boolean } {
   const [rows, setRows] = useState<VirtualRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [asof, setAsof] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     let alive = true;
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function load() {
-      const asof = utcToday();
+      const asof = await latestPoolDate();
+      if (alive) {
+        setAsof(asof);
+        setStale(isStaleDate(asof));
+      }
       const fireKind = FIRE_KIND[kind];
       const { offset, thresholdPct } = HIT_RATE_DEF[fireKind];
       const liveCutoff = Date.now() - FIRE_LIVE_WINDOW_HOURS[fireKind] * 3600_000;
@@ -185,7 +214,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
         conid: number | string;
         symbol: string;
         canonical_price: number | string | null;
-        canonical_source: 'ib' | 'finnhub' | null;
+        canonical_source: 'ib' | 'finnhub' | 'daily' | null;
         today_change_pct: number | string | null;
         today_open: number | string | null;
         sparkline_closes: unknown;
@@ -330,7 +359,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
     };
   }, [kind]);
 
-  return { rows, loading };
+  return { rows, loading, asof, stale };
 }
 
 const REASON_ORDER: ReasonChip[] = ['dip', 'catalyst', 'post-earnings'];

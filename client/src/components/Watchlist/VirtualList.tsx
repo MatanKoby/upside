@@ -18,7 +18,7 @@ export function VirtualList({
   riskByConid: Map<number, RiskFlagRow>;
   onAddMarker: (row: VirtualRow) => void;
 }) {
-  const { rows, loading } = useVirtualList(kind);
+  const { rows, loading, asof, stale } = useVirtualList(kind);
   const navigate = useNavigate();
 
   if (loading) {
@@ -27,23 +27,43 @@ export function VirtualList({
   if (rows.length === 0) {
     return (
       <p className="watchlist-empty-msg">
-        {kind === 'intraday' ? 'Intraday' : 'Swing'} list is still warming up — the screener and dip-bounce
-        engine populate it once they've run with IB connected.
+        {kind === 'intraday' ? 'Intraday' : 'Swing'} list is still warming up — it populates after the
+        screener + dip-bounce engine run (daily; no IB connection required).
       </p>
     );
   }
+  const today = new Date().toISOString().slice(0, 10);
+  const showAge = asof != null && asof !== today;
   return (
-    <ul className="watchlist-items">
-      {rows.map((row) => (
-        <li key={row.conid}>
-          <VirtualListRow
-            row={row}
-            risk={riskByConid.get(row.conid) ?? null}
-            onTap={() => navigate(`/ticker/${encodeURIComponent(row.symbol)}`)}
-            onLongPress={() => onAddMarker(row)}
-          />
-        </li>
-      ))}
-    </ul>
+    <>
+      {stale ? (
+        <p className="watchlist-stale-banner" role="status">
+          ⚠ Data stale — latest pool is from {formatAsOf(asof)}. Showing it until the next refresh.
+        </p>
+      ) : showAge ? (
+        <p className="watchlist-asof-badge" role="status">as of {formatAsOf(asof)}</p>
+      ) : null}
+      <ul className="watchlist-items">
+        {rows.map((row) => (
+          <li key={row.conid}>
+            <VirtualListRow
+              row={row}
+              risk={riskByConid.get(row.conid) ?? null}
+              onTap={() => navigate(`/ticker/${encodeURIComponent(row.symbol)}`)}
+              onLongPress={() => onAddMarker(row)}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
   );
+}
+
+function formatAsOf(asof: string | null): string {
+  if (!asof) return '—';
+  return new Date(`${asof}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 }

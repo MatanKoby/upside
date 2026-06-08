@@ -39,7 +39,13 @@ function hasConfluence(reasoning: string | null | undefined): boolean {
   return reasoning != null && /confluence/i.test(reasoning);
 }
 
-interface QuoteInput { price: number | null; todayOpen: number | null }
+interface QuoteInput { price: number | null; todayOpen: number | null; fresh: boolean }
+
+// A scorer fires only on a fresh live quote — never on a seeded daily-close
+// row (canonical_source='daily') or a stale ib/finnhub price (Batch X9
+// fresh-price firing gate; spec/signals/dip-bounce-scorer.md). Seeded/stale
+// prices still render in the lists, they just don't generate a signal.
+const FRESH_QUOTE_MAX_MS = 15 * 60_000;
 interface StatsInput { p50: number | null; p75: number | null }
 interface BandInput { sessionRegime: string | null; volRegimeShift: boolean | null }
 interface ZoneInput { price: number; trendRegime: string | null; hasConfluence: boolean }
@@ -87,11 +93,16 @@ async function loadQuotes(conids: number[]): Promise<Map<number, QuoteInput>> {
   for (let i = 0; i < conids.length; i += CHUNK) {
     const { data } = await supabase()
       .from('quotes')
-      .select('conid, canonical_price, today_open')
+      .select('conid, canonical_price, today_open, canonical_source, canonical_updated_at')
       .in('conid', conids.slice(i, i + CHUNK));
     for (const r of data ?? []) {
       const c = num((r as { conid: unknown }).conid);
-      if (c != null) out.set(c, { price: num((r as { canonical_price: unknown }).canonical_price), todayOpen: num((r as { today_open: unknown }).today_open) });
+      if (c == null) continue;
+      const src = (r as { canonical_source: string | null }).canonical_source;
+      const updatedAt = (r as { canonical_updated_at: string | null }).canonical_updated_at;
+      const ageMs = updatedAt ? Date.now() - Date.parse(updatedAt) : Infinity;
+      const fresh = (src === 'ib' || src === 'finnhub') && Number.isFinite(ageMs) && ageMs <= FRESH_QUOTE_MAX_MS;
+      out.set(c, { price: num((r as { canonical_price: unknown }).canonical_price), todayOpen: num((r as { today_open: unknown }).today_open), fresh });
     }
   }
   return out;
@@ -212,10 +223,9 @@ async function tick(): Promise<void> {
   if (period !== 'regular' && period !== 'after-hours') return;
 
   const sessionDate = etDateString(); // band_state key
-  const curatedAsof = new Date().toISOString().slice(0, 10); // curated_list / trait_scores key
   resetCacheIfNewSession(sessionDate);
 
-  const members = await loadComputeSet(curatedAsof);
+  const members = await loadComputeSet();
   if (members.length === 0) return;
   const conids = members.map((m) => m.conid);
 
@@ -232,7 +242,7 @@ async function tick(): Promise<void> {
   let intradayFires = 0;
   let swingFires = 0;
   for (const m of members) {
-    const q = quotes.get(m.conid) ?? { price: null, todayOpen: null };
+    const q = quotes.get(m.conid) ?? { price: null, todayOpen: null, fresh: false };
     const s = stats.get(m.conid) ?? { p50: null, p75: null };
     const b = bands.get(m.conid) ?? { sessionRegime: null, volRegimeShift: null };
     const z = zones.get(m.conid) ?? {};
@@ -247,7 +257,7 @@ async function tick(): Promise<void> {
       volRegimeShift: b.volRegimeShift,
       intradayZone: z.intraday ? { trendRegime: z.intraday.trendRegime, hasConfluence: z.intraday.hasConfluence } : null,
     });
-    if (intraday.fired && cooldownPassed(lastFires.get(`${m.conid}:intraday_dip_bounce`), INTRADAY_COOLDOWN_HOURS)) {
+    if (intraday.fired && q.fresh && cooldownPassed(lastFires.get(`${m.conid}:intraday_dip_bounce`), INTRADAY_COOLDOWN_HOURS)) {
       await recordFire({ conid: m.conid, kind: 'intraday_dip_bounce', score: intraday.score, components: intraday.components, horizon: 'intraday', price: q.price });
       await notifyIntradayDipBounce({
         symbol: m.symbol,
@@ -274,7 +284,7 @@ async function tick(): Promise<void> {
         overnightZone: z.overnight ? { price: z.overnight.price, hasConfluence: z.overnight.hasConfluence } : null,
         multidayZone: z.multiday ? { price: z.multiday.price, hasConfluence: z.multiday.hasConfluence } : null,
       });
-      if (swing.fired && cooldownPassed(lastFires.get(`${m.conid}:swing_dip_bounce`), SWING_COOLDOWN_HOURS)) {
+      if (swing.fired && q.fresh && cooldownPassed(lastFires.get(`${m.conid}:swing_dip_bounce`), SWING_COOLDOWN_HOURS)) {
         await recordFire({ conid: m.conid, kind: 'swing_dip_bounce', score: swing.score, components: swing.components, horizon: 'swing', price: q.price });
         await notifySwingDipBounce({
           symbol: m.symbol,

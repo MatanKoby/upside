@@ -10,6 +10,7 @@
 // to join contracts to render rows.
 
 import { supabase } from './supabase.js';
+import { notifyError } from './notify.js';
 import { checkMarkersForConid } from './markers.js';
 import { checkEntryZonesForConid } from './entryZoneAlerts.js';
 import { checkIntradayStatsForConid } from './intradayStatsAlerts.js';
@@ -94,6 +95,81 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
     void checkEntryZonesForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
     void checkIntradayStatsForConid(opts.conid, opts.symbol, prevCanonical, opts.price);
   }
+}
+
+/**
+ * Seed a daily-close `quotes` row for curated/universe conids that have no live
+ * quote (Batch X9). The virtual lists + the dip-bounce scorer read `quotes`, but
+ * only held/watchlist names were ever quoted — curated names were dropped on the
+ * join. Price comes from `universe.last_price` (Polygon daily, batched) with the
+ * `daily_bars` last close as fallback + a 20-point sparkline. Marked
+ * `canonical_source='daily'` with the bar date as an honest (stale) timestamp, so
+ * the fresh-price firing gate skips them (render, don't fire). NEVER clobbers a
+ * row a live poller owns (ib/finnhub canonical). Returns the number seeded.
+ */
+export async function seedDailyQuotes(conids: number[]): Promise<number> {
+  const uniq = [...new Set(conids.filter((c) => Number.isFinite(c)))];
+  if (uniq.length === 0) return 0;
+  const db = supabase();
+
+  // Global latest daily-bar date → the honest as-of stamp for all seeded rows.
+  const { data: maxRow } = await db.from('daily_bars').select('date').order('date', { ascending: false }).limit(1);
+  const latestBarDate = (maxRow?.[0] as { date: string } | undefined)?.date ?? null;
+  const asOfStamp = latestBarDate ? `${latestBarDate}T21:00:00.000Z` : new Date().toISOString();
+
+  // universe price + symbol (keyed by real_conid), and which conids a live poller owns.
+  const uni = new Map<number, { symbol: string; price: number | null }>();
+  const liveOwned = new Set<number>();
+  const sparkByConid = new Map<number, number[]>();
+  const barCutoff = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
+
+  for (let i = 0; i < uniq.length; i += 900) {
+    const chunk = uniq.slice(i, i + 900);
+    const [u, q, bars] = await Promise.all([
+      db.from('universe').select('real_conid, symbol, last_price').in('real_conid', chunk),
+      db.from('quotes').select('conid, canonical_source').in('conid', chunk),
+      db.from('daily_bars').select('conid, date, c').in('conid', chunk).gte('date', barCutoff).order('date', { ascending: true }),
+    ]);
+    for (const r of u.data ?? []) {
+      const c = asNum((r as { real_conid: number | string | null }).real_conid);
+      if (c != null) uni.set(c, { symbol: String((r as { symbol: unknown }).symbol ?? ''), price: asNum((r as { last_price: number | string | null }).last_price) });
+    }
+    for (const r of q.data ?? []) {
+      const c = asNum((r as { conid: number | string | null }).conid);
+      const src = (r as { canonical_source: string | null }).canonical_source;
+      if (c != null && (src === 'ib' || src === 'finnhub')) liveOwned.add(c);
+    }
+    for (const r of bars.data ?? []) {
+      const c = asNum((r as { conid: number | string | null }).conid);
+      const close = asNum((r as { c: number | string | null }).c);
+      if (c == null || close == null) continue;
+      (sparkByConid.get(c) ?? sparkByConid.set(c, []).get(c)!).push(close);
+    }
+  }
+
+  const rows: Record<string, unknown>[] = [];
+  for (const conid of uniq) {
+    if (liveOwned.has(conid)) continue; // a live poller owns this row — never overwrite
+    const u = uni.get(conid);
+    if (!u || !u.symbol) continue;
+    const closes = sparkByConid.get(conid) ?? [];
+    const price = u.price ?? (closes.length ? closes[closes.length - 1] : null);
+    if (price == null) continue;
+    rows.push({
+      conid,
+      symbol: u.symbol,
+      canonical_price: price,
+      canonical_source: 'daily',
+      canonical_updated_at: asOfStamp,
+      sparkline_closes: closes.length ? closes.slice(-20) : null,
+    });
+  }
+
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await db.from('quotes').upsert(rows.slice(i, i + 500), { onConflict: 'conid' });
+    if (error) void notifyError('quotes.seedDailyQuotes', error.message);
+  }
+  return rows.length;
 }
 
 /**
