@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)** and the **price SSOT (X5)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **X7** (news-as-signal — design settled 2026-06-07, **in progress**, see `CLAIMS.md`) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 15** (alerts feed + settings) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 13.9** (Finnhub cadence tuning) · **Batch 16** (PWA push + remaining polish). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost), 14b + 14d (deferred behind LLM signal-quality sharpening). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".** The screener track (S0.3 / S0.5 / S1 / S1.5 / S2 / S3), the dip-bounce track (X1–X3 + X6), the risk-flags track (R1 / R2), the **daily_bars layer (X4)**, the **price SSOT (X5)** and **news-as-signal (X7)** have all shipped — see `BUILD_QUEUE_DONE.md` + `CLAIMS_DONE.md`. **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live signals; the un-deferred 14b applied to the live engines) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch 14h** (live per-leg tracking + Refine — also tracked in `CLAIMS.md` → In progress) · **Batch 15** (Settings — now Settings-only; alerts moved to roadmap) · **Batch ARCH** (architecture review + research sweep) · **Batch 16** (UI/UX polish + a11y — push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). **Closed:** 14b (reframed → X8), 14d (range-entry pings already shipped across the live engines; LLM-range pings → roadmap). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -65,7 +65,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Batch 13.9: Finnhub call inventory + per-category cadence tuning
 
-**Depends on:** Batches 14a, 14b, 14c, 14d (all Finnhub callers must exist before tuning).
+**Depends on:** none outstanding — all live Finnhub callers already exist via the shipped X-track (the original 14a–14d dependency is moot now those are shipped/closed). Ready to claim.
 
 **Scope:** Now that all Finnhub callers in the codebase are real, inventory them and set sensible per-category min-intervals on the queue.
 
@@ -99,84 +99,105 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
-## Batch 15: Alerts feed + Settings wired
+## Batch 15: Settings wired
 
-**Depends on:** Batch 14a, 14b, 14c.
+**Depends on:** none outstanding (the `app_config` LLM picker + the R2 `/api/user/preferences` route already exist).
 
-**Scope:** Replace the two `ComingSoon` placeholders with real screens. Reflects the unified-analysis decision (Alerts now lists both SELL and BUY signal events) and the 2-tab MVP bottom nav (Alerts is a bell icon in the Portfolio screen header, not a bottom-nav destination — see spec).
+**Scope:** Replace the Settings `ComingSoon` placeholder with the real app-level Settings screen. **Alerts removed from this batch (2026-06-08)** — deferred to `spec/roadmap.md` → Deferred from MVP → Alerts surface, gated on the signal lab (X8) proving signal quality. We don't want an alert surface until there are signals worth interrupting on. Card/ticker badges stay exactly as they are. See `spec/screens/settings.md`.
 
 ### Deliverables
 
-1. **Alerts surface — bell icon in Portfolio header → Alerts screen**. The bell renders a small unread-count badge when there are new signal/zone events since the user last viewed the screen.
-
-2. **Alerts feed** — chronological list of all signal-related events, newest first:
-   - SELL signal generated, SELL range entered (Discord-fired)
-   - BUY signal generated, BUY range entered (Discord-fired)
-   - Zone entered (Discord-fired)
-   - no_signal analyses (so user sees "I looked at NVDA, no signal" history)
-   - **Display filter slider**: "Show signals above ___% Quality" (range: 0-100, default 50). **Display filter only — does NOT affect generation.** Settings has the separate generation threshold.
-   - Filter pills: All / Sell / Buy / Zone-Entry / no_signal.
-   - Empty state: "No signals yet. Tap Analyze on any position to generate one."
-
-3. **"I acted on this" button** on each Alerts list item → POST sets `signals.acted_on_at`. Zone-entries get a similar lightweight "Mark as seen" affordance.
-
-4. **Aggregate accuracy display** at top of Alerts feed: pulls from `GET /api/signals/accuracy` from Batch 14b. Shows per signal type:
-   - "Recent SELL signals: X% hit-rate over 30d, median +Y% from optimal."
-   - "Recent BUY signals: X% hit-rate over 30d, median +Y% from optimal."
-   - Placeholder copy if data is sparse in early days.
-
-5. **Settings (`/settings`)** — app-level (per spec):
+1. **Settings (`/settings`)** — app-level (per spec):
    - **IB Connection**: status indicator + Connect/Disconnect button.
-   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`). Clarify in copy: "BE-level minimum; the Alerts feed has a separate display filter."
+   - **Signal generation threshold** (signal-quality minimum to bother generating; persists to `user_preferences.signal_threshold`).
    - **Signal min market value** ($, persists to `user_preferences.signal_min_market_value`).
    - **Suppressed symbols** (text list, persists to `user_preferences.suppressed_symbols`).
    - **Profit-taking zone threshold** (slider 0.5%-10%, default 2%, persists to `user_preferences.profit_zone_threshold_pct`).
    - **Theme** (Dark / Light / System, persists).
-   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a** (Settings "Analysis engine" section): lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced, takes effect on next analyze. Batch 15 just folds it into the final Settings layout — no rebuild.
+   - **Analysis engine** — provider + model picker. **Pre-built in Batch 14a**: lists only providers with a key configured, persists to `app_config` via `POST /api/config/llm`, Realtime-synced. Batch 15 just folds it into the final Settings layout — no rebuild.
    - **Sign out** button.
 
-6. **`PUT /api/user/preferences`** — BE endpoint validates + upserts the user_preferences row. FE writes through this rather than directly to Supabase to keep validation centralized. *(Note: a GET/PUT `/api/user/preferences` route already shipped in Batch R2 for `risk_flag_config`; Batch 15 extends it to the rest of the prefs rather than building it fresh.)*
+2. **`PUT /api/user/preferences`** — extend the existing R2 preferences route (which already handles `risk_flag_config`) to the rest of the prefs. FE writes through this rather than directly to Supabase to keep validation centralized.
 
 ### Files this batch creates/edits
-- `client/src/pages/Alerts.tsx`, `client/src/pages/Settings.tsx`, `client/src/components/AlertsFeed/*`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (extend the existing preferences route).
+- `client/src/pages/Settings.tsx`, `client/src/components/Settings/*`, `client/src/hooks/useUserPreferences.ts`, `client/src/routes.tsx`, `server/src/routes/user.ts` (extend the existing preferences route).
 
 ### Verification
-- Tap bell icon → Alerts list renders, shows signals + zone-entries.
 - Tap settings cog → Settings screen renders. Change theme → applied immediately. Change LLM provider → next Analyze uses new provider.
 - Adjust profit-zone threshold to 3% → next zone-cross uses new threshold.
 - Suppressed symbol: add BBAI to suppression → Analyze button no longer appears on BBAI's TickerDetail.
 
 ---
 
-## Batch 16: Polish + PWA push notifications
+## Batch 16: UI/UX polish + a11y
 
 **Depends on:** Batch 15.
 
-**Scope:** Final pre-MVP sweep. Loading/error/empty states, mobile install guidance, a11y pass, and PWA push notifications (replacing the originally-dropped MVP item).
+**Scope:** Final pre-MVP user-facing sweep — loading/error/empty states, mobile install guidance, accessibility. **PWA push removed (2026-06-08)** → `spec/roadmap.md` → Deferred from MVP → PWA push (gated behind the Alerts surface). **Engineering-quality work** (server DRY/SOLID, the 24-cron → shared base, perf, FE code dedup, test expansion) is **not** here — it lives in Batch ARCH so a refactor doesn't destabilize the MVP-milestone batch.
 
 ### Deliverables
 
 1. **Loading states** for every async surface (initial portfolio load, chart load, analyze in progress, settings save).
 2. **Error states**: BE unreachable, IB session stalled mid-action, Supabase Realtime disconnect with reconnect.
-3. **Empty states** with helpful guidance (no positions: "Connect IB"; no signals yet: same as Batch 15).
+3. **Empty states** with helpful guidance (no positions: "Connect IB"; virtual lists not yet populated: helpful copy rather than a blank screen).
 4. **Mobile install guidance**: a one-time tip on the Vercel landing screen explaining "Add to Home Screen" on iOS Safari.
 5. **Accessibility pass**: keyboard focus order, screen-reader labels on icon buttons, color contrast ratios checked, motion-reduce honored. Tooltip semantics on the zone icon verified.
-6. **PWA push notifications**:
-   - Service worker push subscription on first launch (with permission prompt).
-   - VAPID key generation + backend dispatch logic via the `web-push` npm library.
-   - Subscribed devices get notified on the same triggers Discord uses (zone-entry, signal-range-entry). Discord stays as the developer/admin channel; PWA push is the user-facing channel.
-   - Quiet hours support in Settings (defer if scope creeps — Discord-only is acceptable for MVP).
-7. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
+6. **Optional smoke tests** if `client/` test infra exists (vitest scaffold from earlier deferred batch).
 
 ### Files this batch creates/edits
-- Scattered touches across `client/src/`, plus `server/src/services/webPush.ts` (new), `client/public/service-worker.js`.
+- Scattered touches across `client/src/`.
 
 ### Verification
 - Manual walkthrough: kill the BE, see graceful error UI on phone. Restart BE, see reconnect.
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
-- PWA push: grant permission on phone, kill the app, trigger a zone-cross from another device or by manual Supabase update → phone notification arrives within seconds.
 
 **🎯 Milestone: MVP per spec.**
+
+---
+
+## Batch X8: Signal Lab — measure / tune / explain the live signals
+
+**Depends on:** the X1 forward-tracking backbone (shipped). Full design: `spec/signals/signal-lab.md`.
+
+**Scope:** The un-deferred **Batch 14b**, applied to the **LLM-free engine signals that actually ship** (dip-bounce now; entry-zone / stats-band / marker / zone-entry once ported) — *not* the LLM analysis track (parked in `roadmap.md` → Track 4). Built on `signal_fires` / `signal_outcomes`; no parallel plumbing. **No pruning** — all fires/outcomes kept (cheap). Read-first: the lab measures and **recommends**; knob changes are recommend-then-approve, never auto-applied (v1).
+
+### Deliverables
+
+1. **Port the other live engines onto `signal_fires`** — entry-zone / stats-band / marker / zone-entry each write a fire row on trigger (the ping and the tracking row are one event). Scope/order TBD when claiming; the pattern is generic.
+2. **Enrich `signal_fires.components`** from flat 0/1 → `{ fired, weight, added, why }` per rule, `why` snapshotting the raw engine values at fire time. Add `market_regime` column. Migration.
+3. **Market-regime layer** — `regime_proxy` (SPY/QQQ/IWM/VIX) + `etf_constituents` (issuer-file membership, weekly cron; see `spec/data/sources.md` → ETF constituents) + `recommended_count`. SPY/QQQ/IWM ride the existing `daily_bars` pull; derive a regime label; stamp it on each fire. Migration.
+4. **Effectiveness aggregation** (view/endpoint) — expectancy, lift over base rate, score-bucket calibration, **component attribution**, per-regime split, expired-without-hit, rolling 7/14d expectancy. Beyond the existing binary `signal_hit_rate_30d`.
+5. **Knob editor with replay** — move scorer weights/thresholds from `config/dipBounceScorer.ts` into `signal_knobs` (Realtime; code = fallback). The lab proposes a change + **replays** past fires to show the would-be hit-rate/expectancy → user approves → write. Migration.
+6. **Per-ticker keep/suppress** — `signal_suppressions`; the scorer cron skips a suppressed (conid, kind) once its fires show negative expectancy over enough samples. Migration.
+7. **`signal_findings`** — durable conclusions at two grains (per-kind → reweight; per-(kind,conid) → keep/suppress). Migration.
+8. **Explainability surfaces** — extract the pure scorer to a **shared module**; `useVirtualList` adds `intraday_stats` + `entry_zones` to its subscription and runs it per row so the live score + its Explain come from one recompute (never stale, no endpoint). Historical Explain drills into a stored fire. *(Whether to surface the score number on the row is TBD — decide once the virtual lists populate.)*
+
+### Verification
+- Component attribution query returns per-rule expectancy lift; score buckets sortable.
+- A knob edit in `signal_knobs` takes effect on the next scorer tick; the replay matches.
+- A suppressed (conid, kind) stops firing; un-suppressing resumes it.
+- Live Explain on a row matches the displayed score and refreshes on quote tick.
+
+### Open caveat
+- The virtual lists currently aren't populating (no rows/fires observed) — confirm the dip-bounce producers are actually emitting fires before relying on accumulated data. The lab is only as useful as the fire stream feeding it.
+
+---
+
+## Batch ARCH: Architecture review + research sweep
+
+**Depends on:** none. Best run after the MVP code has settled (post-15/16) but can start anytime.
+
+**Scope:** A **research/review** batch, not an implementation batch. Audit the engineering-quality items pulled out of Batch 16 and produce prioritized findings + follow-up implementation batches — don't refactor in-place here.
+
+### Deliverables (a findings doc + proposed follow-up batches)
+1. **Cron architecture** — 24 crons (~4k lines) are hand-rolled `start*()` with per-file interval/locking/IB-gating/notify/compute-set logic. Evaluate a shared `defineCron({ name, intervalMs, lock, ibGated, run })` base for DRY **and stability** (one correct place for lock/retry/notify).
+2. **Server DRY/SOLID** — duplication across producers (the `curated ∪ watchlist ∪ held` compute-set, Finnhub/IB read patterns, Discord notify).
+3. **Performance / loading times** — FE query waterfalls, Realtime reconnection, DB indexes, bundle.
+4. **FE code polish** — component/hook dedup, dead code.
+5. **Test gaps** — server + FE coverage beyond the X16 smoke tests.
+
+### Output
+- A markdown findings doc (committed) ranking each item by impact/risk, plus drafted follow-up batch entries for the ones worth doing. No production code change in this batch.
 
 ---
 
@@ -270,77 +291,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
-## Batch 14b: Daily hindsight accuracy tracking cron
+## Closed / superseded
 
-**DEFERRED (2026-05-26):** signal quality is currently poor, so measuring accuracy is premature. The single-direction rework happened as **Batch 14g** (single-direction playbook engine + computed feature pack) → **14h** (live per-leg tracking + Refine). 14h's live tracking is the per-leg accuracy foundation; revisit/un-defer this hindsight cron once 14g/14h land and base quality is confirmed. Full design in `spec/signals/playbook.md`; scope in `CLAIMS.md`.
-
-**Depends on:** Batch 14a, 13.7.
-
-**Scope:** Once daily, after market close, update accuracy fields on all open signals using Finnhub intraday candles. Empirical foundation for "is the LLM actually good." IB-independent — works whether or not the user has IB connected.
-
-### Deliverables
-
-1. **`server/src/cron/accuracyUpdater.ts`** — runs daily at ~4:30 PM ET (after regular session close):
-   - For each signal where `superseded_by_analysis_id IS NULL` AND `analyzed_at` within last 30 days:
-     - Fetch intraday candles (5-min or hourly bars) from Finnhub for today's date for this symbol, through the queue with `category: 'candle'`.
-     - Compute today's high, low, and the time the high/low were reached.
-     - Update `actual_max_since_analysis = max(prior, today_high)`, `actual_min_since_analysis = min(prior, today_low)`.
-     - If price entered `[price_range_low, price_range_high]` for the first time: set `entered_range_at` to the candle timestamp.
-     - If price was in range and exited: set `exited_range_at`.
-
-2. **Schema migration `supabase/migrations/00X_acted_on_at.sql`**:
-   - Add `acted_on_at timestamptz null` to `signals`. Set by FE when user taps "I acted on this" in the Alerts feed (UI lands in Batch 15). Used downstream by post-MVP signal post-mortem feature.
-
-3. **`server/src/routes/signals.ts:GET /api/signals/accuracy`**:
-   - Returns rolling stats: hit-rate (% of sell signals where actual_max ≥ optimal_price within the predicted timeframe), median-distance-from-target, time-to-hit, signals-expired-without-hit.
-   - Aggregates over last 30 days, last 90 days, all-time.
-   - Used by Batch 15's Alerts feed.
-
-### Files this batch creates/edits
-- `server/src/cron/accuracyUpdater.ts` (new), `server/src/routes/signals.ts` (add `/accuracy`), `supabase/migrations/00X_acted_on_at.sql`.
-
-### Does NOT touch
-- pricePoller, zone detection, FE Signal Section.
-
-### Verification
-- Run cron manually → confirm `actual_max_since_analysis` updates for all open signals.
-- `GET /api/signals/accuracy` returns sensible JSON (empty stats are fine for early days).
-
----
-
-## Batch 14d: Signal-range Discord notifications (SELL + BUY)
-
-**DEFERRED (2026-05-26):** deferred alongside Batch 14b until signal quality improves (see the 14b note + `CLAIMS.md` → Known issues). The zone-entry notifications in 14c still ship; this is specifically the *signal-range* pings. **Note (2026-06):** the dip-bounce track (X1) shipped a generic `signal_fires`/`signal_outcomes` backbone with two suggestion channels — when this un-defers, port it onto that backbone rather than building parallel range-check plumbing.
-
-**Depends on:** Batch 14a, 14c.
-
-**Scope:** Notify when live price enters an open signal's predicted range. Same Discord infrastructure as 14c, different trigger and channels. **Two channels from day one** — SELL and BUY — because Batch 14a's unified analysis produces both signal types in MVP.
-
-### Deliverables
-
-1. **`server/src/services/discord.ts`** — `notifySignalRangeEntry(signal, position)`. Routes by signal type:
-   - `signalType: 'sell'` → `DISCORD_WEBHOOK_SIGNALS_SELL` channel.
-   - `signalType: 'buy'` → `DISCORD_WEBHOOK_SIGNALS_BUY` channel.
-   - SELL message: `🎯 {symbol} entered SELL range — price ${price} ∈ [${low}, ${high}], optimal ${optimal} · motivation: {motivation}. Generated {when}.`
-   - BUY message: `🎯 {symbol} entered BUY range — price ${price} ∈ [${low}, ${high}], optimal ${optimal} · motivation: {motivation}. Generated {when}.`
-
-2. **Trigger logic** — extend the same price pollers from 13.8:
-   - For each price write, check all open signals (`superseded_by_analysis_id IS NULL` AND not expired) for this position. Loop over both SELL and BUY signals.
-   - If `current_price` is within `[price_range_low, price_range_high]` and `entered_range_at IS NULL`: fire notification (to the correct channel based on signal type), set `entered_range_at`.
-   - Cooldown not needed — signal-entry is a one-time event per signal row (subsequent re-entries are recorded via accuracy tracking, not re-notified).
-
-3. **Future channels reserved**: `DISCORD_WEBHOOK_EVENTS` (post-MVP for info badges like earnings/insider/volume). Document in `.env.example`.
-
-### Files this batch creates/edits
-- `server/src/services/discord.ts`, `server/src/cron/ibPricePoller.ts` + `finnhubPricePoller.ts` (range-check hook), `.env.example`.
-
-### Manual prerequisite (user)
-- Create `#upside-signals-sell` Discord channel + webhook → `DISCORD_WEBHOOK_SIGNALS_SELL` to `.env`.
-- Create `#upside-signals-buy` Discord channel + webhook → `DISCORD_WEBHOOK_SIGNALS_BUY` to `.env`.
-- `docker compose restart api`.
-
-### Verification
-- Generate a unified analysis with a SELL range slightly above current price. Wait for price to drift up into range. Discord ping arrives once in `#upside-signals-sell`; `entered_range_at` set on the SELL signal row.
-- Generate a unified analysis with a BUY range slightly below current price. Wait for price to drift down into range. Discord ping arrives once in `#upside-signals-buy`; `entered_range_at` set on the BUY signal row.
-- Re-trigger same condition → no duplicate notification (one-time event).
-- Same analysis producing both SELL and BUY: only the relevant channel fires when price enters its respective range.
+- **Batch 14b** (daily hindsight accuracy cron) — **reframed → Batch X8 (Signal Lab)** on 2026-06-08. The essence (measure whether signals actually work) now applies to the live LLM-free engines via the `signal_fires` / `signal_outcomes` backbone, not the LLM `signals` table. LLM-track accuracy stays parked in `spec/roadmap.md` → Track 4.
+- **Batch 14d** (signal-range Discord pings) — **closed** 2026-06-08. Range/level-entry pings already shipped across the live engines (markers / entry-zones / stats / zone / dip-bounce all fire on trigger). The only unbuilt piece was range pings on the LLM `signals` table — deferred with the rest of the LLM analysis track to `spec/roadmap.md`.
