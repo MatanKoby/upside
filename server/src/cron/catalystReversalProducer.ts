@@ -39,6 +39,7 @@ import { makeKey } from '../services/jobs/keys.js';
 import { ibRegistry } from '../services/jobs/actions.js';
 import { gateRegistry, requiresRthOpen } from '../services/jobs/gates.js';
 import { ibSnapshot, ibHistory } from '../services/ibGateway.js';
+import { parseIbNumber } from '../utils/ibNumber.js';
 import {
   evaluateCatalystStage1,
   evaluateCatalystStage2,
@@ -59,15 +60,6 @@ function todayIsoDate(): string {
 
 function daysAgoIsoDate(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60_000).toISOString().slice(0, 10);
-}
-
-function num(v: unknown): number {
-  if (typeof v === 'number') return v;
-  if (typeof v === 'string') {
-    const n = Number(v.replace(/[,%]/g, ''));
-    return Number.isFinite(n) ? n : NaN;
-  }
-  return NaN;
 }
 
 interface UniverseTarget {
@@ -331,19 +323,24 @@ interface CatalystS1Payload {
   asof_date: string;
 }
 
+// The snapshot fields Stage-1 actually gates on: last price (31), today's open
+// (7295), volume (87), prev close (7296). ibSnapshot warms the poll until all
+// are present (Batch X10.1) so we don't evaluate a half-streamed row.
+const CATALYST_SNAPSHOT_FIELDS = ['31', '7295', '87', '7296'] as const;
+
 ibRegistry['eval_catalyst_stage1'] = async (payloadIn) => {
   const payload = payloadIn as unknown as CatalystS1Payload;
   if (payload.real_conid == null) throw new Error('eval_catalyst_stage1: missing real_conid');
-  const rows = await ibSnapshot([payload.real_conid]);
+  const rows = await ibSnapshot([payload.real_conid], CATALYST_SNAPSHOT_FIELDS);
   const row: RawIbSnapshot | undefined = rows[0];
   if (!row) throw new Error(`eval_catalyst_stage1: empty snapshot for ${payload.symbol}`);
   const input: CatalystStage1Input = {
-    today_volume: num(row['87']),
-    today_price:  num(row['31']),
-    today_open:   num(row['7295']),
-    prev_close:   num(row['7296']),
-    today_high:   num(row['70']),
-    today_low:    num(row['71']),
+    today_volume: parseIbNumber(row['87']),
+    today_price:  parseIbNumber(row['31']),
+    today_open:   parseIbNumber(row['7295']),
+    prev_close:   parseIbNumber(row['7296']),
+    today_high:   parseIbNumber(row['70']),
+    today_low:    parseIbNumber(row['71']),
     baseline_volume: payload.baseline_volume,
   };
   if (!Number.isFinite(input.today_price) || !Number.isFinite(input.today_open)) {

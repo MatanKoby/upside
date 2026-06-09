@@ -396,9 +396,17 @@ const SNAPSHOT_FIELDS = '31,70,71,82,83,84,86,87,7295,7296';
 const SNAPSHOT_POLL_INTERVAL_MS = 250;
 const SNAPSHOT_MAX_ATTEMPTS = 8;     // 8 × 250ms = 2s max wait
 
-function isSnapshotPopulated(row: RawIbSnapshot | undefined): boolean {
+function isSnapshotPopulated(row: RawIbSnapshot | undefined, required?: readonly string[]): boolean {
   if (!row) return false;
-  // Consider populated if any non-identifier field is present.
+  // Caller named the exact fields it needs (Batch X10.1): only "populated" once
+  // every one is present + non-empty. IB streams fields incrementally, so the
+  // default "any field present" check below bails too early and hands back a
+  // row still missing, say, today's open (7295) or volume (87).
+  if (required && required.length > 0) {
+    const r = row as Record<string, unknown>;
+    return required.every((f) => r[f] != null && r[f] !== '');
+  }
+  // Default: populated if any non-identifier field is present.
   for (const key of Object.keys(row)) {
     if (key === 'conid' || key === 'conidEx') continue;
     return true;
@@ -406,7 +414,10 @@ function isSnapshotPopulated(row: RawIbSnapshot | undefined): boolean {
   return false;
 }
 
-export async function ibSnapshot(conids: number[]): Promise<RawIbSnapshot[]> {
+export async function ibSnapshot(
+  conids: number[],
+  requiredFields?: readonly string[],
+): Promise<RawIbSnapshot[]> {
   if (conids.length === 0) return [];
   const endpoint = '/v1/api/iserver/marketdata/snapshot';
   const { data } = await instrumentedWithRetry(
@@ -419,7 +430,8 @@ export async function ibSnapshot(conids: number[]): Promise<RawIbSnapshot[]> {
           params: { conids: conids.join(','), fields: SNAPSHOT_FIELDS },
         });
         const arr = Array.isArray(res.data) ? res.data : [];
-        const allPopulated = arr.length === conids.length && arr.every(isSnapshotPopulated);
+        const allPopulated =
+          arr.length === conids.length && arr.every((r) => isSnapshotPopulated(r, requiredFields));
         if (allPopulated) {
           return { status: res.status, data: arr };
         }
