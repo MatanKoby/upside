@@ -291,7 +291,7 @@ export function notifyIntradayStatsHit(args: {
 
 /**
  * Trait first-fire ping (Batch S2). Routes the two event-shaped traits
- * (catalyst_reversal + post_earnings_drift) to #upside-catalyst-alerts.
+ * (catalyst_reversal + post_earnings_drift) to #upside-event-alerts.
  * `intraday_range_trader` is the baseline-of-the-screener trait — pinging
  * its surfacings daily would be noise; band-touch alerts (band-engine.md)
  * carry the actionable events for those names. No-ops when the channel
@@ -307,7 +307,7 @@ export function notifyTraitFirstFire(args: {
   payload: Record<string, unknown>;
 }): Promise<void> {
   const { trait, symbol, score, payload } = args;
-  const url = env.discordCatalystAlertsWebhookUrl;
+  const url = env.discordEventAlertsWebhookUrl;
   // Trait-specific one-line summary so the channel reads at a glance.
   let summary = '';
   if (trait === 'catalyst_reversal') {

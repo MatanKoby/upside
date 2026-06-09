@@ -175,6 +175,31 @@ export async function markFailed(id: string, errorMessage: string, attempts: num
 }
 
 /**
+ * Worker-facing — a claimed job's per-action gate said "not ready yet"
+ * (Batch X10). Defer it: status back to `queued`, `scheduled_for = retryAt`,
+ * claim fields cleared, and crucially **`attempts` is NOT incremented**. A
+ * deferral is not a failure, so it never reaches the producer's give-up
+ * policy — a name that's simply out-of-window doesn't get abandoned after N
+ * tries. The row stays inside the active partial unique index throughout
+ * (claimed→queued are both "active"), so no dedup conflict. See
+ * spec/job-queue.md → Per-action preconditions (gates).
+ */
+export async function deferJob(id: string, retryAt: Date): Promise<void> {
+  const { error } = await supabase()
+    .from('screener_jobs')
+    .update({
+      status: 'queued',
+      scheduled_for: retryAt.toISOString(),
+      claimed_at: null,
+      claimed_by: null,
+      lease_expires_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw new Error(`deferJob(${id}) failed: ${error.message}`);
+}
+
+/**
  * Worker-facing — atomic claim of the next eligible job. Calls
  * claim_next_job() which runs SELECT FOR UPDATE SKIP LOCKED inside a
  * txn, so two workers polling at the same instant cannot double-claim.

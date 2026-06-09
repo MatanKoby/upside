@@ -37,6 +37,7 @@ import {
 } from '../services/jobs/queue.js';
 import { makeKey } from '../services/jobs/keys.js';
 import { ibRegistry } from '../services/jobs/actions.js';
+import { gateRegistry, requiresRthOpen } from '../services/jobs/gates.js';
 import { ibSnapshot, ibHistory } from '../services/ibGateway.js';
 import {
   evaluateCatalystStage1,
@@ -379,3 +380,10 @@ ibRegistry['eval_catalyst_stage2'] = async (payloadIn) => {
   });
   return stage2 as unknown as Record<string, unknown>;
 };
+
+// Per-action gates (Batch X10): both catalyst stages need the regular session
+// — Stage 1 reads a live snapshot (IBKR field 7295/today's open only exists
+// intraday) and Stage 2 reads ibHistory (503s off-hours). Claimed off-hours,
+// they now defer to the next 09:30 ET instead of failing + burning retries.
+gateRegistry['eval_catalyst_stage1'] = requiresRthOpen();
+gateRegistry['eval_catalyst_stage2'] = requiresRthOpen();

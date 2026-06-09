@@ -91,11 +91,14 @@ export const env = {
   // dip-buys so the two mental categories (statistical-pattern vs. structural-
   // level / user-marker) can be muted independently.
   discordStatsAlertsWebhookUrl: optional('DISCORD_WEBHOOK_STATS_ALERTS'),
-  // DISCORD_WEBHOOK_CATALYST_ALERTS — Batch S2. catalyst_reversal +
+  // DISCORD_WEBHOOK_EVENT_ALERTS — Batch S2 / renamed X10. catalyst_reversal +
   // post_earnings_drift trait first-fire pings (once per ticker per day).
   // intraday_range_trader is silent — its band-touches carry the actionable
-  // events.
-  discordCatalystAlertsWebhookUrl: optional('DISCORD_WEBHOOK_CATALYST_ALERTS'),
+  // events. Renamed from DISCORD_WEBHOOK_CATALYST_ALERTS (it always carried
+  // both event traits); the old var is still read as a fallback so a deploy
+  // that hasn't updated its .env keeps working.
+  discordEventAlertsWebhookUrl:
+    optional('DISCORD_WEBHOOK_EVENT_ALERTS') || optional('DISCORD_WEBHOOK_CATALYST_ALERTS'),
   // DISCORD_WEBHOOK_SELL_ZONES — Batch S3. Predicted-high band touch on a
   // held position posts here (distinct from dip-buys so sell-side pings are
   // mutable independently). Low-touch on curated-not-held still routes to

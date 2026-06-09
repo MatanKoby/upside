@@ -12,12 +12,14 @@
 import { hostname } from 'node:os';
 import {
   claimNext,
+  deferJob,
   markDone,
   markFailed,
   type JobRow,
   type WorkerPool,
 } from './queue.js';
 import { registryFor, type ActionRegistry } from './actions.js';
+import { gateRegistry, type GateResult } from './gates.js';
 import { notifyError, notifyCritical } from '../notify.js';
 
 export interface WorkerOptions {
@@ -115,6 +117,33 @@ export function createWorker(opts: WorkerOptions): Worker {
         );
       }
       return 'busy';
+    }
+
+    // Per-action gate (Batch X10): a mechanical "can this run now?" check,
+    // evaluated post-claim / pre-execute. On not-ready we DEFER (reschedule,
+    // attempts unchanged) rather than execute-and-fail. A gate that throws is
+    // a bug in the (pure) predicate, not a reason to block work — log it and
+    // fall through to execute (degrades to the pre-gate behaviour).
+    const gate = gateRegistry[job.action];
+    if (gate) {
+      let g: GateResult | null = null;
+      try {
+        g = await gate(job.payload, job);
+      } catch (e) {
+        void notifyError(`jobs.${pool}.gate.${job.action}`, (e as Error).message, e);
+      }
+      if (g && !g.ready) {
+        const retryAt = g.retryAt ?? new Date(Date.now() + 5 * 60_000);
+        try {
+          await deferJob(job.id, retryAt);
+          console.log(
+            `[jobs/${pool}] deferred ${job.action} (${job.job_key}) → ${retryAt.toISOString()}`,
+          );
+        } catch (e) {
+          void notifyError(`jobs.${pool}.defer`, (e as Error).message, e);
+        }
+        return 'busy';
+      }
     }
 
     try {

@@ -115,6 +115,48 @@ export function endOfRegularSessionEtIso(now: Date = new Date()): string {
 }
 
 /**
+ * Resolve the instant whose ET wall-clock reads `y-mo-d hh:mi`. DST-correct:
+ * guesses by treating the wall clock as UTC, then corrects using the ET offset
+ * the guess actually lands in (two passes converge — our callers use 09:30 /
+ * noon, far from the 02:00 DST transition, so there's no ambiguity).
+ */
+function etWallClockToInstant(y: number, mo: number, d: number, h: number, mi: number): Date {
+  let guess = Date.UTC(y, mo - 1, d, h, mi);
+  for (let i = 0; i < 2; i++) {
+    const p = partsInTimezone(new Date(guess));
+    const guessWallAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    const offsetMs = guessWallAsUtc - guess; // ET wall ahead of the instant (negative)
+    guess = Date.UTC(y, mo - 1, d, h, mi) - offsetMs;
+  }
+  return new Date(guess);
+}
+
+/**
+ * ISO timestamp of the next regular-session open (09:30 ET on a trading day)
+ * strictly after `now`. If `now` is before today's 09:30 ET on a trading day,
+ * returns today's open; otherwise walks forward past weekends + holidays.
+ * Used by the job-queue `requiresRthOpen` gate to defer off-hours jobs instead
+ * of failing them (see `../services/jobs/gates.ts`).
+ */
+export function nextRegularOpenEtIso(now: Date = new Date()): string {
+  const t = partsInTimezone(now);
+  let { year: y, month: mo, day: d } = t;
+  for (let i = 0; i < 14; i++) {
+    const open = etWallClockToInstant(y, mo, d, 9, 30);
+    const p = partsInTimezone(open);
+    const isTradingDay =
+      p.weekday >= 1 && p.weekday <= 5 && !US_MARKET_HOLIDAYS.has(isoDate(p.year, p.month, p.day));
+    if (isTradingDay && open.getTime() > now.getTime()) return open.toISOString();
+    // Advance one ET calendar day via noon (DST-safe — noon never shifts day).
+    const noonNext = new Date(etWallClockToInstant(y, mo, d, 12, 0).getTime() + 24 * 60 * 60_000);
+    const np = partsInTimezone(noonNext);
+    y = np.year; mo = np.month; d = np.day;
+  }
+  // Unreachable in practice (≤14d covers any holiday gap); safe fallback.
+  return new Date(now.getTime() + 24 * 60 * 60_000).toISOString();
+}
+
+/**
  * US trading days from `entry` through `now`, both ET-calendar-day inclusive.
  * Returns 1 on the entry day itself (so the %/day metric never divides by 0),
  * incrementing each subsequent weekday that isn't a market holiday. Returns 0
