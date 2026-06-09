@@ -149,6 +149,17 @@ snapshot per Stage-0 candidate (or per Ring-1 IN ticker for already-active
 names) reads today's open + volume + price. Flag the few showing **≥3× vol
 gap** vs `universe.last_avg_volume` AND **≥5% gap or intraday move**.
 
+> **Snapshot gotchas (X10.1).** Stage-1 gates on fields `31` (price) / `7295`
+> (open) / `87` (volume) / `7296` (prev close). Two traps that silently zeroed
+> the trait: (1) IB returns these **display-formatted** — volume comes as e.g.
+> `"65595.7B"` — so parse via `utils/ibNumber.parseIbNumber`, not plain
+> `Number()` (which yields `NaN` → null vol-multiple → nothing ever qualifies).
+> (2) IB streams fields incrementally, so call `ibSnapshot` with these as
+> **required fields** so its warmup poll waits for all of them instead of
+> handing back a half-populated row (missing open/volume). Stage-1 runs only
+> during RTH via the `requiresRthOpen` gate — see `../job-queue.md` →
+> Per-action preconditions.
+
 **Stage 2 — expensive A ∧ B evaluation (only on Stage-1 hits, ~5–50/day).**
 Pull `ibHistory(conid, '1y', '1d')` for daily bars. Evaluate:
 
