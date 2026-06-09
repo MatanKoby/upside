@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { readCache, writeCache } from './dataCache';
 
 // One imported IB watchlist. `active` controls whether the BE poller writes
 // quotes for its tickers (and whether the FE renders it as a sub-tab). See
@@ -102,14 +103,28 @@ function num(v: number | string | null | undefined): number | null {
 // with a single Realtime subscription per table. Lists with active=false are
 // included so the in-screen settings sheet can render them; the page itself
 // filters to active for the sub-tab strip.
+// Single snapshot of everything the hook returns, so the stale-while-revalidate
+// cache (Batch X11) holds one value per remount and the load writes it in one
+// shot. See ./dataCache + spec/architecture.md → Frontend data caching.
+interface WatchlistSnapshot {
+  lists: WatchlistList[];
+  itemsByList: Record<string, WatchlistItem[]>;
+  quotesByConid: Record<number, QuoteRow>;
+  markersByConid: Record<number, Marker[]>;
+  entryZonesByConid: Record<number, Partial<Record<Horizon, EntryZoneRow>>>;
+  statsByConid: Record<number, IntradayStatsRow>;
+}
+const EMPTY_WATCHLIST: WatchlistSnapshot = {
+  lists: [], itemsByList: {}, quotesByConid: {}, markersByConid: {}, entryZonesByConid: {}, statsByConid: {},
+};
+const CACHE_KEY = 'watchlist';
+
 export function useWatchlistData(): UseWatchlistData {
-  const [lists, setLists] = useState<WatchlistList[]>([]);
-  const [itemsByList, setItemsByList] = useState<Record<string, WatchlistItem[]>>({});
-  const [quotesByConid, setQuotesByConid] = useState<Record<number, QuoteRow>>({});
-  const [markersByConid, setMarkersByConid] = useState<Record<number, Marker[]>>({});
-  const [entryZonesByConid, setEntryZonesByConid] = useState<Record<number, Partial<Record<Horizon, EntryZoneRow>>>>({});
-  const [statsByConid, setStatsByConid] = useState<Record<number, IntradayStatsRow>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  // Seed from cache so a tab/route remount paints the last watchlist instantly;
+  // only a cold cache shows the loading state.
+  const cached = readCache<WatchlistSnapshot>(CACHE_KEY);
+  const [data, setData] = useState<WatchlistSnapshot>(cached ?? EMPTY_WATCHLIST);
+  const [isLoading, setIsLoading] = useState(cached === undefined);
 
   useEffect(() => {
     let alive = true;
@@ -220,12 +235,16 @@ export function useWatchlistData(): UseWatchlistData {
       }
 
       if (!alive) return;
-      setLists(listRows);
-      setItemsByList(itemsByListMap);
-      setQuotesByConid(qMap);
-      setMarkersByConid(markersByConidMap);
-      setEntryZonesByConid(zMap);
-      setStatsByConid(sMap);
+      const snap: WatchlistSnapshot = {
+        lists: listRows,
+        itemsByList: itemsByListMap,
+        quotesByConid: qMap,
+        markersByConid: markersByConidMap,
+        entryZonesByConid: zMap,
+        statsByConid: sMap,
+      };
+      writeCache(CACHE_KEY, snap);
+      setData(snap);
       setIsLoading(false);
     }
 
@@ -248,5 +267,5 @@ export function useWatchlistData(): UseWatchlistData {
     };
   }, []);
 
-  return { lists, itemsByList, quotesByConid, markersByConid, entryZonesByConid, statsByConid, isLoading };
+  return { ...data, isLoading };
 }

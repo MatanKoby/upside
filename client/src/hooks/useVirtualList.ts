@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { readCache, writeCache } from './dataCache';
 import {
   type VirtualKind,
   type ReasonChip,
@@ -120,15 +121,38 @@ interface Acc {
   lowBand: number | null; // for marker prefill
 }
 
+// Everything the hook returns, cached as one snapshot per kind (Batch X11) so
+// an Intraday↔Swing switch (which keeps the component mounted) and route
+// remounts paint instantly. See ./dataCache.
+interface VirtualSnapshot {
+  rows: VirtualRow[];
+  asof: string | null;
+  stale: boolean;
+}
+const EMPTY_VIRTUAL: VirtualSnapshot = { rows: [], asof: null, stale: false };
+const cacheKeyFor = (kind: VirtualKind): string => `virtual:${kind}`;
+
 export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading: boolean; asof: string | null; stale: boolean } {
-  const [rows, setRows] = useState<VirtualRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [asof, setAsof] = useState<string | null>(null);
-  const [stale, setStale] = useState(false);
+  const [snap, setSnap] = useState<VirtualSnapshot>(
+    () => readCache<VirtualSnapshot>(cacheKeyFor(kind)) ?? EMPTY_VIRTUAL,
+  );
+  const [loading, setLoading] = useState(() => readCache<VirtualSnapshot>(cacheKeyFor(kind)) === undefined);
 
   useEffect(() => {
     let alive = true;
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const cacheKey = cacheKeyFor(kind);
+
+    // Re-seed when `kind` changes on a mounted hook: a cache hit paints the new
+    // list's last snapshot instantly; a cold kind shows the loading state
+    // (gated in VirtualList) rather than the previous kind's rows.
+    const seed = readCache<VirtualSnapshot>(cacheKey);
+    if (seed) {
+      setSnap(seed);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
 
     async function load() {
       // Each membership source resolves its OWN latest date (they advance on
@@ -139,10 +163,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
       const asof =
         [dates.curated, dates.trait].filter((d): d is string => typeof d === 'string').sort().reverse()[0] ??
         utcToday();
-      if (alive) {
-        setAsof(asof);
-        setStale(isStaleDate(asof));
-      }
+      const staleNow = isStaleDate(asof);
       const fireKind = FIRE_KIND[kind];
       const { offset, thresholdPct } = HIT_RATE_DEF[fireKind];
       const liveCutoff = Date.now() - FIRE_LIVE_WINDOW_HOURS[fireKind] * 3600_000;
@@ -193,7 +214,9 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
       const conids = [...acc.keys()];
       if (conids.length === 0) {
         if (alive) {
-          setRows([]);
+          const empty: VirtualSnapshot = { rows: [], asof, stale: staleNow };
+          writeCache(cacheKey, empty);
+          setSnap(empty);
           setLoading(false);
         }
         return;
@@ -348,7 +371,9 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
 
       out.sort((x, y) => y.score - x.score);
       if (alive) {
-        setRows(out.slice(0, VIRTUAL_LIST_TOP_N));
+        const next: VirtualSnapshot = { rows: out.slice(0, VIRTUAL_LIST_TOP_N), asof, stale: staleNow };
+        writeCache(cacheKey, next);
+        setSnap(next);
         setLoading(false);
       }
     }
@@ -380,7 +405,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
     };
   }, [kind]);
 
-  return { rows, loading, asof, stale };
+  return { rows: snap.rows, loading, asof: snap.asof, stale: snap.stale };
 }
 
 const REASON_ORDER: ReasonChip[] = ['dip', 'catalyst', 'post-earnings'];

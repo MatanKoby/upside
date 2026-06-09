@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { readCache, writeCache } from './dataCache';
 import type { Position } from '../types';
+
+// Stale-while-revalidate cache key (Batch X11). A remount paints the last
+// positions snapshot instantly while Realtime + a background reload revalidate.
+const CACHE_KEY = 'positions';
 
 // Price SSOT (Batch X5): `positions` holds holding facts only; the per-share
 // price + P&L are recomputed from `quotes.canonical_price` × shares. This hook
@@ -70,8 +75,11 @@ export interface UsePositionsResult {
 }
 
 export function usePositions(): UsePositionsResult {
-  const [positions, setPositions] = useState<Position[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Seed from the cache so a remount shows the last rows immediately; only a
+  // cold cache starts in the loading state.
+  const cached = readCache<Position[]>(CACHE_KEY);
+  const [positions, setPositions] = useState<Position[]>(cached ?? []);
+  const [isLoading, setIsLoading] = useState(cached === undefined);
   const [error, setError] = useState<string | null>(null);
   const heldConids = useRef<Set<number>>(new Set());
 
@@ -121,6 +129,7 @@ export function usePositions(): UsePositionsResult {
       if (!alive) return;
       const mapped = rows.map((r) => rowToPosition(r, quoteByConid.get(Number(r.conid))));
       mapped.sort((a, b) => b.marketValue - a.marketValue);
+      writeCache(CACHE_KEY, mapped);
       setPositions(mapped);
       setIsLoading(false);
     }
