@@ -8,16 +8,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X10.1 — Catalyst snapshot completeness (volume parse + field warmup)
-- Owner: claude
-- Started: 2026-06-09 16:44
-
 ## Known issues (deferred fixes)
 
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens/_design-system.md` → Screen 2 note.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X10.1 — Catalyst snapshot completeness (volume parse + field warmup) (2026-06-09)
+- Owner: claude
+- Started: 2026-06-09 16:44 · Finished: 2026-06-09 16:56
+- Commit: e3212f7 (code) · 5e1da4e (spec)
+- **Why:** X10 gated catalyst to RTH but `trait_scores(catalyst_reversal)` stayed **0 rows**. Live diagnosis (2026-06-09, mid-RTH, IB up) found two upstream snapshot bugs in `screener_jobs`: the 18 Stage-1 `done` rows were all `qualified:false`/`vol_multiple:null`, and 63 `failed` "missing price/open" *during* RTH.
+- **What shipped:**
+  - **`server/src/utils/ibNumber.ts` (new)** — `parseIbNumber` handles IB display-formatting: K/M/B/T magnitude suffixes (volume field 87 arrives as e.g. `"65595.7B"`), thousands commas, trailing %, native numbers; unparseable/prefixed (`"C12.34"`)/nullish → `NaN`. +4 unit tests. Root-causes bug #1 — the old `num()` stripped only `,`/`%` so `Number("65595.7B")=NaN` → null vol-multiple → nothing ever qualified.
+  - **`ibGateway.ts`** — `ibSnapshot(conids, requiredFields?)` + `isSnapshotPopulated(row, required?)`: when required fields are named, the warmup poll waits until every one is present (not just *any* field). Fixes bug #2 — IB streams fields incrementally, so the old "any field present" check returned half-populated rows missing `31`/`7295`.
+  - **`catalystReversalProducer.ts`** — Stage-1 uses `parseIbNumber` for all snapshot fields and calls `ibSnapshot([conid], ['31','7295','87','7296'])`.
+  - **Spec** — `signals/screener-universe.md` → catalyst_reversal: recorded the formatted-volume + required-field-warmup gotchas.
+- **Verification:** server typecheck clean; 204/204 tests (`ibNumber.test.ts` +4). Pure-logic; no live IB needed for tests. No migration.
+- **Live-flip note:** `git pull && ./bin/upside rebuild api` on the VPS. Then during RTH with IB up: Stage-1 `done` rows should show non-null `vol_multiple`; qualified names enqueue Stage-2; `trait_scores(catalyst_reversal)` gains rows; Intraday/Swing lists show catalyst names. (Catalyst producer runs at boot+10min, 24h cadence — one Stage-1→Stage-2 producer-tick of latency between stages.)
 
 ### Batch X11 — FE data cache (stale-while-revalidate) (2026-06-09)
 - Owner: claude
