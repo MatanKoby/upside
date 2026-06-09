@@ -15,7 +15,31 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10.1** (catalyst snapshot completeness — the actual 0-rows fix: parse IB-formatted volume + warm the required snapshot fields) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+
+---
+
+## Batch X10.1: Catalyst snapshot completeness (volume parse + field warmup)
+
+**Depends on:** Batch X10 (shipped). Full design: `spec/job-queue.md` → Per-action preconditions; `spec/signals/screener-universe.md` → catalyst_reversal.
+
+**Why:** X10 gated catalyst to RTH, but `trait_scores(catalyst_reversal)` is **still 0 rows** — diagnosed live 2026-06-09 (mid-RTH, IB connected). Two upstream snapshot bugs, both confirmed in `screener_jobs`:
+1. **Volume unparseable** — the 18 Stage-1 `done` rows are all `qualified:false` with `vol_multiple:null`: IB field `87` (volume) arrives **formatted** (a captured value is `"87":"65595.7B"`), but the producer's local `num()` strips only `,`/`%` → `Number("65595.7B")` = `NaN` → no vol-multiple → can't qualify. A perfect snapshot can never qualify a catalyst.
+2. **Partial snapshot passes the warmup** — the 63 `failed` rows ("snapshot missing price/open") fail *during RTH*: `ibGateway.isSnapshotPopulated` treats a row with **any** non-id field as populated, so the warmup poll bails before `31`/`7295` stream in and returns a partial row.
+
+`eval_post_earnings_drift` works (54 done) because it reads IB daily *history*, not a live snapshot — catalyst is the only live-snapshot trait, so it's the only one hit.
+
+### Deliverables
+1. **Suffix-aware IB number parser** — `server/src/utils/ibNumber.ts` `parseIbNumber(v)` handling K/M/B/T suffixes (case-insensitive) + commas/%, plain numbers, and null/garbage → `NaN`. Pure + unit-tested. Replace the catalyst producer's local `num()` with it.
+2. **Required-field warmup** — `ibSnapshot(conids, requiredFields?)`: when `requiredFields` is passed, the poll waits until every returned row has **all** of them (or `SNAPSHOT_MAX_ATTEMPTS`); `isSnapshotPopulated(row, required?)` gains the optional set (absent = current "any field" behaviour, so other callers are unchanged). Catalyst Stage-1 passes `['31','7295','87','7296']`.
+3. **Spec note** — record the formatted-volume + required-field gotcha where catalyst is specced so a future agent doesn't reintroduce it.
+
+### Files this batch creates/edits
+- `server/src/utils/ibNumber.ts` (+ test, new), `server/src/services/ibGateway.ts` (requiredFields param), `server/src/cron/catalystReversalProducer.ts` (use parseIbNumber + pass requiredFields).
+
+### Verification
+- `parseIbNumber('65595.7B')` = 65595.7e9; `'1.2M'`=1.2e6; `'523K'`=523000; `'12.34'`=12.34; `'1,234'`=1234; `''`/`'x'`=NaN.
+- After deploy, during RTH with IB up: Stage-1 `done` rows show non-null `vol_multiple`; qualified names enqueue Stage-2; `trait_scores(catalyst_reversal)` gains rows; the Intraday/Swing lists show catalyst names.
 
 ---
 
