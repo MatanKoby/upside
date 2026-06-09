@@ -15,7 +15,26 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10.2** (catalyst same-session pipeline — fast advance loop so Stage-1→Stage-2→trait_scores flows in minutes, not 1-2 days) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+
+---
+
+## Batch X10.2: Catalyst same-session pipeline (fast advance loop)
+
+**Depends on:** Batch X10.1 (shipped).
+
+**Why:** even with X10 (RTH gate) + X10.1 (snapshot fix), catalyst can't reach the lists same-day. The producer bundles enqueue + drain in one **24h** tick, and each tick's `drainStage1`/`drainStage2` only see done rows from *prior* ticks (workers run async after the tick). So Stage-1 done → (next tick) Stage-2 → (next tick) `trait_scores` spans 2-3 daily ticks ≈ **1-2 days** — useless for an intraday signal.
+
+### Deliverables
+1. **Split the producer** — `produceTick` (Stage-0 candidates + `enqueueStage1`) stays on the slow 24h cadence; a new **`advanceTick`** (`drainStage1` → enqueue Stage-2; `drainStage2` → `trait_scores`; + the failure retries) runs on a fast **~2 min** loop. The advance loop carries each conid through the stages within minutes of the workers finishing — and it's cheap (drains are DB-only; the IB calls stay in the gated worker handlers, enqueued once per name per day).
+2. **Shorten the first produce delay** 10min → 2min — the candidate deps (`universe.last_avg_volume`, `real_conid`) persist in the DB, so a short post-boot delay is safe on an established universe.
+3. **Spec** — update `spec/job-queue.md` → Dependencies between actions: intraday-relevant multi-stage pipelines run a fast advance loop (latency ~minutes), not the nightly one-cycle-per-stage.
+
+### Files this batch creates/edits
+- `server/src/cron/catalystReversalProducer.ts` (split tick → produce/advance loops), `spec/job-queue.md`.
+
+### Verification
+- After deploy, during RTH with IB up: within ~5-10 min `trait_scores(catalyst_reversal)` gains rows for qualified names; the Intraday/Swing lists show catalyst chips — no overnight wait.
 
 ---
 
