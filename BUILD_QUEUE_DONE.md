@@ -136,3 +136,9 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 ## Job-queue gates (Batch X10)
 
 - **X10** — per-action precondition layer on the job-queue worker: an action registers a gate in `gateRegistry[action]`; the worker evaluates it post-claim / pre-execute and on not-ready **defers** the job (`scheduled_for=retryAt`, `attempts` unchanged) instead of executing-and-failing. New `services/jobs/gates.ts` (`requiresRthOpen` / `requiresMarketOpen`, injectable clock), `marketHours.nextRegularOpenEtIso` (DST-correct next-09:30-ET), `queue.deferJob`. Fixes the `catalyst_reversal` 0-rows bug — both stages declare `requiresRthOpen` (Stage-1 needs the live `7295` open field, Stage-2 `ibHistory` 503s off-hours), so overnight claims defer to RTH instead of failing. Channel rename `DISCORD_WEBHOOK_CATALYST_ALERTS` → `_EVENT_ALERTS` (old var read as fallback). No migration. `gates.test.ts` +6 (200 total). Commit a5c8664.
+
+---
+
+## FE data cache (Batch X11)
+
+- **X11** — stale-while-revalidate cache for the main data hooks, killing the loading flash on route / sub-tab switches. New `client/src/hooks/dataCache.ts` (module-level `Map` keyed by `(hook, key)`; `readCache`/`writeCache`, no new dependency). Each hook seeds state from the cache on mount (no loading on a hit), revalidates via its existing Realtime sub + a background reload, and writes the snapshot back on every load. `usePositions` (`'positions'`), `useWatchlistData` (6 `useState` → one `'watchlist'` snapshot), `useVirtualList` (`'virtual:<kind>'`, re-seeds on kind change since Intraday↔Swing keeps the component mounted). FE-only, no migration. Commit 3e158be.

@@ -8,16 +8,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X11 — FE data cache (stale-while-revalidate)
-- Owner: claude
-- Started: 2026-06-09 15:23
-
 ## Known issues (deferred fixes)
 
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens/_design-system.md` → Screen 2 note.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X11 — FE data cache (stale-while-revalidate) (2026-06-09)
+- Owner: claude
+- Started: 2026-06-09 15:23 · Finished: 2026-06-09 15:28
+- Commit: 3e158be
+- **What shipped:** a tiny module-level stale-while-revalidate cache that kills the loading flash when a route / sub-tab switch unmounts (or re-`kind`s) one of the main data hooks.
+  - **`client/src/hooks/dataCache.ts` (new)** — `readCache`/`writeCache` over a module `Map` keyed by `(hook, key)`. No new dependency (react-query/SWR deferred). Module-level → survives unmount, resets on full reload; not user-scoped (single-user app).
+  - **Pattern (uniform across the three hooks):** seed state from the cache on mount (no `loading` state on a cache hit), revalidate via the existing Realtime sub + a background reload, write the snapshot back on every successful load so a remount is warm.
+  - **`usePositions`** — caches `Position[]` under `'positions'`.
+  - **`useWatchlistData`** — consolidated its 6 `useState` into one `WatchlistSnapshot`; caches under `'watchlist'`.
+  - **`useVirtualList`** — caches `{ rows, asof, stale }` under `'virtual:<kind>'`; **re-seeds on `kind` change** because the `<VirtualList>` element stays mounted across Intraday↔Swing (a warm switch paints instantly; a cold one shows loading, gated in `VirtualList`, rather than the other kind's rows).
+- **Verification:** client typecheck + build clean. FE-only — no schema/Realtime/engine change, no migration.
+- **User-drives-UI verification (pending):** switch imported-watchlist ↔ Intraday/Swing repeatedly → no loading flash after the first load; rows still tick live via Realtime; a hard reload still shows the loading state once (cold cache).
 
 ### Batch X10 — Per-action job gates (gate-and-defer) + catalyst fix (2026-06-09)
 - Owner: claude

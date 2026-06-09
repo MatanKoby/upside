@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -100,26 +100,6 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
 
 **🎯 Milestone: MVP per spec.**
-
----
-
-## Batch X11: FE data cache — stale-while-revalidate for the main hooks
-
-**Depends on:** none. Full design: `spec/architecture.md` → Frontend data caching.
-
-**Why:** `usePositions` / `useWatchlistData` / `useVirtualList` are each `useState` + Realtime, refetching from scratch on every mount. Any route/sub-tab switch that unmounts a consumer (e.g. imported watchlist → Intraday virtual tab) shows a **loading flash** and re-queries Supabase for data that was just on screen.
-
-### Deliverables
-1. **Shared module-level cache** keyed by `(hook, queryKey)`, holding the last result. No new dependency (no react-query/SWR in v1).
-2. **Stale-while-revalidate**: on mount, paint the cached rows synchronously (no `loading` state on a cache hit) while the existing Realtime sub + a background reload bring it current. Realtime writes update the cache so remounts stay warm.
-3. **Apply uniformly** to the three hooks — one pattern, not per-hook bespoke.
-
-### Files this batch creates/edits
-- `client/src/hooks/` (a small shared cache util + the three hooks). FE-only; no schema/Realtime change.
-
-### Verification
-- Switch imported-watchlist ↔ Intraday/Swing repeatedly → no loading flash after the first load; rows still update live via Realtime.
-- Cold load (no cache) still shows the loading state once.
 
 ---
 
