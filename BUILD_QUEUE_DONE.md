@@ -130,3 +130,9 @@ Migrations `017_intraday_stats.sql` (the stats row — 3 stats × 3 percentiles 
 ## MVP app-shell (Batch 15)
 
 - **15** — app-shell Settings screen: added **IB connection** (reuses `IbStatusIndicator` + `useMarketSession`), a **profit-taking zone** slider (→ `user_preferences.profit_zone_threshold_pct`), a **theme** picker (System/Light/Dark via `data-theme`, palettes already in `tokens.css`, applied pre-paint in `index.html`), and **sign out** — on top of the already-shipped Analysis-engine + Risk-flags sections. Extended `PUT /api/user/preferences` to carry `profit_zone_threshold_pct` under a `preferences` object (new `useUserPreferences` hook + `services/theme.ts`). The signal-generation / Analyze-flow knobs (signal threshold, min market value, suppressed symbols) were scraped out to the LLM-analysis roadmap (`spec/roadmap.md` → Track 4 item 9). No migration. Commit 54670fb.
+
+---
+
+## Job-queue gates (Batch X10)
+
+- **X10** — per-action precondition layer on the job-queue worker: an action registers a gate in `gateRegistry[action]`; the worker evaluates it post-claim / pre-execute and on not-ready **defers** the job (`scheduled_for=retryAt`, `attempts` unchanged) instead of executing-and-failing. New `services/jobs/gates.ts` (`requiresRthOpen` / `requiresMarketOpen`, injectable clock), `marketHours.nextRegularOpenEtIso` (DST-correct next-09:30-ET), `queue.deferJob`. Fixes the `catalyst_reversal` 0-rows bug — both stages declare `requiresRthOpen` (Stage-1 needs the live `7295` open field, Stage-2 `ibHistory` 503s off-hours), so overnight claims defer to RTH instead of failing. Channel rename `DISCORD_WEBHOOK_CATALYST_ALERTS` → `_EVENT_ALERTS` (old var read as fallback). No migration. `gates.test.ts` +6 (200 total). Commit a5c8664.

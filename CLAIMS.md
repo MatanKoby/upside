@@ -8,16 +8,28 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X10 — Per-action job gates (gate-and-defer) + catalyst fix
-- Owner: claude
-- Started: 2026-06-09 07:47
-
 ## Known issues (deferred fixes)
 
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens/_design-system.md` → Screen 2 note.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X10 — Per-action job gates (gate-and-defer) + catalyst fix (2026-06-09)
+- Owner: claude
+- Started: 2026-06-09 07:47 · Finished: 2026-06-09 15:22
+- Commit: a5c8664
+- **What shipped:** a per-action precondition ("gate") layer on the job-queue worker. An action registers a gate in `gateRegistry[action]`; the worker evaluates it **post-claim / pre-execute** and on not-ready **defers** the job (status→`queued`, `scheduled_for=retryAt`, **`attempts` NOT incremented**) instead of executing-and-failing — so an out-of-window job never reaches the producer's give-up policy.
+  - **`services/jobs/gates.ts` (new)** — `Gate` / `GateResult` types, `gateRegistry`, and the `requiresRthOpen` / `requiresMarketOpen` factories (injectable `clock` for tests). A gate is mechanical (like the pool gate), not business logic.
+  - **`utils/marketHours.nextRegularOpenEtIso`** — DST-correct "next 09:30 ET on a trading day" resolver (walks past weekends/holidays); the retryAt source for the gates.
+  - **`services/jobs/queue.deferJob`** — the reschedule path; the row stays inside the active partial unique index (`claimed`→`queued` are both active) so there's no dedup conflict.
+  - **`services/jobs/worker.ts`** — evaluates the gate between handler-lookup and execute; defers on not-ready (returns `busy` so it keeps draining), and a gate that *throws* logs + falls through to execute (degrades to pre-gate behaviour rather than blocking work).
+  - **Catalyst fix** — `eval_catalyst_stage1`/`_stage2` declare `requiresRthOpen` (`catalystReversalProducer.ts`). Root cause of the 0-rows bug: Stage-1 reads IBKR field `7295` (today's open, only exists intraday) and Stage-2 reads `ibHistory` (503s off-hours), but the producer's boot+10min tick lands overnight → every snapshot failed. Now overnight claims defer to the next 09:30 ET and run once IB is up during RTH.
+  - **Channel rename** — `DISCORD_WEBHOOK_CATALYST_ALERTS` → `DISCORD_WEBHOOK_EVENT_ALERTS` (it always carried both event traits); the old var is read as a fallback alias so an un-updated `.env` keeps working. `env.ts` / `notify.ts` / `.env.example`.
+- **Verification:** server typecheck clean; 200/200 server tests pass (`gates.test.ts` +6 — ready during RTH, defers from pre-market/after-hours/weekend to the correct next-open instant). Pure-logic tests; no live DB needed.
+- **No migration** — `screener_jobs` already has `scheduled_for`/`attempts`; defer is a plain UPDATE.
+- **Live-flip note:** `git pull && ./bin/upside rebuild api` on the VPS. Optional: rename the Discord channel + `DISCORD_WEBHOOK_EVENT_ALERTS` env var (fallback keeps the old one working). Verify: a catalyst Stage-1 job claimed overnight shows `status=queued`, `scheduled_for`=next 09:30 ET, `attempts` unchanged (no "missing price/open" failure row); during RTH the lists gain catalyst names.
+- **Follow-up (now Batch ARCH item 2):** audit whether the gate model should extend to the other crons/jobs that can run on stale/absent inputs.
 
 ### Batch 15 — Settings wired (app-shell) (2026-06-08)
 - Owner: claude

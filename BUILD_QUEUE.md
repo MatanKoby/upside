@@ -15,7 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10** (per-action job gate-and-defer infra + catalyst fix — catalyst produces 0 rows because its Stage-1 jobs fail overnight) · **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X11** (FE data cache — stale-while-revalidate for positions/watchlists/virtual lists; kills the tab-switch loading flash) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 
@@ -100,29 +100,6 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 - Lighthouse audit on the Vercel URL: PWA install criteria met, accessibility score ≥ 90.
 
 **🎯 Milestone: MVP per spec.**
-
----
-
-## Batch X10: Per-action job gates (gate-and-defer) + catalyst fix
-
-**Depends on:** none. Full design: `spec/job-queue.md` → Per-action preconditions (gates).
-
-**Why:** `catalyst_reversal` produces **0 rows ever** — diagnosed 2026-06-08. Its Stage-1 jobs (66, all `failed`: "snapshot missing price/open") run at the producer's boot+10min tick, which last landed at **01:48 ET (overnight)**. IBKR field `7295` (today's open) doesn't exist outside RTH, so every live snapshot fails. The pool gate (IB connected) is too coarse — it can't express "needs the session open." The other event traits survive because they read IB *daily history*, not a live snapshot. So both virtual lists lose all catalyst differentiation.
-
-**Decision (settled 2026-06-08):** keep catalyst on IB (it's a genuine live-intraday signal — don't downgrade to end-of-day daily_bars), but add a **general per-action gate infra**: a job declares a precondition; the worker evaluates it **after claim, before execute**; on not-ready it **defers** (reschedule `scheduled_for`, **don't** increment `attempts`) instead of failing. IB-connect wakes the pool and drains the now-eligible backlog.
-
-### Deliverables
-1. **Gate infra in the worker loop** — an action may register a `gate(payload, ctx) → { ready } | { ready:false, retryAt }`. Worker checks it post-claim; on not-ready, status→`queued`, `scheduled_for=retryAt`, attempts unchanged (deferral ≠ failure, never hits retry/give-up). Composes after the pool gate.
-2. **Gate kinds (v1):** `requiresRthOpen` (defer to next 09:30 ET if before open), `requiresMarketOpen`, + a generic predicate slot. Pure + tested.
-3. **Apply to catalyst:** `eval_catalyst_stage1` / `_stage2` declare `requiresRthOpen`. Verify the 66 stuck names defer instead of fail and run once IB is up during RTH.
-4. **Channel rename:** `DISCORD_WEBHOOK_CATALYST_ALERTS` / `#upside-catalyst-alerts` → `…_EVENT_ALERTS` / `#upside-event-alerts` (it always carried both catalyst + post-earnings; the name misled). Keep the old env var as a fallback alias so the deploy doesn't break.
-
-### Files this batch creates/edits
-- `server/src/services/jobs/*` (gate registry + worker-loop defer path), `server/src/cron/catalystReversalProducer.ts` (declare gates), `server/src/services/notify.ts` + `server/src/env.ts` (channel rename + alias).
-
-### Verification
-- A catalyst Stage-1 job claimed overnight defers (status back to `queued`, `scheduled_for` = next 09:30 ET, `attempts` unchanged) — no "missing price/open" failure row.
-- With IB up during RTH, Stage-1 → Stage-2 complete and `trait_scores(catalyst_reversal)` rows appear; the swing/intraday lists gain catalyst names.
 
 ---
 
