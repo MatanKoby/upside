@@ -14,6 +14,7 @@ import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
+import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
 import { NEWS_LOOKBACK_HOURS } from '../config/news.js';
 
 const CADENCE_MS = 12 * 60 * 60_000; // twice a day — the 48h window changes slowly
@@ -76,27 +77,21 @@ async function tick(): Promise<void> {
 
   const asof = utcDate();
   const from = utcDate(new Date(Date.now() - NEWS_LOOKBACK_HOURS * 3_600_000));
-  const db = supabase();
 
   for (const { conid, symbol } of targets) {
     try {
       const articles = await companyNews(symbol, from, asof);
       const s = scoreNews(articles as NewsArticle[]);
       if (s.articleCount === 0) continue; // no recent news → no row (absence = clean)
-      await db.from('news_sentiment').upsert(
-        {
-          conid,
-          asof_date: asof,
-          score: s.score,
-          label: s.label,
-          article_count: s.articleCount,
-          top_headline: s.topHeadline,
-          top_url: s.topUrl,
-          source: 'lexicon',
-          computed_at: new Date().toISOString(),
-        },
-        { onConflict: 'conid,asof_date' },
-      );
+      await newsSentimentTableModule.save({
+        conid,
+        asofDate: asof,
+        score: s.score,
+        label: s.label,
+        articleCount: s.articleCount,
+        topHeadline: s.topHeadline,
+        topUrl: s.topUrl,
+      });
     } catch (e) {
       void notifyError(`newsSentimentCron.${symbol}`, (e as Error).message, e);
     }
@@ -104,7 +99,7 @@ async function tick(): Promise<void> {
 
   // Retention — drop rows older than the window we ever read.
   const cutoff = utcDate(new Date(Date.now() - RETENTION_DAYS * 86_400_000));
-  await db.from('news_sentiment').delete().lt('asof_date', cutoff);
+  await newsSentimentTableModule.purgeOlderThan(cutoff);
 }
 
 export function startNewsSentimentCron(): void {

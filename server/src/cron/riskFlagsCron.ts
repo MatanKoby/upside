@@ -14,6 +14,7 @@ import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { basicFinancials, earningsCalendar } from '../services/finnhub.js';
 import { supabase } from '../services/supabase.js';
+import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { buildRiskFlagInputs } from '../services/riskFlags/inputs.js';
 import { evaluateAndStore, riskFlagAsofDate } from '../services/riskFlags/engine.js';
@@ -91,17 +92,11 @@ async function tick(): Promise<void> {
   // Batch X7 — today's news scores (written by newsSentimentCron) for the
   // bad_news flag. One read for the whole working set; absent = unscored = null.
   const newsByConid = new Map<number, number>();
-  {
-    const { data } = await supabase()
-      .from('news_sentiment')
-      .select('conid, score')
-      .eq('asof_date', asof)
-      .in('conid', targets.map((t) => t.conid));
-    for (const r of data ?? []) {
-      const c = num(r.conid);
-      const s = num(r.score);
-      if (c != null && s != null) newsByConid.set(c, s);
-    }
+  for (const r of await newsSentimentTableModule.getByConids(
+    targets.map((t) => t.conid),
+    asof,
+  )) {
+    newsByConid.set(r.conid, r.score);
   }
 
   for (const { conid, symbol, price } of targets) {
