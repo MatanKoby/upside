@@ -16,12 +16,13 @@
 //     on the `ib` pool returns {score, payload}. Survivors → trait_scores
 //     + universe.auto_promoted=true + notifyTraitFirstFire on first fire.
 //
-// Cadence: 24h, 10-min boot delay (lands after universeQuoteProducer +
-// conidResolutionProducer have populated last_volume + real_conid).
-// Single tick advances all three stages by reading prior tick's `done`
-// rows + enqueuing the next stage; a fresh tick will fire only if IB
-// stays connected long enough to complete a full Stage 1 → Stage 2
-// roundtrip within ~24h.
+// Two loops (Batch X10.2 — same-session catalyst):
+//   produce (24h, boot+2min): recompute the Stage-0 candidate set + enqueue
+//     Stage-1. Candidates change daily.
+//   advance (~2min): drain Stage-1 done → enqueue Stage-2; drain Stage-2 done →
+//     trait_scores; + failure retries. DB-only (no IB), so it carries each conid
+//     through the stages within minutes of the workers finishing — rather than
+//     one stage per 24h tick (which put catalyst 1-2 days behind).
 
 import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
@@ -49,8 +50,10 @@ import {
 } from '../services/screener/traits/catalystReversal.js';
 import type { RawIbSnapshot, RawIbHistory } from '../types/index.js';
 
-const CADENCE_MS = 24 * 60 * 60_000;
-const FIRST_RUN_DELAY_MS = 10 * 60_000;
+const CADENCE_MS = 24 * 60 * 60_000;        // produce loop — Stage-0 candidates refresh daily
+const FIRST_RUN_DELAY_MS = 2 * 60_000;      // first produce after boot (candidate deps persist in the DB)
+const ADVANCE_CADENCE_MS = 2 * 60_000;      // advance loop — drain Stage-1→2→trait_scores as workers finish
+const ADVANCE_FIRST_DELAY_MS = 30_000;
 const MAX_RETRY_ATTEMPTS = 2;
 const LOOKBACK_TRADING_DAYS = 3;
 
@@ -259,10 +262,9 @@ async function drainStage2(): Promise<{ scored: number; nulled: number; retried:
   return { scored, nulled, retried, gave_up };
 }
 
-async function tick(): Promise<void> {
-  const t0 = Date.now();
-
-  // Stage 0 — inline candidate computation.
+// Produce loop (24h) — Stage-0 candidate computation + enqueue Stage-1. Enqueue
+// dedups on the active job_key, so a name already in flight today is a no-op.
+async function produceTick(): Promise<void> {
   const candidates = await loadCandidateUniverseFromEarnings();
   const carryovers = await loadAutoPromotedCarryovers();
   const allMap = new Map<number, UniverseTarget>();
@@ -270,19 +272,29 @@ async function tick(): Promise<void> {
     if (t.real_conid != null) allMap.set(t.real_conid, t);
   }
   const targets = Array.from(allMap.values());
-
   const s1en = await enqueueStage1(targets);
+  console.log(
+    `[catalystReversalProducer] produce: candidates=${targets.length} ` +
+      `s1[enq=${s1en.enqueued} dedup=${s1en.deduped}]`,
+  );
+}
+
+// Advance loop (~2min) — carry conids through the stages as the IB workers
+// finish them: drainStage1 enqueues Stage-2 for qualifiers, drainStage2 writes
+// trait_scores. DB-only, no IB cost. Quiet unless something actually moved.
+async function advanceTick(): Promise<void> {
   const s1dr = await drainStage1();
   const s2dr = await drainStage2();
-
-  const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(
-    `[catalystReversalProducer] candidates=${targets.length} ` +
-      `s1[enq=${s1en.enqueued} dedup=${s1en.deduped}] ` +
-      `s1drain[promote=${s1dr.promoted} drop=${s1dr.dropped} retry=${s1dr.retried} give-up=${s1dr.gave_up}] ` +
-      `s2drain[score=${s2dr.scored} null=${s2dr.nulled} retry=${s2dr.retried} give-up=${s2dr.gave_up}] ` +
-      `elapsed=${elapsedSec}s`,
-  );
+  const moved =
+    s1dr.promoted || s1dr.dropped || s1dr.retried || s1dr.gave_up ||
+    s2dr.scored || s2dr.nulled || s2dr.retried || s2dr.gave_up;
+  if (moved) {
+    console.log(
+      `[catalystReversalProducer] advance: ` +
+        `s1drain[promote=${s1dr.promoted} drop=${s1dr.dropped} retry=${s1dr.retried} give-up=${s1dr.gave_up}] ` +
+        `s2drain[score=${s2dr.scored} null=${s2dr.nulled} retry=${s2dr.retried} give-up=${s2dr.gave_up}]`,
+    );
+  }
 }
 
 async function loadAutoPromotedCarryovers(): Promise<UniverseTarget[]> {
@@ -300,16 +312,25 @@ async function loadAutoPromotedCarryovers(): Promise<UniverseTarget[]> {
 }
 
 export function startCatalystReversalProducer(): void {
-  console.log('[catalystReversalProducer] starting, 24h cadence');
-  const loop = async () => {
+  console.log('[catalystReversalProducer] starting: produce 24h, advance ~2min');
+  const produceLoop = async () => {
     try {
-      await tick();
+      await produceTick();
     } catch (e) {
-      void notifyError('catalystReversalProducer.loop', (e as Error).message, e);
+      void notifyError('catalystReversalProducer.produce', (e as Error).message, e);
     }
-    setTimeout(loop, CADENCE_MS).unref();
+    setTimeout(produceLoop, CADENCE_MS).unref();
   };
-  setTimeout(loop, FIRST_RUN_DELAY_MS).unref();
+  const advanceLoop = async () => {
+    try {
+      await advanceTick();
+    } catch (e) {
+      void notifyError('catalystReversalProducer.advance', (e as Error).message, e);
+    }
+    setTimeout(advanceLoop, ADVANCE_CADENCE_MS).unref();
+  };
+  setTimeout(produceLoop, FIRST_RUN_DELAY_MS).unref();
+  setTimeout(advanceLoop, ADVANCE_FIRST_DELAY_MS).unref();
 }
 
 // ---------------------------------------------------------------------------
