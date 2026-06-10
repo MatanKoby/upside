@@ -27,17 +27,8 @@
 // (mirrors the `at_or_below` marker logic — entry zones are by definition
 // support levels below price, so a crossing always goes down into them).
 
-import { supabase } from './supabase.js';
 import { notifyEntryZoneHit, notifyError } from './notify.js';
-
-interface ZoneRow {
-  conid: number;
-  horizon: 'intraday' | 'overnight' | 'multiday';
-  price: number | string;
-  reasoning: string;
-  confidence: number;
-  last_fired_at: string | null;
-}
+import { entryZonesTableModule, type EntryZoneRecord } from '../db/entryZonesTableModule.js';
 
 const COOLDOWN_HOURS = 24;
 const MIN_CONFIDENCE_PCT = 60;        // Filter sub-60% noise (audit, 2026-05-30).
@@ -60,7 +51,7 @@ function withinOvershootBand(zonePrice: number, curr: number): boolean {
 }
 
 interface CandidateZone {
-  row: ZoneRow;
+  row: EntryZoneRecord;
   zonePrice: number;
 }
 
@@ -98,34 +89,31 @@ export async function checkEntryZonesForConid(
   if (prev == null || !Number.isFinite(curr)) return;
   if (prev === curr) return;
 
-  const { data, error } = await supabase()
-    .from('entry_zones')
-    .select('conid, horizon, price, reasoning, confidence, last_fired_at')
-    .eq('conid', conid);
-  if (error) {
-    void notifyError('entryZoneAlerts.query', `query failed for conid ${conid}: ${error.message}`);
+  let zones: EntryZoneRecord[];
+  try {
+    zones = await entryZonesTableModule.getByConid(conid);
+  } catch (e) {
+    void notifyError('entryZoneAlerts.query', `query failed for conid ${conid}: ${(e as Error).message}`);
     return;
   }
 
   const candidates: CandidateZone[] = [];
-  for (const r of (data ?? []) as ZoneRow[]) {
-    const zonePrice = typeof r.price === 'number' ? r.price : Number(r.price);
-    if (!Number.isFinite(zonePrice)) continue;
+  for (const r of zones) {
+    const zonePrice = r.price; // module guarantees a finite price
     if (r.confidence < MIN_CONFIDENCE_PCT) continue;
     if (!crossedDown(zonePrice, prev, curr)) continue;
     if (!withinOvershootBand(zonePrice, curr)) continue;
-    if (!cooldownPassed(r.last_fired_at)) continue;
+    if (!cooldownPassed(r.lastFiredAt)) continue;
     candidates.push({ row: r, zonePrice });
   }
 
   if (candidates.length === 0) return;
 
   const clusters = clusterByPrice(candidates);
-  const nowIso = new Date().toISOString();
 
   for (const cluster of clusters) {
     // Highest confidence wins the alert; ties broken by horizon (multiday > overnight > intraday).
-    const horizonRank: Record<ZoneRow['horizon'], number> = { multiday: 3, overnight: 2, intraday: 1 };
+    const horizonRank: Record<EntryZoneRecord['horizon'], number> = { multiday: 3, overnight: 2, intraday: 1 };
     const best = cluster.reduce((acc, c) =>
       c.row.confidence > acc.row.confidence ||
       (c.row.confidence === acc.row.confidence && horizonRank[c.row.horizon] > horizonRank[acc.row.horizon])
@@ -151,13 +139,10 @@ export async function checkEntryZonesForConid(
     // Stamp last_fired_at on EVERY horizon in the cluster so suppressed ones
     // don't fire on their own from a near-future tick crossing the same level.
     const horizonsToStamp = cluster.map((c) => c.row.horizon);
-    const upd = await supabase()
-      .from('entry_zones')
-      .update({ last_fired_at: nowIso })
-      .eq('conid', conid)
-      .in('horizon', horizonsToStamp);
-    if (upd.error) {
-      void notifyError('entryZoneAlerts.update', `last_fired_at update failed: ${upd.error.message}`);
+    try {
+      await entryZonesTableModule.stampFired(conid, horizonsToStamp);
+    } catch (e) {
+      void notifyError('entryZoneAlerts.update', `last_fired_at update failed: ${(e as Error).message}`);
     }
   }
 }

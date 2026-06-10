@@ -19,6 +19,7 @@ import { loadDailyBars } from '../dailyBars.js';
 import { loadComputeSet, type ComputeMember } from './computeSet.js';
 import { computeIntradayDipBounceScore } from './intradayScorer.js';
 import { computeSwingDipBounceScore } from './swingScorer.js';
+import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,
@@ -141,24 +142,14 @@ async function loadBands(conids: number[], sessionDate: string): Promise<Map<num
 
 async function loadZones(conids: number[]): Promise<Map<number, Partial<Record<'intraday' | 'overnight' | 'multiday', ZoneInput>>>> {
   const out = new Map<number, Partial<Record<'intraday' | 'overnight' | 'multiday', ZoneInput>>>();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('entry_zones')
-      .select('conid, horizon, price, reasoning, trend_regime')
-      .in('conid', conids.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      const horizon = (r as { horizon: string }).horizon as 'intraday' | 'overnight' | 'multiday';
-      const price = num((r as { price: unknown }).price);
-      if (c == null || price == null) continue;
-      const entry = out.get(c) ?? {};
-      entry[horizon] = {
-        price,
-        trendRegime: (r as { trend_regime: string | null }).trend_regime ?? null,
-        hasConfluence: hasConfluence((r as { reasoning: string | null }).reasoning),
-      };
-      out.set(c, entry);
-    }
+  for (const r of await entryZonesTableModule.getByConids(conids)) {
+    const entry = out.get(r.conid) ?? {};
+    entry[r.horizon] = {
+      price: r.price,
+      trendRegime: r.trendRegime,
+      hasConfluence: hasConfluence(r.reasoning),
+    };
+    out.set(r.conid, entry);
   }
   return out;
 }

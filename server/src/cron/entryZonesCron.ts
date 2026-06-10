@@ -15,6 +15,7 @@ import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeEntryZones, type Horizon, type EntryZone } from '../services/entryZones.js';
 import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
+import { entryZonesTableModule } from '../db/entryZonesTableModule.js';
 import type { Bars } from '../services/technicals.js';
 import type { RawIbHistory } from '../types/index.js';
 
@@ -59,22 +60,18 @@ async function upsertZone(conid: number, horizon: Horizon, zone: EntryZone | nul
   if (!zone) {
     // No candidate within this horizon's reachability band — wipe any stale
     // row so the FE doesn't show an out-of-date chip.
-    await supabase().from('entry_zones').delete().eq('conid', conid).eq('horizon', horizon);
+    await entryZonesTableModule.deleteZone(conid, horizon);
     return;
   }
-  await supabase().from('entry_zones').upsert(
-    {
-      conid,
-      horizon,
-      price: zone.price,
-      reasoning: zone.reasoning,
-      confidence: zone.confidence,
-      trend_regime: trendRegime,
-      overbought_tightened: overboughtTightened,
-      computed_at: new Date().toISOString(),
-    },
-    { onConflict: 'conid,horizon' },
-  );
+  await entryZonesTableModule.upsert({
+    conid,
+    horizon,
+    price: zone.price,
+    reasoning: zone.reasoning,
+    confidence: zone.confidence,
+    trendRegime,
+    overboughtTightened,
+  });
 }
 
 async function tick(): Promise<void> {
