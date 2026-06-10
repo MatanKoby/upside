@@ -15,7 +15,32 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+
+---
+
+## Batch X10.3 `[TIMED — US RTH]`: Verify catalyst pipeline end-to-end
+
+**Depends on:** X10 + X10.1 + X10.2 (all shipped) **deployed to the VPS**.
+
+**A verification batch, not code** — run the checks live, record the verdict in `CLAIMS.md`, and either close the catalyst track as validated or file a precise follow-up for the failing stage. Verified via `bin/upside-psql` (DB is the source of truth here; this is backend, not a UI flow).
+
+**Precondition — when to claim:** only during **US RTH (16:30–23:00 IDT / 09:30–16:00 ET)** with **IB connected**, on a day the api has been up since at least ~boot+5min so the produce + advance loops have run. Off-hours the catalyst Stage-1 jobs are correctly deferred by the `requiresRthOpen` gate — nothing to see, **not** a failure. (That's why this is `[TIMED]`; don't claim it overnight.)
+
+### Checks (each with its evidence query)
+1. **IB up** — `quotes` has a fresh `canonical_source='ib'` row (updated < ~60s ago). If not, the `ib` worker can't run; wait for IB.
+2. **Snapshot parse (X10.1)** — recent `eval_catalyst_stage1` `done` rows have **non-null `vol_multiple`** (not just `today_move_pct`). Null vol_multiple across the board ⇒ X10.1 regressed (volume field unparsed) or field 87 absent.
+3. **Warmup (X10.1)** — `eval_catalyst_stage1` `failed` count with `last_error like '%missing price/open%'` is ~0 during RTH (the required-field warmup should prevent partial-snapshot fails).
+4. **Advance flow (X10.2)** — `eval_catalyst_stage2` rows exist (`done` and/or drained) and `trait_scores(catalyst_reversal)` has rows with **today's `asof_date`**. Stage-1 done but no Stage-2/trait_scores after >~10min ⇒ advance loop not draining (X10.2 regressed).
+5. **Surface** — Intraday/Swing virtual lists render catalyst chips for the scored names (FE; user confirms or screenshot).
+
+### Verdict decision tree (the point of the batch)
+- **Working** — checks 1-5 pass: catalyst names on the board. Close the catalyst track.
+- **Working, no qualifiers today** — Stage-1 `done` with non-null `vol_multiple` + some `qualified:true`, but Stage-2's A∧B (beaten-down ∧ sudden-wakeup) legitimately filtered them → `trait_scores` empty. **Not a bug** — record it and re-check another RTH/day with more volatility.
+- **Broken** — pinpoint the stage: null vol_multiple (→ X10.1), missing-price/open fails during RTH (→ warmup), Stage-1 done but no Stage-2/trait_scores (→ X10.2 advance), or trait_scores present but lists empty (→ FE `useVirtualList` join). File a follow-up naming the stage + evidence.
+
+### Files this batch creates/edits
+- None (verification only). Records outcome in `CLAIMS.md`; opens a follow-up batch only if broken.
 
 ---
 
