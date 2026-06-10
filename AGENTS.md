@@ -32,6 +32,10 @@ The spec lives in `spec/`, split across root files + two sub-folders. **See `spe
 
 For the editing protocol (concern-matching, cross-reference rule, archive rule, propagation to `BUILD_QUEUE.md`, persisting design decisions), invoke the **`spec-edit` skill** — its body is the procedure. **Policy:** design decisions made with the user must be persisted to `spec/**` and `BUILD_QUEUE.md` before moving on; the transcript is not a substitute.
 
+## Protocol reliability (in design)
+
+This whole protocol currently lives as prose and is honor-system — nothing *enforces* that the right skill fires at the right time, and a skipped step (an unwritten batch, a missed `finish-batch`) surfaces only if a human notices. The design brief for closing that gap — executable invariants (`bin/protocol-check`), layered enforcement (Claude hooks → git hooks → CI), an observability trail, and a possible repo-agnostic npm spinoff — is in [`docs/process/agent-discipline.md`](docs/process/agent-discipline.md); the work is queued as **Batch PROC** in `BUILD_QUEUE.md`.
+
 ## Ideation handoff (Claude web → code)
 
 Claude web is an **ideation and research surface**, not an executor. It has no repo access, never claims batches, never commits, and everything it produces is vetted by the user + a code agent before anything changes. Because that vet-pass is the correctness filter, web does **not** need ground truth — and over-feeding it repo detail narrows its output toward what already exists. Keep its context minimal on purpose.

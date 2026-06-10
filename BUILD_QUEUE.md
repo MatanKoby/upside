@@ -176,6 +176,33 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
+## Batch PROC: Agent discipline & skill-usage reliability + observability
+
+**Depends on:** none. Design seed: [`docs/process/agent-discipline.md`](docs/process/agent-discipline.md).
+
+**Scope:** A **research → design → implement** batch on the build *process itself* (not the product). Today the spec / batch / claim / skill protocol is all prose and honor-system — nothing enforces that the right skill fires at the right time, and a skipped step (an unwritten batch, a missed `finish-batch`, an unpersisted decision) surfaces only if a human notices. Make agent discipline **reliable** (invariants enforced at chokepoints), **observable** (a trail of which protocol steps ran / were skipped, surfaced to the user automatically), and **skill-correct** (`claim-batch` before code, `spec-edit` before any `spec/**` edit or persisted decision, `finish-batch` on completion, wrappers over raw tools). Design the keystone as a **config-driven, repo-agnostic** lib so it can spin off into its own GitHub repo + npm releases, with this repo as the first consumer.
+
+### Pending decisions (settle with the user when claiming)
+1. **Prevention vs. velocity** — keep direct-push-to-`dev` (CI *detects* + fast-revert) or move to PR-per-batch (CI *prevents*, unbypassable, but overturns "commit directly, no feature branches"). *Brief's recommendation:* keep direct-push + CI-detect + branch-protection force-push block.
+2. **Bind whom** — both Claude + Cursor (weight in git hooks + CI) or mainly harden Claude's runs (`.claude/hooks/`). *Brief's recommendation:* both.
+
+### Deliverables
+1. **Finalize the design** in `docs/process/agent-discipline.md` — the invariant catalogue (claim-before-work, state-leak guard, commit grammar, doc-update exemption, the `table → module` grep manifest, skill-fired assertions) **with carve-outs** (doc-only diffs, `meta:`/`spec:` commits, handoffs, reclaims), and the lib/host config boundary.
+2. **`bin/protocol-check`** (new, config-driven) — the single executable encoding the invariants; exits non-zero with a message on violation. Its own tests. Skills shrink to thin wrappers that call it.
+3. **Layered enforcement** — versioned git hooks via `core.hooksPath` → `.githooks/` (`commit-msg` grammar + `pre-push` runs `protocol-check` + cheap gates); a GitHub Action (`.github/workflows/`) running `protocol-check` + typecheck + tests; Claude `PreToolUse`/`Stop` hooks (via `update-config`) as the fast Claude-only layer. `[MANUAL]` sub-item: GitHub branch-protection on `dev` (blocks force-push) — give the user the click-path, don't do it for them (`feedback_infra_handson`).
+4. **Observability trail** — `protocol-check` (or a sibling) records which checks ran + verdicts; a session-end / `Stop`-hook summary floats skipped-but-expected steps to the user so an omission reports itself.
+5. **Spinoff packaging** — extract the config-driven core behind a documented config schema + a versioning/release story; stand up the standalone repo + first npm release with Upside as consumer (can be a follow-up sub-batch once the in-repo version proves out).
+
+### Files this batch creates/edits
+- `docs/process/agent-discipline.md` (finalize), `bin/protocol-check` (+ tests), `.githooks/*`, `.github/workflows/*.yml`, `.claude/` hook config, thin updates to the skill bodies. A new external repo + npm package for the spinoff.
+
+### Verification
+- A deliberately-malformed commit (no claim, bad grammar, state leaked into `BUILD_QUEUE.md`, a `from('<table>')` outside its module) is caught by `protocol-check` locally and in CI; a legitimate doc-only / `meta:` commit passes (carve-outs hold).
+- A skipped expected step (e.g. code committed with no matching claim) surfaces in the session-end / hook summary without a human hunting for it.
+- `protocol-check` runs against a second toy repo via config alone (no Upside-specific hard-coding) — proves the spinoff boundary.
+
+---
+
 # Blocked / deferred
 
 ## Batch 13.3: Secondary IBKR user + desired-state IBeam toggle
