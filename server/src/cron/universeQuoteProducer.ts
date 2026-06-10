@@ -21,11 +21,11 @@
 // recent *weekday* (a Monday run fills Friday's bar), so the curated list
 // rebuilds over the weekend with no IB history.
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { polygonGroupedDaily, yahooChart, type DailyOhlcv } from '../services/universeQuote.js';
 import { recentWeekdays, buildDailyBarRows } from '../services/dailyBars.js';
 import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { enqueue, drainDone, drainFailed, deleteJob, markRetry, finalizeFailure } from '../services/jobs/queue.js';
 import { makeKey } from '../services/jobs/keys.js';
 import { finnhubRegistry } from '../services/jobs/actions.js';
@@ -37,36 +37,20 @@ const MAX_RETRY_ATTEMPTS = 2;
 const DAILY_BARS_LOOKBACK_DAYS = 30; // bootstrap depth (covers ATR(14) + 30d median ADV)
 const DAILY_BARS_RETENTION_DAYS = 45; // keep a little slack past the 30d window
 const POLYGON_MIN_INTERVAL_MS = 13_000; // free tier is 5 calls/min → ≥12s apart
-const PAGE = 1000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-interface UniverseRow {
-  symbol: string;
-  real_conid: number | null;
-}
-
 // Paginated so we get the whole IN universe regardless of the PostgREST
 // max-rows cap (the universe is ~3-5k rows).
-async function loadRing1Tickers(): Promise<UniverseRow[]> {
-  const out: UniverseRow[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase()
-      .from('universe')
-      .select('symbol, real_conid')
-      .eq('filter_result', 'in')
-      .range(from, from + PAGE - 1);
-    if (error) {
-      void notifyError('universeQuoteProducer.loadUniverse', error.message);
-      break;
-    }
-    const rows = (data ?? []) as UniverseRow[];
-    out.push(...rows);
-    if (rows.length < PAGE) break;
+async function loadRing1Tickers(): Promise<Array<{ symbol: string; realConid: number | null }>> {
+  try {
+    return await universeTableModule.getInRows();
+  } catch (e) {
+    void notifyError('universeQuoteProducer.loadUniverse', (e as Error).message);
+    return [];
   }
-  return out;
 }
 
 async function writeOhlcvToUniverse(
@@ -74,16 +58,10 @@ async function writeOhlcvToUniverse(
   ohlcv: DailyOhlcv,
   nowIso: string,
 ): Promise<void> {
-  const { error } = await supabase()
-    .from('universe')
-    .update({
-      last_price: ohlcv.close,
-      last_volume: Math.round(ohlcv.volume),
-      computed_at: nowIso,
-    })
-    .eq('symbol', symbol);
-  if (error) {
-    void notifyError(`universeQuoteProducer.update.${symbol}`, error.message);
+  try {
+    await universeTableModule.setDailyQuoteBySymbol(symbol, ohlcv.close, Math.round(ohlcv.volume), nowIso);
+  } catch (e) {
+    void notifyError(`universeQuoteProducer.update.${symbol}`, (e as Error).message);
   }
 }
 
@@ -126,8 +104,11 @@ async function retainDailyBars(): Promise<void> {
 }
 
 async function refreshAvgVolume(): Promise<void> {
-  const { error } = await supabase().rpc('refresh_universe_avg_volume');
-  if (error) void notifyError('universeQuoteProducer.refreshAvgVolume', error.message);
+  try {
+    await universeTableModule.refreshAvgVolume();
+  } catch (e) {
+    void notifyError('universeQuoteProducer.refreshAvgVolume', (e as Error).message);
+  }
 }
 
 async function drainFallbackResults(): Promise<{ done: number; failed: number }> {
@@ -183,7 +164,7 @@ async function tick(): Promise<void> {
   }
   const symbolToConid = new Map<string, number>();
   for (const t of tickers) {
-    if (t.real_conid != null) symbolToConid.set(t.symbol, t.real_conid);
+    if (t.realConid != null) symbolToConid.set(t.symbol, t.realConid);
   }
 
   // Which target dates still need a daily_bars fetch (cheap per-date existence
@@ -255,7 +236,7 @@ async function tick(): Promise<void> {
       const r = await enqueue(jobKey, 'fallback_yahoo_quote', 'finnhub', {
         symbol: t.symbol,
         date: primary,
-        conid: t.real_conid,
+        conid: t.realConid,
       });
       if (r === 'created') enqueued++;
       else deduped++;

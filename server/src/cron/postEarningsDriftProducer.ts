@@ -14,9 +14,9 @@
 //
 // Cadence: 24h, 11-min boot delay (after catalystReversalProducer).
 
-import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
 import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,
@@ -77,24 +77,19 @@ async function loadReporters(): Promise<ReporterTarget[]> {
   }
   const symbols = Array.from(latestBySymbol.keys());
 
+  let rows;
+  try {
+    rows = await universeTableModule.getResolvedInRowsBySymbols(symbols);
+  } catch (e) {
+    void notifyError('postEarningsDriftProducer.loadReporters', (e as Error).message);
+    return [];
+  }
   const out: ReporterTarget[] = [];
-  for (let i = 0; i < symbols.length; i += 900) {
-    const chunk = symbols.slice(i, i + 900);
-    const { data, error } = await supabase()
-      .from('universe')
-      .select('real_conid, symbol')
-      .eq('filter_result', 'in')
-      .not('real_conid', 'is', null)
-      .in('symbol', chunk);
-    if (error) {
-      void notifyError('postEarningsDriftProducer.loadReporters', error.message);
-      continue;
-    }
-    for (const row of (data ?? []) as Array<{ real_conid: number; symbol: string }>) {
-      const rd = latestBySymbol.get(row.symbol);
-      if (!rd) continue;
-      out.push({ real_conid: row.real_conid, symbol: row.symbol, report_date: rd });
-    }
+  for (const row of rows) {
+    if (row.realConid == null) continue;
+    const rd = latestBySymbol.get(row.symbol);
+    if (!rd) continue;
+    out.push({ real_conid: row.realConid, symbol: row.symbol, report_date: rd });
   }
   return out;
 }

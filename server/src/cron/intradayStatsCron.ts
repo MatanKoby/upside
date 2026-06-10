@@ -13,7 +13,7 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeIntradayStats, type IntradayBar } from '../services/intradayStats.js';
-import { supabase } from '../services/supabase.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import type { RawIbHistory } from '../types/index.js';
@@ -43,30 +43,19 @@ async function staggeredUniverseConids(
   alreadyCovered: Set<number>,
 ): Promise<Array<{ conid: number; symbol: string }>> {
   const dow = new Date().getUTCDay();   // 0..6 — stable per UTC date
+  let rows;
+  try {
+    rows = await universeTableModule.getResolvedInRows();
+  } catch (e) {
+    void notifyError('intradayStatsCron.loadUniverse', (e as Error).message);
+    return [];
+  }
   const out: Array<{ conid: number; symbol: string }> = [];
-  let offset = 0;
-  const PAGE = 1000;
-  while (true) {
-    const { data, error } = await supabase()
-      .from('universe')
-      .select('real_conid, symbol')
-      .eq('filter_result', 'in')
-      .not('real_conid', 'is', null)
-      .range(offset, offset + PAGE - 1);
-    if (error) {
-      void notifyError('intradayStatsCron.loadUniverse', error.message);
-      break;
-    }
-    const rows = (data ?? []) as Array<{ real_conid: number; symbol: string }>;
-    if (rows.length === 0) break;
-    for (const r of rows) {
-      if (r.real_conid == null) continue;
-      if (r.real_conid % 7 !== dow) continue;
-      if (alreadyCovered.has(r.real_conid)) continue;
-      out.push({ conid: r.real_conid, symbol: r.symbol });
-    }
-    if (rows.length < PAGE) break;
-    offset += PAGE;
+  for (const r of rows) {
+    if (r.realConid == null) continue;
+    if (r.realConid % 7 !== dow) continue;
+    if (alreadyCovered.has(r.realConid)) continue;
+    out.push({ conid: r.realConid, symbol: r.symbol });
   }
   return out;
 }

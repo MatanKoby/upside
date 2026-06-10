@@ -19,31 +19,17 @@
 // S2's dynamic-universe-inclusion pass; for v1 it's a no-op (logs + returns)
 // because the daily-bar volume-gap pipeline lands in S2.
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { getSymbolList, getQuote, getProfile2 } from '../services/finnhub.js';
+import { universeTableModule, type ScoredUniverseRow } from '../db/universeTableModule.js';
 import {
   filterRing1,
   preFilterByTypeAndMic,
-  type FilterResult,
 } from '../services/screener/universeFilter.js';
 
 const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 5 * 60_000;
 const RETENTION_DAYS = 30;
-
-interface UniverseRow {
-  conid: number;
-  symbol: string;
-  type: string | null;
-  mic: string | null;
-  filter_result: FilterResult;
-  last_price: number | null;
-  last_market_cap_m: number | null;
-  last_avg_volume: number | null;
-  last_filter_pass: string;
-  computed_at: string;
-}
 
 // Finnhub's /stock/symbol payload doesn't carry IBKR conids — the upstream is
 // figi/cusip-keyed. Until we have conid resolution (post-MVP Watchlist track
@@ -66,26 +52,24 @@ function syntheticConid(symbol: string, mic: string | null): number {
   return -Number(BigInt(hash) & 0x1fffffffffffffn);
 }
 
-async function upsertBatch(rows: UniverseRow[]): Promise<void> {
+async function upsertBatch(rows: ScoredUniverseRow[]): Promise<void> {
   if (rows.length === 0) return;
-  const { error } = await supabase().from('universe').upsert(rows, { onConflict: 'conid' });
-  if (error) {
-    void notifyError('universeCron.upsert', `upsert of ${rows.length} rows failed: ${error.message}`);
+  try {
+    await universeTableModule.upsertScored(rows);
+  } catch (e) {
+    void notifyError('universeCron.upsert', `upsert of ${rows.length} rows failed: ${(e as Error).message}`);
   }
 }
 
 async function retentionPass(): Promise<void> {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400_000).toISOString();
-  const { error, count } = await supabase()
-    .from('universe')
-    .delete({ count: 'exact' })
-    .lt('last_filter_pass', cutoff);
-  if (error) {
-    void notifyError('universeCron.retention', `retention sweep failed: ${error.message}`);
-    return;
-  }
-  if (count && count > 0) {
-    console.log(`[universeCron] retention removed ${count} rows older than ${RETENTION_DAYS}d`);
+  try {
+    const count = await universeTableModule.purgeStaleBefore(cutoff);
+    if (count > 0) {
+      console.log(`[universeCron] retention removed ${count} rows older than ${RETENTION_DAYS}d`);
+    }
+  } catch (e) {
+    void notifyError('universeCron.retention', `retention sweep failed: ${(e as Error).message}`);
   }
 }
 
@@ -109,7 +93,7 @@ async function nightlyPass(): Promise<void> {
   );
 
   const nowIso = new Date().toISOString();
-  const batch: UniverseRow[] = [];
+  const batch: ScoredUniverseRow[] = [];
   const BATCH_SIZE = 100;
   let scored = 0;
   let kept = 0;
@@ -143,12 +127,12 @@ async function nightlyPass(): Promise<void> {
         symbol,
         type: row.type ?? null,
         mic: row.mic ?? null,
-        filter_result: filterResult,
-        last_price: price,
-        last_market_cap_m: marketCapM,
-        last_avg_volume: null,
-        last_filter_pass: nowIso,
-        computed_at: nowIso,
+        filterResult,
+        lastPrice: price,
+        lastMarketCapM: marketCapM,
+        lastAvgVolume: null,
+        lastFilterPass: nowIso,
+        computedAt: nowIso,
       });
       scored++;
       if (filterResult === 'in') kept++;

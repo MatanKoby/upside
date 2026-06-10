@@ -24,9 +24,9 @@
 //     through the stages within minutes of the workers finishing — rather than
 //     one stage per 24h tick (which put catalyst 1-2 days behind).
 
-import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
 import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,
@@ -93,22 +93,15 @@ async function loadCandidateUniverseFromEarnings(): Promise<UniverseTarget[]> {
   // dynamic-inclusion path lands — see spec → Dynamic universe inclusion;
   // for v1 we stay inside Ring-1 IN to limit Stage-1 IB cost.
   const allowed = Array.from(symbols);
-  const out: UniverseTarget[] = [];
-  for (let i = 0; i < allowed.length; i += 900) {
-    const chunk = allowed.slice(i, i + 900);
-    const { data, error } = await supabase()
-      .from('universe')
-      .select('real_conid, symbol, last_volume, last_avg_volume')
-      .eq('filter_result', 'in')
-      .not('real_conid', 'is', null)
-      .in('symbol', chunk);
-    if (error) {
-      void notifyError('catalystReversalProducer.loadCandidates', error.message);
-      continue;
-    }
-    out.push(...((data ?? []) as UniverseTarget[]));
+  try {
+    const rows = await universeTableModule.getResolvedInRowsBySymbols(allowed);
+    return rows
+      .filter((r) => r.realConid != null)
+      .map((r) => ({ real_conid: r.realConid!, symbol: r.symbol, last_volume: r.lastVolume, last_avg_volume: r.lastAvgVolume }));
+  } catch (e) {
+    void notifyError('catalystReversalProducer.loadCandidates', (e as Error).message);
+    return [];
   }
-  return out;
 }
 
 async function enqueueStage1(targets: UniverseTarget[]): Promise<{ enqueued: number; deduped: number }> {
@@ -213,11 +206,8 @@ async function drainStage2(): Promise<{ scored: number; nulled: number; retried:
       continue;
     }
     // Auto-promote so other traits + the FE pick it up regardless of
-    // Ring-1 IN status. (universe gets its own TableModule later in the rollout.)
-    await supabase()
-      .from('universe')
-      .update({ auto_promoted: true })
-      .eq('real_conid', payload.real_conid);
+    // Ring-1 IN status. Fire-and-forget (errors ignored, as before).
+    await universeTableModule.markAutoPromoted(payload.real_conid).catch(() => undefined);
 
     // First-fire ping — the module's atomic last_fired_at latch returns true
     // only on the first stamp, so idempotent re-runs stay quiet.
@@ -289,17 +279,15 @@ async function advanceTick(): Promise<void> {
 }
 
 async function loadAutoPromotedCarryovers(): Promise<UniverseTarget[]> {
-  const { data, error } = await supabase()
-    .from('universe')
-    .select('real_conid, symbol, last_volume, last_avg_volume')
-    .eq('auto_promoted', true)
-    .not('real_conid', 'is', null)
-    .limit(500);
-  if (error) {
-    void notifyError('catalystReversalProducer.loadCarryovers', error.message);
+  try {
+    const rows = await universeTableModule.getAutoPromotedResolved(500);
+    return rows
+      .filter((r) => r.realConid != null)
+      .map((r) => ({ real_conid: r.realConid!, symbol: r.symbol, last_volume: r.lastVolume, last_avg_volume: r.lastAvgVolume }));
+  } catch (e) {
+    void notifyError('catalystReversalProducer.loadCarryovers', (e as Error).message);
     return [];
   }
-  return (data ?? []) as UniverseTarget[];
 }
 
 export function startCatalystReversalProducer(): void {

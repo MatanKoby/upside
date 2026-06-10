@@ -13,30 +13,20 @@
 // on universe). Single-user scale + idempotent → no producer/worker
 // queue needed; runs inline via finnhubQueue's per-call rate limiter.
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { getProfile2 } from '../services/finnhub.js';
+import { universeTableModule, type UniverseRow } from '../db/universeTableModule.js';
 
 const CADENCE_MS = 7 * 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 8 * 60_000;
-const BATCH_LIMIT = 5000;
-
-interface UniverseRow {
-  conid: number;
-  symbol: string;
-}
 
 async function loadTargets(): Promise<UniverseRow[]> {
-  const { data, error } = await supabase()
-    .from('universe')
-    .select('conid, symbol')
-    .eq('filter_result', 'in')
-    .limit(BATCH_LIMIT);
-  if (error) {
-    void notifyError('marketCapRefreshCron.load', error.message);
+  try {
+    return await universeTableModule.getInRows();
+  } catch (e) {
+    void notifyError('marketCapRefreshCron.load', (e as Error).message);
     return [];
   }
-  return (data ?? []) as UniverseRow[];
 }
 
 async function tick(): Promise<void> {
@@ -58,15 +48,10 @@ async function tick(): Promise<void> {
         fail++;
         continue;
       }
-      const { error } = await supabase()
-        .from('universe')
-        .update({
-          last_market_cap_m: profile.marketCapitalization,
-          computed_at: nowIso,
-        })
-        .eq('conid', t.conid);
-      if (error) {
-        void notifyError(`marketCapRefreshCron.update.${t.symbol}`, error.message);
+      try {
+        await universeTableModule.setMarketCap(t.conid, profile.marketCapitalization, nowIso);
+      } catch (e) {
+        void notifyError(`marketCapRefreshCron.update.${t.symbol}`, (e as Error).message);
         fail++;
         continue;
       }

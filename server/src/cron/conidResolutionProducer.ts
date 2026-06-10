@@ -13,8 +13,8 @@
 //     IB hiccups); finalizes the failure beyond that (symbol genuinely
 //     unresolvable — likely delisted or no US STK listing).
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { resolveConid } from '../services/screener/conidResolver.js';
 import {
   enqueue,
@@ -32,24 +32,13 @@ const FIRST_RUN_DELAY_MS = 5 * 60_000;
 const MAX_RETRY_ATTEMPTS = 2;
 const ENQUEUE_BATCH_LIMIT = 5000;  // safety cap on a single tick's enqueue volume
 
-interface PendingRow {
-  conid: number;
-  symbol: string;
-  mic: string | null;
-}
-
-async function loadPendingRows(): Promise<PendingRow[]> {
-  const { data, error } = await supabase()
-    .from('universe')
-    .select('conid, symbol, mic')
-    .eq('filter_result', 'in')
-    .is('real_conid', null)
-    .limit(ENQUEUE_BATCH_LIMIT);
-  if (error) {
-    void notifyError('conidResolutionProducer.loadPending', error.message);
+async function loadPendingRows(): Promise<Array<{ conid: number; symbol: string; mic: string | null }>> {
+  try {
+    return await universeTableModule.getUnresolvedInRows(ENQUEUE_BATCH_LIMIT);
+  } catch (e) {
+    void notifyError('conidResolutionProducer.loadPending', (e as Error).message);
     return [];
   }
-  return (data ?? []) as PendingRow[];
 }
 
 async function drainResults(): Promise<void> {
@@ -152,11 +141,9 @@ ibRegistry['resolve_conid'] = async (payloadIn) => {
     // framework marks failed; producer's retry budget eventually finalizes.
     throw new Error(`resolve_conid: no US STK match for ${payload.symbol}`);
   }
-  const { error } = await supabase()
-    .from('universe')
-    .update({ real_conid: result.conid })
-    .eq('conid', payload.universeConid);
-  if (error) {
-    throw new Error(`resolve_conid: universe update failed for ${payload.symbol}: ${error.message}`);
+  try {
+    await universeTableModule.setRealConid(payload.universeConid, result.conid);
+  } catch (e) {
+    throw new Error(`resolve_conid: universe update failed for ${payload.symbol}: ${(e as Error).message}`);
   }
 };

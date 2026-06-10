@@ -14,6 +14,7 @@
 // first tick has had a chance to populate fresh data on day-of-cron-deploy.
 
 import { supabase } from '../services/supabase.js';
+import { universeTableModule } from '../db/universeTableModule.js';
 import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { traitScoresTableModule, type TraitScore } from '../db/traitScoresTableModule.js';
@@ -24,7 +25,6 @@ import {
 
 const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 6 * 60_000;
-const BATCH_LIMIT = 5000;
 
 interface UniverseStatsJoin {
   real_conid: number;
@@ -46,20 +46,16 @@ async function loadJoined(): Promise<UniverseStatsJoin[]> {
   // 1. Universe IN rows with real_conid.
   // 2. intraday_stats by those conids.
   // Sample-sized at single-user scale (~3,000 IN rows).
-  const u = await supabase()
-    .from('universe')
-    .select('real_conid, symbol, last_price')
-    .eq('filter_result', 'in')
-    .not('real_conid', 'is', null)
-    .limit(BATCH_LIMIT);
-  if (u.error) {
-    void notifyError('intradayRangeTraderProducer.loadUniverse', u.error.message);
+  let universe;
+  try {
+    universe = await universeTableModule.getResolvedInRows();
+  } catch (e) {
+    void notifyError('intradayRangeTraderProducer.loadUniverse', (e as Error).message);
     return [];
   }
-  const universe = (u.data ?? []) as Array<{ real_conid: number; symbol: string; last_price: number | null }>;
   if (universe.length === 0) return [];
 
-  const conids = universe.map((r) => r.real_conid);
+  const conids = universe.map((r) => r.realConid).filter((c): c is number => c != null);
   const statsByConid = new Map<number, IntradayStatsRow>();
   try {
     for (const s of await intradayStatsTableModule.getByConids(conids)) {
@@ -87,14 +83,15 @@ async function loadJoined(): Promise<UniverseStatsJoin[]> {
 
   const joined: UniverseStatsJoin[] = [];
   for (const row of universe) {
-    const stats = statsByConid.get(row.real_conid);
+    if (row.realConid == null) continue;
+    const stats = statsByConid.get(row.realConid);
     if (!stats) continue;
     joined.push({
-      real_conid: row.real_conid,
+      real_conid: row.realConid,
       symbol: row.symbol,
-      last_price: row.last_price,
+      last_price: row.lastPrice,
       stats,
-      today_open: openByConid.get(row.real_conid) ?? null,
+      today_open: openByConid.get(row.realConid) ?? null,
     });
   }
   return joined;

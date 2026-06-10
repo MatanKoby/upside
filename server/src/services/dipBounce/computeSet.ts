@@ -7,6 +7,7 @@ import { supabase } from '../supabase.js';
 import { activeWatchlistOnlyConids } from '../quotes.js';
 import { latestCuratedAsof } from '../curatedList/asof.js';
 import { curatedListTableModule } from '../../db/curatedListTableModule.js';
+import { universeTableModule } from '../../db/universeTableModule.js';
 
 export interface ComputeMember {
   conid: number;
@@ -44,14 +45,9 @@ export async function loadComputeSet(): Promise<ComputeMember[]> {
   if (asof) {
     const curConids = await curatedListTableModule.getConidsByDate(asof);
     const missing = curConids.filter((c) => !byConid.has(c));
-    for (let i = 0; i < missing.length; i += 900) {
-      const chunk = missing.slice(i, i + 900);
-      const { data: u } = await db.from('universe').select('real_conid, symbol').in('real_conid', chunk);
-      for (const row of u ?? []) {
-        const c = fin((row as { real_conid: unknown }).real_conid);
-        if (c != null && !byConid.has(c)) {
-          byConid.set(c, { conid: c, symbol: String((row as { symbol: unknown }).symbol ?? ''), isHeld: false });
-        }
+    for (const row of await universeTableModule.getByRealConids(missing)) {
+      if (row.realConid != null && !byConid.has(row.realConid)) {
+        byConid.set(row.realConid, { conid: row.realConid, symbol: row.symbol, isHeld: false });
       }
     }
   }
