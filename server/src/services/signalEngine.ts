@@ -13,6 +13,7 @@
 // as a `no_signal` row rather than crashing the api.
 
 import { supabase } from './supabase.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -119,8 +120,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       const heldConid = position.conid != null ? Number(position.conid) : null;
       let heldPrice: number | null = null;
       if (heldConid != null && Number.isFinite(heldConid)) {
-        const { data: q } = await db.from('quotes').select('canonical_price').eq('conid', heldConid).maybeSingle();
-        heldPrice = num(q?.canonical_price);
+        heldPrice = await quotesTableModule.getCanonicalPrice(heldConid).catch(() => null);
       }
       const mktValue = heldPrice != null ? (num(position.shares) ?? 0) * heldPrice : null;
       // Only skip when we can actually price it below the floor; proceed if unpriced.
@@ -176,11 +176,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // --- Current price (IB snapshot, fall back to canonical quote) -------
     // Price SSOT (Batch X5): the fallback is quotes.canonical_price by conid,
     // not a positions column.
-    let currentPrice: number | null = null;
-    {
-      const { data: q } = await db.from('quotes').select('canonical_price').eq('conid', conid).maybeSingle();
-      currentPrice = num(q?.canonical_price);
-    }
+    let currentPrice: number | null = await quotesTableModule.getCanonicalPrice(conid).catch(() => null);
     const snap = await ibSnapshot([conid]).catch(() => []);
     const live = num(snap[0]?.['31']);
     if (live != null) currentPrice = live;

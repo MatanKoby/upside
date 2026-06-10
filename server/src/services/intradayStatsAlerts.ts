@@ -14,17 +14,11 @@
 // now AT or BELOW band_top. We don't re-fire when it dips deeper into the
 // band (the user knows; they have the chip / Discord ping already).
 
-import { supabase } from './supabase.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { notifyIntradayStatsHit, notifyError } from './notify.js';
 import { intradayStatsTableModule, type IntradayAlertStats } from '../db/intradayStatsTableModule.js';
 
 const COOLDOWN_HOURS = 24;
-
-function num(v: number | string | null | undefined): number | null {
-  if (v == null) return null;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function cooldownPassed(lastFiredAt: string | null): boolean {
   if (!lastFiredAt) return true;
@@ -53,12 +47,13 @@ export async function checkIntradayStatsForConid(
   if (p50 == null || p75 == null) return;
 
   // Need today's open to compute the band in price space.
-  const { data: q } = await supabase()
-    .from('quotes')
-    .select('today_open')
-    .eq('conid', conid)
-    .maybeSingle();
-  const todayOpen = num(q?.today_open as number | string | null | undefined);
+  let todayOpen: number | null;
+  try {
+    todayOpen = await quotesTableModule.getTodayOpen(conid);
+  } catch (e) {
+    void notifyError('intradayStatsAlerts.todayOpen', `query failed for conid ${conid}: ${(e as Error).message}`);
+    return;
+  }
   if (todayOpen == null || todayOpen <= 0) return;
 
   // p50/p75 are positive percentages (low below open). Convert to price.

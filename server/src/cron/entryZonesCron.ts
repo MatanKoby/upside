@@ -13,7 +13,7 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeEntryZones, type Horizon, type EntryZone } from '../services/entryZones.js';
-import { supabase } from '../services/supabase.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { entryZonesTableModule } from '../db/entryZonesTableModule.js';
 import type { Bars } from '../services/technicals.js';
@@ -21,11 +21,6 @@ import type { RawIbHistory } from '../types/index.js';
 
 const CADENCE_MS = 15 * 60_000;
 const HORIZONS: Horizon[] = ['intraday', 'overnight', 'multiday'];
-
-function num(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
-  return Number.isFinite(n) ? n : null;
-}
 
 function toBars(hist: RawIbHistory | null): Bars {
   const d = hist?.data ?? [];
@@ -48,12 +43,7 @@ async function activeConidsToProcess(): Promise<Array<{ conid: number; symbol: s
 }
 
 async function priceForConid(conid: number): Promise<number | null> {
-  const { data } = await supabase()
-    .from('quotes')
-    .select('canonical_price')
-    .eq('conid', conid)
-    .maybeSingle();
-  return num(data?.canonical_price);
+  return quotesTableModule.getCanonicalPrice(conid).catch(() => null);
 }
 
 async function upsertZone(conid: number, horizon: Horizon, zone: EntryZone | null, trendRegime: string, overboughtTightened: boolean): Promise<void> {
@@ -106,11 +96,7 @@ async function tick(): Promise<void> {
       // bars; writing here avoids a per-cycle IB call from the pollers.
       const closes = dailyBars.c;
       if (closes.length >= 1) {
-        const last7 = closes.slice(-7);
-        await supabase()
-          .from('quotes')
-          .update({ sparkline_closes: last7 })
-          .eq('conid', conid);
+        await quotesTableModule.setSparkline(conid, closes.slice(-7));
       }
     } catch (e) {
       void notifyError(`entryZonesCron.${symbol}`, (e as Error).message, e);

@@ -22,6 +22,7 @@ import { computeSwingDipBounceScore } from './swingScorer.js';
 import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
 import { bandStateTableModule } from '../../db/bandStateTableModule.js';
 import { intradayStatsTableModule } from '../../db/intradayStatsTableModule.js';
+import { quotesTableModule } from '../../db/quotesTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,
@@ -93,20 +94,13 @@ async function refreshPacks(members: ComputeMember[], quotes: Map<number, QuoteI
 // ── Batch table loads ────────────────────────────────────────────────────────
 async function loadQuotes(conids: number[]): Promise<Map<number, QuoteInput>> {
   const out = new Map<number, QuoteInput>();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('quotes')
-      .select('conid, canonical_price, today_open, canonical_source, canonical_updated_at')
-      .in('conid', conids.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      if (c == null) continue;
-      const src = (r as { canonical_source: string | null }).canonical_source;
-      const updatedAt = (r as { canonical_updated_at: string | null }).canonical_updated_at;
-      const ageMs = updatedAt ? Date.now() - Date.parse(updatedAt) : Infinity;
-      const fresh = (src === 'ib' || src === 'finnhub') && Number.isFinite(ageMs) && ageMs <= FRESH_QUOTE_MAX_MS;
-      out.set(c, { price: num((r as { canonical_price: unknown }).canonical_price), todayOpen: num((r as { today_open: unknown }).today_open), fresh });
-    }
+  for (const s of await quotesTableModule.getCanonicalSnapshots(conids)) {
+    const ageMs = s.canonicalUpdatedAt ? Date.now() - Date.parse(s.canonicalUpdatedAt) : Infinity;
+    const fresh =
+      (s.canonicalSource === 'ib' || s.canonicalSource === 'finnhub') &&
+      Number.isFinite(ageMs) &&
+      ageMs <= FRESH_QUOTE_MAX_MS;
+    out.set(s.conid, { price: s.canonicalPrice, todayOpen: s.todayOpen, fresh });
   }
   return out;
 }

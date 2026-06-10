@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { supabase } from '../services/supabase.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getMtdAnchor } from '../services/mtdCache.js';
 
@@ -42,18 +43,9 @@ router.get('/summary', async (req: Request, res: Response) => {
   }
   const held = (data ?? []) as Array<{ conid: number | null; shares: number | string | null; avg_cost: number | string | null }>;
   const conids = held.map((p) => Number(p.conid)).filter((c) => Number.isFinite(c));
-  const priceByConid = new Map<number, number>();
-  if (conids.length > 0) {
-    const { data: quotes } = await supabase()
-      .from('quotes')
-      .select('conid, canonical_price')
-      .in('conid', conids);
-    for (const q of quotes ?? []) {
-      const c = Number((q as { conid: unknown }).conid);
-      const price = Number((q as { canonical_price: unknown }).canonical_price);
-      if (Number.isFinite(c) && Number.isFinite(price)) priceByConid.set(c, price);
-    }
-  }
+  const priceByConid = conids.length > 0
+    ? await quotesTableModule.getCanonicalPrices(conids).catch(() => new Map<number, number>())
+    : new Map<number, number>();
   let totalValue = 0;
   let totalPnl = 0;
   for (const p of held) {

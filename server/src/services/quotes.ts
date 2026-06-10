@@ -12,18 +12,13 @@
 import { supabase } from './supabase.js';
 import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 import { universeTableModule } from '../db/universeTableModule.js';
+import { quotesTableModule, type DailySeedRow } from '../db/quotesTableModule.js';
 import { notifyError } from './notify.js';
 import { checkMarkersForConid } from './markers.js';
 import { checkEntryZonesForConid } from './entryZoneAlerts.js';
 import { checkIntradayStatsForConid } from './intradayStatsAlerts.js';
 
 export type QuoteSource = 'ib' | 'finnhub';
-
-function asNum(v: number | string | null | undefined): number | null {
-  if (v == null) return null;
-  const x = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(x) ? x : null;
-}
 
 interface QuoteWriteOpts {
   conid: number;
@@ -56,38 +51,27 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
   // that case.
   let prevCanonical: number | null = null;
   if (setCanonical) {
-    const existing = await supabase()
-      .from('quotes')
-      .select('canonical_price')
-      .eq('conid', opts.conid)
-      .maybeSingle();
-    prevCanonical = asNum(existing.data?.canonical_price as number | string | null | undefined);
+    try {
+      prevCanonical = await quotesTableModule.getCanonicalPrice(opts.conid);
+    } catch {
+      prevCanonical = null;
+    }
   }
 
-  const row: Record<string, unknown> = {
-    conid: opts.conid,
-    symbol: opts.symbol,
-  };
-  if (opts.source === 'ib') {
-    row.ib_price = opts.price;
-    row.ib_updated_at = now;
-  } else {
-    row.finnhub_price = opts.price;
-    row.finnhub_updated_at = now;
+  try {
+    await quotesTableModule.upsertLiveQuote({
+      conid: opts.conid,
+      symbol: opts.symbol,
+      source: opts.source,
+      price: opts.price,
+      setCanonical,
+      now,
+      todayChangePct: opts.todayChangePct,
+      todayOpen: opts.todayOpen,
+    });
+  } catch (e) {
+    void notifyError('quotes.upsertQuote', (e as Error).message);
   }
-  if (setCanonical) {
-    row.canonical_price = opts.price;
-    row.canonical_source = opts.source;
-    row.canonical_updated_at = now;
-  }
-  if (opts.todayChangePct != null && Number.isFinite(opts.todayChangePct)) {
-    row.today_change_pct = opts.todayChangePct;
-  }
-  if (opts.todayOpen != null && Number.isFinite(opts.todayOpen) && opts.todayOpen > 0) {
-    row.today_open = opts.todayOpen;
-  }
-
-  await supabase().from('quotes').upsert(row, { onConflict: 'conid' });
 
   // Marker check + entry-zone check — both run on every canonical price
   // transition (Batches A2 + A+). Fire-and-forget; each function handles its
@@ -112,7 +96,6 @@ export async function upsertQuote(opts: QuoteWriteOpts): Promise<void> {
 export async function seedDailyQuotes(conids: number[]): Promise<number> {
   const uniq = [...new Set(conids.filter((c) => Number.isFinite(c)))];
   if (uniq.length === 0) return 0;
-  const db = supabase();
 
   // Global latest daily-bar date → the honest as-of stamp for all seeded rows.
   const latestBarDate = await dailyBarsTableModule.latestDate();
@@ -135,18 +118,12 @@ export async function seedDailyQuotes(conids: number[]): Promise<number> {
     if (r.realConid != null) uni.set(r.realConid, { symbol: r.symbol, price: r.lastPrice });
   }
 
-  // Which conids a live poller owns (quotes table — its own rollout slice later).
-  for (let i = 0; i < uniq.length; i += 900) {
-    const chunk = uniq.slice(i, i + 900);
-    const q = await db.from('quotes').select('conid, canonical_source').in('conid', chunk);
-    for (const r of q.data ?? []) {
-      const c = asNum((r as { conid: number | string | null }).conid);
-      const src = (r as { canonical_source: string | null }).canonical_source;
-      if (c != null && (src === 'ib' || src === 'finnhub')) liveOwned.add(c);
-    }
+  // Which conids a live poller owns — never clobber a live (ib/finnhub) row.
+  for (const s of await quotesTableModule.getCanonicalSnapshots(uniq)) {
+    if (s.canonicalSource === 'ib' || s.canonicalSource === 'finnhub') liveOwned.add(s.conid);
   }
 
-  const rows: Record<string, unknown>[] = [];
+  const rows: DailySeedRow[] = [];
   for (const conid of uniq) {
     if (liveOwned.has(conid)) continue; // a live poller owns this row — never overwrite
     const u = uni.get(conid);
@@ -157,16 +134,16 @@ export async function seedDailyQuotes(conids: number[]): Promise<number> {
     rows.push({
       conid,
       symbol: u.symbol,
-      canonical_price: price,
-      canonical_source: 'daily',
-      canonical_updated_at: asOfStamp,
-      sparkline_closes: closes.length ? closes.slice(-20) : null,
+      canonicalPrice: price,
+      canonicalUpdatedAt: asOfStamp,
+      sparklineCloses: closes.length ? closes.slice(-20) : null,
     });
   }
 
-  for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await db.from('quotes').upsert(rows.slice(i, i + 500), { onConflict: 'conid' });
-    if (error) void notifyError('quotes.seedDailyQuotes', error.message);
+  try {
+    await quotesTableModule.upsertDailySeeds(rows);
+  } catch (e) {
+    void notifyError('quotes.seedDailyQuotes', (e as Error).message);
   }
   return rows.length;
 }

@@ -15,6 +15,7 @@ import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { basicFinancials, earningsCalendar } from '../services/finnhub.js';
 import { supabase } from '../services/supabase.js';
 import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { buildRiskFlagInputs } from '../services/riskFlags/inputs.js';
 import { evaluateAndStore, riskFlagAsofDate } from '../services/riskFlags/engine.js';
@@ -65,12 +66,7 @@ async function workingSet(): Promise<Target[]> {
   // Fill any missing prices from the canonical quote.
   for (const t of byConid.values()) {
     if (t.price != null) continue;
-    const { data } = await db
-      .from('quotes')
-      .select('canonical_price')
-      .eq('conid', t.conid)
-      .maybeSingle();
-    t.price = num(data?.canonical_price);
+    t.price = await quotesTableModule.getCanonicalPrice(t.conid).catch(() => null);
   }
   return [...byConid.values()];
 }

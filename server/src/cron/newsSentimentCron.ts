@@ -16,6 +16,7 @@ import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
 import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
 import { curatedListTableModule } from '../db/curatedListTableModule.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { NEWS_LOOKBACK_HOURS } from '../config/news.js';
 
 const CADENCE_MS = 12 * 60 * 60_000; // twice a day — the 48h window changes slowly
@@ -58,12 +59,8 @@ async function workingSet(): Promise<Target[]> {
   const curated = await curatedListTableModule.getConidsByDate(asof);
   const missing = curated.filter((c) => !byConid.has(c));
   if (missing.length > 0) {
-    const { data: q } = await db.from('quotes').select('conid, symbol').in('conid', missing);
-    for (const r of q ?? []) {
-      const conid = num(r.conid);
-      if (conid != null && r.symbol && !byConid.has(conid)) {
-        byConid.set(conid, { conid, symbol: String(r.symbol) });
-      }
+    for (const r of await quotesTableModule.getSymbols(missing)) {
+      if (!byConid.has(r.conid)) byConid.set(r.conid, { conid: r.conid, symbol: r.symbol });
     }
   }
 

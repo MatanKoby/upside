@@ -8,6 +8,7 @@
 // spec/signals/dip-bounce-scorer.md → Forward-tracking.
 
 import { supabase } from '../services/supabase.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { OUTCOME_OFFSETS } from '../config/dipBounceScorer.js';
 
@@ -58,20 +59,7 @@ async function loadExistingOutcomes(fireIds: string[]): Promise<Set<string>> {
 }
 
 async function loadPrices(conids: number[]): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
-  const uniq = [...new Set(conids)];
-  for (let i = 0; i < uniq.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('quotes')
-      .select('conid, canonical_price')
-      .in('conid', uniq.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      const p = num((r as { canonical_price: unknown }).canonical_price);
-      if (c != null && p != null) out.set(c, p);
-    }
-  }
-  return out;
+  return quotesTableModule.getCanonicalPrices(conids).catch(() => new Map<number, number>());
 }
 
 async function tick(): Promise<void> {

@@ -127,11 +127,14 @@ watchlist_* → analyses/analysis_locks`.
 ✅ `universe` — first of the multi-writer half: 6 writers / 16 call-sites / 10 files (nightly bulk
 sweep + stale retention + real_conid stamp + weekly cap refresh + daily price/volume + auto-promote +
 the `refresh_universe_avg_volume` RPC), all behind named methods; readers take a uniform `UniverseRow`.
-**Next: `quotes`** — then the rest of the **multi-writer half** (`positions`,
-`signal_fires/outcomes`, `risk_flags`, `watchlist_*`, `analyses/analysis_locks`). Each has several
-writers, so the **one-writer-owner** call is the real work: the module becomes the sole writer and the
-producers/pollers call its named methods (e.g. `quotesTableModule.upsertQuote(...)` for the 5 quote
-writers). ~15–16 call-sites across ~10 files apiece.
+✅ `quotes` — the price-SSOT hub: 3 write call-sites (the live canonical `upsertLiveQuote` that IB +
+Finnhub + watchlist pollers funnel through, the daily-seed bulk upsert, the entry-zone sparkline) + 6
+read shapes across 10 files. Column policy lives in the module; the *price policy* (which source is
+canonical, the prev-canonical transition probe, freshness/ownership gates) stays in the services.
+**Next: `positions`** — then the rest of the **multi-writer half** (`signal_fires/outcomes`,
+`risk_flags`, `watchlist_*`, `analyses/analysis_locks`). Each has several writers, so the
+**one-writer-owner** call is the real work: the module becomes the sole writer and the producers/
+pollers call its named methods.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).

@@ -13,8 +13,8 @@
 // Cadence: 24h, runs 6 min after boot so it lands after intradayStatsCron's
 // first tick has had a chance to populate fresh data on day-of-cron-deploy.
 
-import { supabase } from '../services/supabase.js';
 import { universeTableModule } from '../db/universeTableModule.js';
+import { quotesTableModule } from '../db/quotesTableModule.js';
 import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { traitScoresTableModule, type TraitScore } from '../db/traitScoresTableModule.js';
@@ -73,13 +73,14 @@ async function loadJoined(): Promise<UniverseStatsJoin[]> {
   // tracking surface). Universe-only tickers have no quote row; today_open
   // is null for them and the band_low payload field comes back null too —
   // the FE renders an em-dash there.
-  const { data: quotes } = await supabase()
-    .from('quotes')
-    .select('conid, today_open')
-    .in('conid', conids.slice(0, 900));
-  const openByConid = new Map<number, number | null>(
-    (quotes ?? []).map((q: { conid: number; today_open: number | null }) => [q.conid, q.today_open]),
-  );
+  const openByConid = new Map<number, number | null>();
+  try {
+    for (const r of await quotesTableModule.getTodayOpens(conids.slice(0, 900))) {
+      openByConid.set(r.conid, r.todayOpen);
+    }
+  } catch (e) {
+    void notifyError('intradayRangeTraderProducer.loadOpens', (e as Error).message);
+  }
 
   const joined: UniverseStatsJoin[] = [];
   for (const row of universe) {
