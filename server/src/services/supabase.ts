@@ -13,6 +13,8 @@ export function supabase(): SupabaseClient {
 }
 
 export async function pingSupabase(): Promise<boolean> {
-  const { error } = await supabase().from('positions').select('symbol').limit(1);
-  return !error;
+  // Routes through the positions TableModule (the gatekeeper for that table);
+  // imported lazily to avoid a load-time cycle (the module's base imports this).
+  const { positionsTableModule } = await import('../db/positionsTableModule.js');
+  return positionsTableModule.ping();
 }

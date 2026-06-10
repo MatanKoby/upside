@@ -37,6 +37,7 @@ import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 import { upsertQuote } from '../services/quotes.js';
+import { positionsTableModule, type AssembledPosition } from '../db/positionsTableModule.js';
 
 // Polling cadences, in ms. We always poll at least once when IB is connected;
 // these dictate the gap between successful cycles.
@@ -124,50 +125,6 @@ async function todaysBars(conid: number): Promise<OhlcBar[]> {
   const raw: RawIbHistory | null = await ibHistory(conid, '1d', '5mins');
   if (!raw || !Array.isArray(raw.data)) return [];
   return raw.data.map(ibBarToOhlc);
-}
-
-interface AssembledPosition {
-  user_id: string;
-  conid: number;
-  account_id: string;
-  symbol: string;
-  company_name: string | null;
-  shares: number;
-  avg_cost: number;
-  current_price: number;
-  market_value: number;
-  unrealized_pnl: number;
-  unrealized_pnl_pct: number | null;
-  realized_pnl: number | null;
-  today_change: number | null;
-  today_change_pct: number | null;
-  vwap_value: number | null;
-  vwap_updated_at: string | null;
-  portfolio_weight: number;
-  portfolio_contribution: number;
-  daily_return: number | null;
-  trading_days_held: number | null;
-  // Batch 13.5: entry-date provenance. 'ib_transactions' = deduced exactly
-  // from /v1/api/pa/transactions; 'observed' = stamped at first sight, FE
-  // renders as a floor ("≥N days").
-  first_seen_at: string;
-  first_seen_source: 'observed' | 'ib_transactions';
-  currency: string;
-  asset_class: string;
-  industry: string | null;
-  category: string | null;
-  // Batch 13.8: source-tracking for multi-source price polling. ibPricePoller
-  // always writes 'ib'; finnhubPricePoller writes 'finnhub'.
-  price_source: 'ib';
-  last_price_update_at: string;
-  updated_at: string;
-  // Batch 14c: profit-taking zone state. Defaulted in assemblePosition, then
-  // overwritten with the computed transition in pollCycle (which has the prior
-  // row + threshold).
-  zone_entered_at: string | null;
-  zone_exited_at: string | null;
-  last_zone_notification_at: string | null;
-  entered_zone_via_gap: boolean;
 }
 
 interface EntryInfo {
@@ -304,27 +261,6 @@ async function assemblePosition(
   };
 }
 
-// Columns persisted to `positions` (Batch X5): holding facts only. Price + P&L
-// (current_price / market_value / unrealized_pnl[_pct] / today_change[_pct] /
-// daily_return / portfolio_weight / portfolio_contribution) live in `quotes` /
-// are recomputed by readers, so they're dropped from the write even though the
-// assembled object still carries them in-memory for the quotes mirror + MTD +
-// zone math below.
-const POSITION_WRITE_COLUMNS = [
-  'user_id', 'conid', 'account_id', 'symbol', 'company_name', 'shares', 'avg_cost',
-  'realized_pnl', 'vwap_value', 'vwap_updated_at', 'trading_days_held',
-  'first_seen_at', 'first_seen_source', 'currency', 'asset_class', 'industry',
-  'category', 'price_source', 'last_price_update_at', 'updated_at',
-  'zone_entered_at', 'zone_exited_at', 'last_zone_notification_at', 'entered_zone_via_gap',
-] as const;
-
-function toPositionRow(a: AssembledPosition): Record<string, unknown> {
-  const src = a as unknown as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const k of POSITION_WRITE_COLUMNS) out[k] = src[k];
-  return out;
-}
-
 async function pollCycle(userId: string, accountId: string): Promise<void> {
   const rawPositions: RawIbPosition[] = await ibPositions(accountId);
   // IB sometimes returns recently-closed positions with shares=0 for a while
@@ -335,19 +271,17 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   const positions = rawPositions.filter((p) => Number(p.position ?? 0) !== 0);
   if (positions.length === 0) {
     // No positions: zero out any stale rows for this user.
-    await supabase().from('positions').delete().eq('user_id', userId);
+    await positionsTableModule.deleteAllForUser(userId);
     return;
   }
 
   // Pull existing rows once — used for entry-date preservation, the
-  // change-detection skip below, and prior profit-taking-zone state.
-  const { data: existing } = await supabase()
-    .from('positions')
-    .select('symbol, vwap_value, shares, avg_cost, first_seen_at, first_seen_source, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
-    .eq('user_id', userId);
+  // change-detection skip below, and prior profit-taking-zone state. On a read
+  // error, degrade to empty (every position re-upserts) — the prior behavior.
+  const existing = await positionsTableModule.getHoldingFactsForUser(userId).catch(() => []);
 
-  const existingMap = new Map<string, Record<string, unknown>>();
-  for (const r of existing ?? []) existingMap.set(r.symbol, r);
+  const existingMap = new Map<string, (typeof existing)[number]>();
+  for (const r of existing) existingMap.set(r.symbol, r);
 
   const threshold = await getProfitZoneThreshold(userId);
   const zoneNotifications: { symbol: string; pnlPct: number; viaGap: boolean }[] = [];
@@ -366,17 +300,17 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     const entryInfo = await resolveEntryInfo(
       raw,
       accountId,
-      (existingRow?.first_seen_at as string | null) ?? null,
-      (existingRow?.first_seen_source as string | null) ?? null,
+      existingRow?.firstSeenAt ?? null,
+      existingRow?.firstSeenSource ?? null,
     );
     const a = await assemblePosition(raw, snap, contract, userId, entryInfo);
     // Recompute profit-taking-zone state from the prior row + new P&L (14c).
     const zone = computeZoneState(
       {
-        zone_entered_at: (existingRow?.zone_entered_at as string | null) ?? null,
-        zone_exited_at: (existingRow?.zone_exited_at as string | null) ?? null,
-        last_zone_notification_at: (existingRow?.last_zone_notification_at as string | null) ?? null,
-        entered_zone_via_gap: Boolean(existingRow?.entered_zone_via_gap),
+        zone_entered_at: existingRow?.zoneEnteredAt ?? null,
+        zone_exited_at: existingRow?.zoneExitedAt ?? null,
+        last_zone_notification_at: existingRow?.lastZoneNotificationAt ?? null,
+        entered_zone_via_gap: Boolean(existingRow?.enteredZoneViaGap),
       },
       a.unrealized_pnl_pct,
       threshold,
@@ -417,15 +351,15 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
     // Price/P&L moved to `quotes` (Batch X5) — the positions row only changes
     // on holding facts: vwap, shares/avg_cost, entry provenance, zone state.
     if (
-      Number(e.vwap_value ?? NaN) !== (r.vwap_value ?? NaN)
+      Number(e.vwapValue ?? NaN) !== (r.vwap_value ?? NaN)
       || Number(e.shares) !== r.shares
-      || Number(e.avg_cost) !== r.avg_cost
-      || String(e.first_seen_source ?? '') !== r.first_seen_source
-      || String(e.first_seen_at ?? '') !== String(r.first_seen_at ?? '')
+      || Number(e.avgCost) !== r.avg_cost
+      || String(e.firstSeenSource ?? '') !== r.first_seen_source
+      || String(e.firstSeenAt ?? '') !== String(r.first_seen_at ?? '')
       // Zone transitions can carry a write even when the price-derived fields
       // above round to the same value (e.g. the daily gap-badge set on entry).
-      || String(e.zone_entered_at ?? '') !== String(r.zone_entered_at ?? '')
-      || Boolean(e.entered_zone_via_gap) !== r.entered_zone_via_gap
+      || String(e.zoneEnteredAt ?? '') !== String(r.zone_entered_at ?? '')
+      || Boolean(e.enteredZoneViaGap) !== r.entered_zone_via_gap
     ) {
       toUpsert.push(r);
     }
@@ -440,10 +374,11 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
 
   if (toUpsert.length === 0) return;
 
-  const { error } = await supabase()
-    .from('positions')
-    .upsert(toUpsert.map(toPositionRow), { onConflict: 'user_id,symbol' });
-  if (error) void notifyError('ibPricePoller.positions.upsert', error.message);
+  try {
+    await positionsTableModule.upsertHoldings(toUpsert);
+  } catch (e) {
+    void notifyError('ibPricePoller.positions.upsert', (e as Error).message);
+  }
 
   // Mirror held prices into the canonical `quotes` table (Batch A1). IB is
   // always authoritative when this poller runs, so `setCanonical` defaults true.
@@ -466,13 +401,9 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
 
   // Delete rows for symbols no longer held.
   const heldSymbols = new Set(assembled.map((r) => r.symbol));
-  const orphans = (existing ?? []).filter((r) => !heldSymbols.has(r.symbol));
-  if (orphans.length > 0) {
-    await supabase()
-      .from('positions')
-      .delete()
-      .eq('user_id', userId)
-      .in('symbol', orphans.map((o) => o.symbol));
+  const orphanSymbols = existing.filter((r) => !heldSymbols.has(r.symbol)).map((o) => o.symbol);
+  if (orphanSymbols.length > 0) {
+    await positionsTableModule.deleteOrphans(userId, orphanSymbols);
   }
 }
 

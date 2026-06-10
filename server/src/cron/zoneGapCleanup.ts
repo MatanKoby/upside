@@ -7,7 +7,7 @@
 // flag for all positions exactly once. Cheap, single-owner app, so no user
 // filter is needed (an always-true predicate satisfies Supabase's update guard).
 
-import { supabase } from '../services/supabase.js';
+import { positionsTableModule } from '../db/positionsTableModule.js';
 import { marketPeriodAt, etDateString } from '../utils/marketHours.js';
 import { notifyError } from '../services/notify.js';
 
@@ -25,14 +25,11 @@ async function tick(): Promise<void> {
     // After the regular session ends (after-hours / closed), clear once per ET
     // day. Also fires on weekends/holidays — a harmless no-op when nothing is set.
     if ((period === 'after-hours' || period === 'closed') && lastClearedEtDate !== today) {
-      const { error } = await supabase()
-        .from('positions')
-        .update({ entered_zone_via_gap: false })
-        .eq('entered_zone_via_gap', true);
-      if (error) {
-        void notifyError('zoneGapCleanup.update', error.message);
-      } else {
+      try {
+        await positionsTableModule.clearGapBadges();
         lastClearedEtDate = today;
+      } catch (e) {
+        void notifyError('zoneGapCleanup.update', (e as Error).message);
       }
     }
   } catch (e) {

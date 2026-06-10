@@ -131,10 +131,15 @@ the `refresh_universe_avg_volume` RPC), all behind named methods; readers take a
 Finnhub + watchlist pollers funnel through, the daily-seed bulk upsert, the entry-zone sparkline) + 6
 read shapes across 10 files. Column policy lives in the module; the *price policy* (which source is
 canonical, the prev-canonical transition probe, freshness/ownership gates) stays in the services.
-**Next: `positions`** — then the rest of the **multi-writer half** (`signal_fires/outcomes`,
-`risk_flags`, `watchlist_*`, `analyses/analysis_locks`). Each has several writers, so the
-**one-writer-owner** call is the real work: the module becomes the sole writer and the producers/
-pollers call its named methods.
+✅ `positions` — the holdings hub: 3 writers (the IB poller's full sync — `upsertHoldings` +
+`deleteOrphans` + the no-positions `deleteAllForUser`; the Finnhub poller's `markFinnhubPriced`; the
+`clearGapBadges` day-reset) + 8 read shapes across 11 files (portfolio routes, marketdata charting,
+the analysis engine, the news/risk/dip-bounce working sets, the health probe). The module owns the
+write-column projection (price/P&L moved to `quotes`, Batch X5); the *policy* (entry-date
+reconciliation, change-detection, profit-zone transitions, the quotes mirror) stays in the pollers.
+**Next: `signal_fires/outcomes`** — then the rest of the **multi-writer half** (`risk_flags`,
+`watchlist_*`, `analyses/analysis_locks`). Each has several writers, so the **one-writer-owner** call
+is the real work: the module becomes the sole writer and the producers/pollers call its named methods.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).

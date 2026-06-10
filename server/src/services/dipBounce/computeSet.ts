@@ -3,11 +3,11 @@
 // widening past curated-only stays small. See spec/signals/curated-list.md →
 // Consumers + spec/screens/watchlist.md → Engine coverage.
 
-import { supabase } from '../supabase.js';
 import { activeWatchlistOnlyConids } from '../quotes.js';
 import { latestCuratedAsof } from '../curatedList/asof.js';
 import { curatedListTableModule } from '../../db/curatedListTableModule.js';
 import { universeTableModule } from '../../db/universeTableModule.js';
+import { positionsTableModule } from '../../db/positionsTableModule.js';
 
 export interface ComputeMember {
   conid: number;
@@ -15,13 +15,7 @@ export interface ComputeMember {
   isHeld: boolean;
 }
 
-function fin(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
 export async function loadComputeSet(): Promise<ComputeMember[]> {
-  const db = supabase();
   const byConid = new Map<number, ComputeMember>();
   // Curated portion keys on the LATEST available curated date, not today —
   // the list builds under the latest trait date (Batch X9), which may lag today
@@ -29,10 +23,8 @@ export async function loadComputeSet(): Promise<ComputeMember[]> {
   const asof = await latestCuratedAsof();
 
   // Held positions.
-  const { data: pos } = await db.from('positions').select('conid, symbol');
-  for (const p of pos ?? []) {
-    const c = fin((p as { conid: unknown }).conid);
-    if (c != null) byConid.set(c, { conid: c, symbol: String((p as { symbol: unknown }).symbol ?? ''), isHeld: true });
+  for (const p of await positionsTableModule.getAllHeldConidSymbols().catch(() => [])) {
+    byConid.set(p.conid, { conid: p.conid, symbol: p.symbol, isHeld: true });
   }
 
   // Active-watchlist (excluding held).

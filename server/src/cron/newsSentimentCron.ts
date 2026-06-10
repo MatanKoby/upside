@@ -11,21 +11,16 @@
 
 import { companyNews } from '../services/finnhub.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
 import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
 import { curatedListTableModule } from '../db/curatedListTableModule.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
+import { positionsTableModule } from '../db/positionsTableModule.js';
 import { NEWS_LOOKBACK_HOURS } from '../config/news.js';
 
 const CADENCE_MS = 12 * 60 * 60_000; // twice a day — the 48h window changes slowly
 const RETENTION_DAYS = 7;
-
-function num(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
-  return Number.isFinite(n) ? n : null;
-}
 
 function utcDate(d = new Date()): string {
   return d.toISOString().slice(0, 10);
@@ -37,14 +32,11 @@ interface Target {
 }
 
 async function workingSet(): Promise<Target[]> {
-  const db = supabase();
   const byConid = new Map<number, Target>();
 
   // Held positions.
-  const { data: positions } = await db.from('positions').select('conid, symbol');
-  for (const p of positions ?? []) {
-    const conid = num(p.conid);
-    if (conid != null && p.symbol) byConid.set(conid, { conid, symbol: String(p.symbol) });
+  for (const p of await positionsTableModule.getAllHeldConidSymbols().catch(() => [])) {
+    byConid.set(p.conid, { conid: p.conid, symbol: p.symbol });
   }
 
   // Active-watchlist conids (excluding the held ones).

@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import { supabase } from '../services/supabase.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
+import { positionsTableModule } from '../db/positionsTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getMtdAnchor } from '../services/mtdCache.js';
 
@@ -14,16 +14,12 @@ router.get('/positions', async (req: Request, res: Response) => {
   }
   // Price/P&L live in `quotes` now (Batch X5) — positions no longer carries
   // market_value to order by; the FE recomputes + sorts. Order by symbol here.
-  const { data, error } = await supabase()
-    .from('positions')
-    .select('*')
-    .eq('user_id', req.user.id)
-    .order('symbol', { ascending: true });
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
+  try {
+    const positions = await positionsTableModule.getAllForUser(req.user.id);
+    res.json({ positions });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
   }
-  res.json({ positions: data ?? [] });
 });
 
 router.get('/summary', async (req: Request, res: Response) => {
@@ -33,15 +29,13 @@ router.get('/summary', async (req: Request, res: Response) => {
   }
   // Price SSOT (Batch X5): market value + P&L are recomputed from
   // `quotes.canonical_price` × shares (positions holds only holding facts).
-  const { data, error } = await supabase()
-    .from('positions')
-    .select('conid, shares, avg_cost')
-    .eq('user_id', req.user.id);
-  if (error) {
-    res.status(500).json({ error: error.message });
+  let held;
+  try {
+    held = await positionsTableModule.getHeldCostBasis(req.user.id);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
     return;
   }
-  const held = (data ?? []) as Array<{ conid: number | null; shares: number | string | null; avg_cost: number | string | null }>;
   const conids = held.map((p) => Number(p.conid)).filter((c) => Number.isFinite(c));
   const priceByConid = conids.length > 0
     ? await quotesTableModule.getCanonicalPrices(conids).catch(() => new Map<number, number>())
@@ -52,7 +46,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     const price = priceByConid.get(Number(p.conid));
     if (price == null) continue;
     const shares = Number(p.shares ?? 0);
-    const avgCost = Number(p.avg_cost ?? 0);
+    const avgCost = Number(p.avgCost ?? 0);
     totalValue += price * shares;
     totalPnl += (price - avgCost) * shares;
   }

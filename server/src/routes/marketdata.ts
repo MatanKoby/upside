@@ -8,7 +8,7 @@ import {
   marketIntradayKey,
   marketFundamentalsKey,
 } from '../services/redis.js';
-import { supabase } from '../services/supabase.js';
+import { positionsTableModule } from '../db/positionsTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';
@@ -38,14 +38,7 @@ const SPARKLINE_BAR = '1d';
 
 async function resolveConid(userId: string, symbol: string): Promise<number | null> {
   // MVP: only held symbols are charteable. Lookup conid from positions table.
-  const { data, error } = await supabase()
-    .from('positions')
-    .select('conid')
-    .eq('user_id', userId)
-    .eq('symbol', symbol)
-    .maybeSingle();
-  if (error || !data?.conid) return null;
-  return Number(data.conid);
+  return positionsTableModule.getConidBySymbol(userId, symbol).catch(() => null);
 }
 
 router.get('/history/:symbol', async (req: Request, res: Response) => {

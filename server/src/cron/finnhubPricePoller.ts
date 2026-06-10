@@ -15,13 +15,13 @@
 // state. market_value / unrealized_pnl[_pct] are computed locally only to drive
 // the profit-zone check; the FE recomputes them from `quotes.canonical_price`.
 
-import { supabase } from '../services/supabase.js';
 import { getQuote } from '../services/finnhub.js';
 import { ibStatus } from '../services/ibGateway.js';
 import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import { upsertQuote } from '../services/quotes.js';
+import { positionsTableModule, type PriceFillRow } from '../db/positionsTableModule.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const FRESHNESS_THRESHOLD_MS = 90_000;
@@ -29,19 +29,6 @@ const FRESHNESS_THRESHOLD_MS = 90_000;
 let running = false;
 let stopRequested = false;
 let timer: NodeJS.Timeout | null = null;
-
-interface PositionRow {
-  symbol: string;
-  conid: number | string | null;
-  shares: number | string | null;
-  avg_cost: number | string | null;
-  last_price_update_at: string | null;
-  // Profit-taking zone state (Batch 14c) — carried so we can recompute on write.
-  zone_entered_at: string | null;
-  zone_exited_at: string | null;
-  last_zone_notification_at: string | null;
-  entered_zone_via_gap: boolean | null;
-}
 
 function num(v: number | string | null | undefined): number {
   if (v == null) return 0;
@@ -66,21 +53,20 @@ async function tick(): Promise<void> {
 
     const threshold = await getProfitZoneThreshold(userId);
 
-    const { data: rows, error } = await supabase()
-      .from('positions')
-      .select('symbol, conid, shares, avg_cost, last_price_update_at, zone_entered_at, zone_exited_at, last_zone_notification_at, entered_zone_via_gap')
-      .eq('user_id', userId);
-    if (error) {
-      void notifyError('finnhubPricePoller.read', error.message);
+    let rows: PriceFillRow[];
+    try {
+      rows = await positionsTableModule.getPriceFillRowsForUser(userId);
+    } catch (e) {
+      void notifyError('finnhubPricePoller.read', (e as Error).message);
       return;
     }
-    if (!rows || rows.length === 0) return;
+    if (rows.length === 0) return;
 
     // Filter to positions whose last update is stale.
     const now = Date.now();
-    const stale = (rows as PositionRow[]).filter((r) => {
-      if (!r.last_price_update_at) return true;
-      const age = now - new Date(r.last_price_update_at).getTime();
+    const stale = rows.filter((r) => {
+      if (!r.lastPriceUpdateAt) return true;
+      const age = now - new Date(r.lastPriceUpdateAt).getTime();
       return age > FRESHNESS_THRESHOLD_MS;
     });
     if (stale.length === 0) return;
@@ -98,7 +84,7 @@ async function tick(): Promise<void> {
         const prevClose = num(quote.pc);
         const todayChangePct = prevClose > 0 ? (currentPrice / prevClose - 1) * 100 : null;
         const shares = num(p.shares);
-        const avgCost = num(p.avg_cost);
+        const avgCost = num(p.avgCost);
         const marketValue = currentPrice * shares;
         const costBasis = avgCost * shares;
         const unrealizedPnl = marketValue - costBasis;
@@ -107,10 +93,10 @@ async function tick(): Promise<void> {
         // Recompute profit-taking-zone state from the new P&L (Batch 14c).
         const zone = computeZoneState(
           {
-            zone_entered_at: p.zone_entered_at,
-            zone_exited_at: p.zone_exited_at,
-            last_zone_notification_at: p.last_zone_notification_at,
-            entered_zone_via_gap: Boolean(p.entered_zone_via_gap),
+            zone_entered_at: p.zoneEnteredAt,
+            zone_exited_at: p.zoneExitedAt,
+            last_zone_notification_at: p.lastZoneNotificationAt,
+            entered_zone_via_gap: Boolean(p.enteredZoneViaGap),
           },
           unrealizedPnlPct,
           threshold,
@@ -120,16 +106,13 @@ async function tick(): Promise<void> {
         // carries the price-source metadata + recomputed zone state. The local
         // marketValue / unrealizedPnl[Pct] above still feed the quotes mirror +
         // the zone check below.
-        const { error: upErr } = await supabase()
-          .from('positions')
-          .update({
-            price_source: 'finnhub',
-            last_price_update_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            ...zone.fields,
-          })
-          .eq('user_id', userId)
-          .eq('symbol', p.symbol);
+        const nowIso = new Date().toISOString();
+        let updateErr: string | null = null;
+        try {
+          await positionsTableModule.markFinnhubPriced(userId, p.symbol, nowIso, zone.fields);
+        } catch (e) {
+          updateErr = (e as Error).message;
+        }
         // Mirror this Finnhub price into the canonical `quotes` table
         // (Batch A1). IB is currently off (otherwise this poller is
         // skipping), so Finnhub IS the canonical right now → setCanonical
@@ -147,8 +130,8 @@ async function tick(): Promise<void> {
           });
         }
 
-        if (upErr) {
-          void notifyError(`finnhubPricePoller.update.${p.symbol}`, upErr.message);
+        if (updateErr) {
+          void notifyError(`finnhubPricePoller.update.${p.symbol}`, updateErr);
           continue;
         }
         if (zone.notify && unrealizedPnlPct != null) {

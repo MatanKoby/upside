@@ -14,6 +14,7 @@
 
 import { supabase } from './supabase.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
+import { positionsTableModule } from '../db/positionsTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -90,12 +91,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
 
   try {
     // --- Position + preferences ------------------------------------------
-    const { data: position } = await db
-      .from('positions')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('symbol', sym)
-      .maybeSingle();
+    const position = await positionsTableModule.getByUserAndSymbol(userId, sym).catch(() => null);
 
     const { data: prefs } = await db
       .from('user_preferences')
@@ -117,12 +113,12 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     if (isHeld) {
       const minMktValue = Number(prefs?.signal_min_market_value ?? 1000);
       // Price SSOT (Batch X5): market value = quotes.canonical_price × shares.
-      const heldConid = position.conid != null ? Number(position.conid) : null;
+      const heldConid = position?.conid != null ? Number(position.conid) : null;
       let heldPrice: number | null = null;
       if (heldConid != null && Number.isFinite(heldConid)) {
         heldPrice = await quotesTableModule.getCanonicalPrice(heldConid).catch(() => null);
       }
-      const mktValue = heldPrice != null ? (num(position.shares) ?? 0) * heldPrice : null;
+      const mktValue = heldPrice != null ? (num(position?.shares) ?? 0) * heldPrice : null;
       // Only skip when we can actually price it below the floor; proceed if unpriced.
       if (mktValue != null && mktValue < minMktValue) {
         console.log(`[signalEngine] ${sym} held value ${mktValue} < ${minMktValue} — skipping`);
@@ -132,7 +128,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
 
     // --- Resolve conid + company name ------------------------------------
     let conid: number | null = position?.conid != null ? Number(position.conid) : null;
-    let companyName: string | null = position?.company_name ?? null;
+    let companyName: string | null = position?.companyName ?? null;
     if (conid == null) {
       const results = await ibSecdefSearch(sym);
       const stk = results.find((r) => r.sections?.some((s) => s.secType === 'STK')) ?? results[0];
@@ -182,14 +178,14 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     if (live != null) currentPrice = live;
 
     // Held P&L% recomputed from the live price + avg cost (was positions.unrealized_pnl_pct).
-    const heldAvgCost = isHeld ? (num(position.avg_cost) ?? 0) : 0;
+    const heldAvgCost = isHeld ? (num(position?.avgCost) ?? 0) : 0;
     const heldPnlPct =
       isHeld && heldAvgCost > 0 && currentPrice != null ? (currentPrice / heldAvgCost - 1) * 100 : null;
 
     // --- IB history → feature pack (the LLM's grounding) -----------------
     const daily = await ibHistory(conid, '1y', '1d');
     const intraday = await ibHistory(conid, '1d', '5min');
-    const avgCost = isHeld ? num(position.avg_cost) : null;
+    const avgCost = isHeld ? num(position?.avgCost) : null;
     const dailyBars = toBars(daily);
     const featurePack = buildFeaturePack({
       daily: dailyBars,
@@ -229,13 +225,13 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
 
     // --- Contextual triggers (profit-taking zone) ------------------------
     const thresholdPct = Number(prefs?.profit_zone_threshold_pct ?? 2.0);
-    const zoneEnteredAt = (position as Record<string, unknown> | null)?.['zone_entered_at'];
+    const zoneEnteredAt = position?.zoneEnteredAt;
     const inZone = zoneEnteredAt != null;
     const inProfitTakingZone = inZone
       ? {
           thresholdPct,
           currentPnlPct: heldPnlPct ?? 0,
-          viaGap: Boolean((position as Record<string, unknown>)?.['entered_zone_via_gap']),
+          viaGap: Boolean(position?.enteredZoneViaGap),
         }
       : null;
 
@@ -246,8 +242,8 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       currentPrice,
       position: isHeld
         ? {
-            shares: num(position.shares) ?? 0,
-            avgCost: num(position.avg_cost) ?? 0,
+            shares: num(position?.shares) ?? 0,
+            avgCost: num(position?.avgCost) ?? 0,
             unrealizedPnlPct: heldPnlPct,
           }
         : null,
