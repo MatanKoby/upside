@@ -229,8 +229,20 @@ not a DAG in the queue:
   `status='done' AND action='eval_catalyst_stage1' AND payload->>'conid'=$c`
   rows that don't yet have a corresponding Stage-2 job for today, and
   enqueues Stage-2 jobs.
-- One cycle of producer latency between stages. Acceptable for nightly
-  work; trivially correct; no DAG complexity.
+- One **drain cycle** of latency between stages — trivially correct, no DAG
+  complexity.
+
+**Drain cadence vs. produce cadence (Batch X10.2).** The drain that advances a
+stage runs on the producer's *cycle*, so stage latency = drain-cycle length, not
+the natural enqueue cadence. For a nightly batch a single 24h tick that does
+enqueue + drain together is fine. For an **intraday-relevant** pipeline it is
+not: with one combined 24h tick, Stage-1→Stage-2→`trait_scores` takes 2-3 days.
+So split the loops — keep the slow **produce** loop (recompute candidates +
+enqueue, daily) but run a fast **advance** loop (drain done → enqueue next stage
+→ write the target table; ~minutes) so the pipeline flows same-session. The
+advance loop is DB-only (the rate-limited upstream calls stay in the gated
+workers), so a tight cadence is cheap. `catalystReversalProducer` is the
+reference (see `signals/screener-universe.md` → catalyst_reversal).
 
 For "fan-out then fan-in" patterns (rare here), a producer can wait
 multiple cycles for a set of jobs to complete before enqueueing the next
