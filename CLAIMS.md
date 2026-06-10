@@ -8,6 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
+### Batch ARCH-1 — TableModule persistence layer (reference slice)
+- Owner: claude
+- Started: 2026-06-10 06:05
+
 ## Known issues (deferred fixes)
 
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens/_design-system.md` → Screen 2 note.
