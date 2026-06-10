@@ -7,54 +7,32 @@
 // once ported. Feeds the signal_hit_rate_30d view. Spec:
 // spec/signals/dip-bounce-scorer.md → Forward-tracking.
 
-import { supabase } from '../services/supabase.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
+import { signalFiresTableModule, type RecentFireRow } from '../db/signalFiresTableModule.js';
+import { signalOutcomesTableModule, type OutcomeUpsert } from '../db/signalOutcomesTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { OUTCOME_OFFSETS } from '../config/dipBounceScorer.js';
 
 const CADENCE_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 120_000;
 const LONGEST_MS = 3 * 24 * 3600 * 1000; // +3d
-const CHUNK = 900;
 
-function num(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-interface FireRow { id: string; conid: number; priceAtFire: number | null; fireMs: number }
-
-async function loadRecentFires(): Promise<FireRow[]> {
+async function loadRecentFires(): Promise<RecentFireRow[]> {
   // A small buffer past +3d so a fire's last offset is still pickable on the
   // tick right after it elapses.
   const since = new Date(Date.now() - LONGEST_MS - 6 * 3600 * 1000).toISOString();
-  const { data, error } = await supabase()
-    .from('signal_fires')
-    .select('id, conid, price_at_fire, fire_ts')
-    .gte('fire_ts', since);
-  if (error) {
-    void notifyError('signalOutcomesCron.loadFires', error.message);
+  try {
+    return await signalFiresTableModule.getRecentSince(since);
+  } catch (e) {
+    void notifyError('signalOutcomesCron.loadFires', (e as Error).message);
     return [];
   }
-  return (data ?? []).map((r) => ({
-    id: String((r as { id: unknown }).id),
-    conid: num((r as { conid: unknown }).conid) ?? 0,
-    priceAtFire: num((r as { price_at_fire: unknown }).price_at_fire),
-    fireMs: new Date((r as { fire_ts: string }).fire_ts).getTime(),
-  }));
 }
 
 async function loadExistingOutcomes(fireIds: string[]): Promise<Set<string>> {
   const out = new Set<string>(); // `${fireId}:${offset}`
-  for (let i = 0; i < fireIds.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('signal_outcomes')
-      .select('fire_id, t_offset')
-      .in('fire_id', fireIds.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      out.add(`${(r as { fire_id: string }).fire_id}:${(r as { t_offset: string }).t_offset}`);
-    }
-  }
+  const pairs = await signalOutcomesTableModule.getExistingOffsets(fireIds).catch(() => []);
+  for (const p of pairs) out.add(`${p.fireId}:${p.tOffset}`);
   return out;
 }
 
@@ -69,7 +47,7 @@ async function tick(): Promise<void> {
   const now = Date.now();
 
   // Which (fire, offset) pairs are due + unrecorded?
-  interface Due { fire: FireRow; offset: string }
+  interface Due { fire: RecentFireRow; offset: string }
   const due: Due[] = [];
   for (const fire of fires) {
     for (const off of OUTCOME_OFFSETS) {
@@ -81,7 +59,7 @@ async function tick(): Promise<void> {
   if (due.length === 0) return;
 
   const prices = await loadPrices(due.map((d) => d.fire.conid));
-  const rows: Array<Record<string, unknown>> = [];
+  const rows: OutcomeUpsert[] = [];
   for (const d of due) {
     const price = prices.get(d.fire.conid);
     if (price == null) continue; // no quote → try again next tick
@@ -90,20 +68,19 @@ async function tick(): Promise<void> {
         ? ((price - d.fire.priceAtFire) / d.fire.priceAtFire) * 100
         : null;
     rows.push({
-      fire_id: d.fire.id,
-      t_offset: d.offset,
-      snapshot_ts: new Date(now).toISOString(),
+      fireId: d.fire.id,
+      tOffset: d.offset,
+      snapshotTs: new Date(now).toISOString(),
       price,
-      return_pct: returnPct,
+      returnPct,
     });
   }
   if (rows.length === 0) return;
 
-  const { error } = await supabase()
-    .from('signal_outcomes')
-    .upsert(rows, { onConflict: 'fire_id,t_offset' });
-  if (error) {
-    void notifyError('signalOutcomesCron.write', error.message);
+  try {
+    await signalOutcomesTableModule.upsertOutcomes(rows);
+  } catch (e) {
+    void notifyError('signalOutcomesCron.write', (e as Error).message);
     return;
   }
   console.log(`[signalOutcomesCron] wrote ${rows.length} outcome snapshots`);

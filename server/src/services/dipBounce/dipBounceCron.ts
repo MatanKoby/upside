@@ -11,7 +11,6 @@
 // `signal_fires` row + a Discord ping with a per-(conid, kind) cooldown read
 // off the latest fire. Spec: spec/signals/dip-bounce-scorer.md.
 
-import { supabase } from '../supabase.js';
 import { notifyError, notifyIntradayDipBounce, notifySwingDipBounce } from '../notify.js';
 import { marketPeriodAt, etDateString } from '../../utils/marketHours.js';
 import { buildFeaturePack, type FeaturePack } from '../technicals.js';
@@ -23,6 +22,7 @@ import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
 import { bandStateTableModule } from '../../db/bandStateTableModule.js';
 import { intradayStatsTableModule } from '../../db/intradayStatsTableModule.js';
 import { quotesTableModule } from '../../db/quotesTableModule.js';
+import { signalFiresTableModule } from '../../db/signalFiresTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,
@@ -30,14 +30,8 @@ import {
 
 const CADENCE_MS = 60_000;
 const FIRST_RUN_DELAY_MS = 90_000;
-const CHUNK = 900;
 
 type Kind = 'intraday_dip_bounce' | 'swing_dip_bounce';
-
-function num(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function hasConfluence(reasoning: string | null | undefined): boolean {
   return reasoning != null && /confluence/i.test(reasoning);
@@ -139,22 +133,11 @@ async function loadZones(conids: number[]): Promise<Map<number, Partial<Record<'
 async function loadLastFires(conids: number[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('signal_fires')
-      .select('conid, signal_kind, fire_ts')
-      .in('conid', conids.slice(i, i + CHUNK))
-      .in('signal_kind', ['intraday_dip_bounce', 'swing_dip_bounce'])
-      .gte('fire_ts', since)
-      .order('fire_ts', { ascending: false });
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      const kind = (r as { signal_kind: string }).signal_kind;
-      const ts = new Date((r as { fire_ts: string }).fire_ts).getTime();
-      if (c == null || !Number.isFinite(ts)) continue;
-      const key = `${c}:${kind}`;
-      if (!out.has(key)) out.set(key, ts); // first = newest (ordered desc)
-    }
+  const kinds: Kind[] = ['intraday_dip_bounce', 'swing_dip_bounce'];
+  const fires = await signalFiresTableModule.getRecentByKinds(conids, kinds, since).catch(() => []);
+  for (const f of fires) {
+    const key = `${f.conid}:${f.signalKind}`;
+    if (!out.has(key)) out.set(key, f.fireMs); // first = newest (ordered desc)
   }
   return out;
 }
@@ -172,15 +155,18 @@ async function recordFire(args: {
   horizon: 'intraday' | 'swing';
   price: number | null;
 }): Promise<void> {
-  const { error } = await supabase().from('signal_fires').insert({
-    conid: args.conid,
-    signal_kind: args.kind,
-    score: args.score,
-    components: args.components,
-    horizon: args.horizon,
-    price_at_fire: args.price,
-  });
-  if (error) void notifyError(`dipBounceCron.recordFire.${args.conid}`, error.message);
+  try {
+    await signalFiresTableModule.insertFire({
+      conid: args.conid,
+      signalKind: args.kind,
+      score: args.score,
+      components: args.components,
+      horizon: args.horizon,
+      priceAtFire: args.price,
+    });
+  } catch (e) {
+    void notifyError(`dipBounceCron.recordFire.${args.conid}`, (e as Error).message);
+  }
 }
 
 function structureToTrend(s: FeaturePack['trend']['structure']): string | null {
