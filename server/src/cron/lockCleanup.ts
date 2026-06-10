@@ -6,7 +6,7 @@
 // deletes rows older than the 5-minute TTL (comfortably exceeds worst-case LLM
 // response time; see signal-model.md → Concurrency lock).
 
-import { supabase } from '../services/supabase.js';
+import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
 import { notifyError } from '../services/notify.js';
 
 const STALE_LOCK_SECONDS = 5 * 60;
@@ -16,8 +16,11 @@ let timer: NodeJS.Timeout | null = null;
 
 async function cleanupStaleLocks(): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_LOCK_SECONDS * 1000).toISOString();
-  const { error } = await supabase().from('analysis_locks').delete().lt('started_at', cutoff);
-  if (error) void notifyError('lockCleanup.cleanup', error.message);
+  try {
+    await analysisLocksTableModule.deleteStaleBefore(cutoff);
+  } catch (e) {
+    void notifyError('lockCleanup.cleanup', (e as Error).message);
+  }
 }
 
 export function startLockCleanup(): void {

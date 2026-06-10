@@ -151,9 +151,23 @@ read), `watchlist_markers` (the CRUD route's create/update/delete/ownership + ma
 enabled-by-conid check + stampFired). The IB-reconciliation, transition/cooldown, and payload-
 validation policy stay in the services/route; CRUD writes still return the raw snake_case row (the FE
 wire contract).
-**Next: `analyses` / `analysis_locks`** — the last of the **multi-writer half**. Each has several
-writers, so the **one-writer-owner** call is the real work: the module becomes the sole writer and the
-producers/pollers call its named methods.
+✅ `analyses` / `analysis_locks` — the final pair, two modules. `analyses` (the /analyze re-analyze
+soft-block read + signalEngine.persistAnalysis's sole insert returning analysis_id) and
+`analysis_locks` (the route's running-lock check + insert, the engine's finally-release, the cleanup
+cron's stale sweep). The expiry/supersede + lock-lifecycle policy stays in the route/engine/cron.
+
+**Phase 1 (the 14-table rollout) is complete** — every table in the rollout order now reads/writes
+only through its TableModule, grep-enforced, with the 204-test suite green at every slice. The
+single-writer half (`news_sentiment` → `daily_bars`) plus the multi-writer half (`universe`,
+`quotes`, `positions`, `signal_fires`/`signal_outcomes`, `risk_flags`, `watchlist_*`,
+`analyses`/`analysis_locks`) are all behind named methods, one writer-owner each.
+
+**Out of the original ARCH-3 scope (candidates for a follow-up):** a handful of tables were never in
+the rollout list and still have direct `from(...)` call-sites — `signals` (signalEngine supersede +
+insert), `contracts`, `user_preferences`, `app_config`, `external_api_metrics`, `access_attempts`,
+and the two `screener_jobs` crons (`jobsRetention`/`jobsReaper`) outside the `queue.ts` prototype.
+Folding these in would finish the "every table behind a module" rule, but they're outside the
+14-table ARCH-3 commitment.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).

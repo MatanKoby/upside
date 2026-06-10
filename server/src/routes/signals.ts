@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import { supabase } from '../services/supabase.js';
+import { analysesTableModule } from '../db/analysesTableModule.js';
+import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { runAnalysis } from '../services/signalEngine.js';
 import { getLlmCallsToday } from '../services/redis.js';
@@ -27,17 +28,9 @@ router.post('/analyze', async (req: Request, res: Response) => {
   // 429 unless the client opts in with { force: true }.
   if (!force) {
     const since = new Date(Date.now() - RECENT_ANALYSIS_MS).toISOString();
-    const recent = await supabase()
-      .from('analyses')
-      .select('analyzed_at')
-      .eq('user_id', userId)
-      .eq('symbol', sym)
-      .gte('analyzed_at', since)
-      .order('analyzed_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (recent.data) {
-      res.status(429).json({ reason: 'recent_analysis', lastAnalyzedAt: recent.data.analyzed_at });
+    const lastAnalyzedAt = await analysesTableModule.getRecentAnalyzedAt(userId, sym, since).catch(() => null);
+    if (lastAnalyzedAt != null) {
+      res.status(429).json({ reason: 'recent_analysis', lastAnalyzedAt });
       return;
     }
   }
@@ -50,28 +43,19 @@ router.post('/analyze', async (req: Request, res: Response) => {
   }
 
   // Concurrency: one running lock per (user, symbol).
-  const existing = await supabase()
-    .from('analysis_locks')
-    .select('id')
-    .eq('symbol', sym)
-    .eq('user_id', userId)
-    .eq('status', 'running')
-    .maybeSingle();
-  if (existing.data) {
-    res.status(409).json({ error: 'analysis_in_progress', lockId: existing.data.id });
+  const runningLockId = await analysisLocksTableModule.getRunningLockId(userId, sym).catch(() => null);
+  if (runningLockId != null) {
+    res.status(409).json({ error: 'analysis_in_progress', lockId: runningLockId });
     return;
   }
 
-  const lockInsert = await supabase()
-    .from('analysis_locks')
-    .insert({ symbol: sym, user_id: userId, status: 'running' })
-    .select('id')
-    .single();
-  if (lockInsert.error || !lockInsert.data) {
-    res.status(500).json({ error: lockInsert.error?.message ?? 'could not create lock' });
+  let lockId: string;
+  try {
+    lockId = await analysisLocksTableModule.insertRunningLock(userId, sym);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
     return;
   }
-  const lockId = lockInsert.data.id;
 
   // Fire-and-forget: the engine releases the lock in its own `finally` and the
   // FE detects completion via the `signals` / `analysis_locks` Realtime feeds.

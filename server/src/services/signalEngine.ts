@@ -15,6 +15,8 @@
 import { supabase } from './supabase.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
 import { positionsTableModule } from '../db/positionsTableModule.js';
+import { analysesTableModule } from '../db/analysesTableModule.js';
+import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -296,7 +298,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
   } catch (err) {
     void notifyError('signalEngine.run', `${sym}: ${(err as Error).message}`, err);
   } finally {
-    await supabase().from('analysis_locks').delete().eq('id', lockId);
+    await analysisLocksTableModule.deleteById(lockId).catch(() => undefined);
   }
 }
 
@@ -342,24 +344,21 @@ async function persistAnalysis(
       ? endOfRegularSessionEtIso(new Date(analyzedAt))
       : isoPlusDays(analyzedAt, windowDays(sig.horizonWindow));
 
-  const { data: analysisRow, error: aErr } = await db
-    .from('analyses')
-    .insert({
-      user_id: userId,
+  let analysisId: string;
+  try {
+    analysisId = await analysesTableModule.insertAnalysis({
+      userId,
       symbol: sym,
       conid,
-      indicator_snapshot: { values: featurePack, readings: output.indicatorAnalysis },
+      indicatorSnapshot: { values: featurePack, readings: output.indicatorAnalysis },
       reasoning: output.reasoning,
-      analyzed_at: analyzedAt,
-      expires_at: expiresAt,
-    })
-    .select('analysis_id')
-    .single();
-  if (aErr || !analysisRow) {
-    void notifyError('signalEngine.persist', `insert analyses failed for ${sym}: ${aErr?.message}`);
+      analyzedAt,
+      expiresAt,
+    });
+  } catch (e) {
+    void notifyError('signalEngine.persist', `insert analyses failed for ${sym}: ${(e as Error).message}`);
     return;
   }
-  const analysisId = analysisRow.analysis_id;
 
   // Whole-analysis supersede: every prior non-superseded signal for this
   // (user, symbol) points at the new analysis. Runs before inserting the new
