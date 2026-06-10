@@ -8,10 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-3 — remaining TableModules rollout (curated_list → analyses)
-- Owner: claude
-- Started: 2026-06-10 09:30
-- **Scope:** continue Phase 1 of `docs/arch/target-architecture.md` — move every remaining table behind its TableModule, in rollout order: `curated_list → entry_zones → band_state → intraday_stats → daily_bars → universe → quotes → positions → signal_fires/outcomes → risk_flags → watchlist_* → analyses/analysis_locks`. One table per commit (`batch-ARCH-3: <table> TableModule`), each grep-verified (no `from('<table>')` outside its module) + typecheck + tests green, no behavior change. The multi-writer tables (`universe`, `quotes`, `positions`, `signal_fires/outcomes`, `risk_flags`, `analyses`) each carry a writer-owner decision surfaced when reached. ARCH-1 (`news_sentiment`) + ARCH-2 (`trait_scores`) are the reference pattern.
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -19,6 +16,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-3 — remaining TableModules rollout (curated_list → analyses) (2026-06-10)
+- Owner: claude
+- Started: 2026-06-10 09:30 · Finished: 2026-06-10 19:05
+- Commits: curated_list/entry_zones/band_state/intraday_stats/daily_bars (single-writer half) · `6625e5c` universe · `4550e8c` quotes · `348f6aa` positions · `081312b` signal_fires+signal_outcomes · `29d215a` risk_flags · `c2bb4ec` watchlist_lists+items+markers · `af608a4` analyses+analysis_locks
+- **Why:** finish Phase 1 of `docs/arch/target-architecture.md` — every table in the rollout order behind its own TableModule (one writer-owner; the only place that table is read/written), continuing the ARCH-1 (`news_sentiment`) + ARCH-2 (`trait_scores`) reference pattern. **No behavior change** — same SQL/rows/conflict keys, relocated behind intention-revealing methods; business policy stays in the services/crons, only I/O + snake↔camel mapping moved.
+- **What shipped (the 14-table rollout, one commit per table/slice):**
+  - **Single-writer half** — `curated_list`, `entry_zones`, `band_state`, `intraday_stats`, `daily_bars`: each a lift behind a named-method module.
+  - **Multi-writer half** (where the one-writer-owner rule does the work):
+    - **`universe`** (6 writers / 10 files) — bulk sweep + stale retention + real_conid stamp + weekly cap + daily quote/volume + auto-promote + the `refresh_universe_avg_volume` RPC; readers take a uniform `UniverseRow`.
+    - **`quotes`** (the price-SSOT hub) — `upsertLiveQuote` (IB/Finnhub/watchlist pollers funnel through), daily-seed bulk upsert, entry-zone sparkline; 6 read shapes. Price *policy* (canonical source, prev-canonical probe, freshness gates) stays in services.
+    - **`positions`** (the holdings hub, 11 files) — IB poller full sync (`upsertHoldings` + `deleteOrphans` + `deleteAllForUser`), Finnhub `markFinnhubPriced`, `clearGapBadges`, + 8 read slices; the module owns the X5 write-column projection.
+    - **`signal_fires` + `signal_outcomes`** (forward-tracking pair) — `insertFire`/`getRecentByKinds`/`getRecentSince` + `getExistingOffsets`/`upsertOutcomes`; dedup-to-newest + due math stay in the crons.
+    - **`risk_flags`** — `getPrevRow`/`deleteRow`/`upsertRow` behind the one engine that already owned it.
+    - **`watchlist_lists` + `watchlist_items` + `watchlist_markers`** (the trio) — sync insert/meta/active + items upsert/orphan-sweep + the marker CRUD/check; CRUD writes still return the raw snake_case row (FE wire contract).
+    - **`analyses` + `analysis_locks`** — re-analyze soft-block + the sole persist insert; lock check/insert/finally-release/stale-sweep.
+- **Verification:** per slice — grep gate (no `from('<table>')` outside its module), server typecheck clean, **204/204** tests green. No migrations, no env/Discord changes. Every slice pushed to `dev` immediately (Vercel auto-deploy).
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Behaviorally identical — every cron/route/producer writes and reads the same rows as before.
+- **Out of ARCH-3 scope (noted in the arch doc as a follow-up):** tables never in the rollout list still have direct `from(...)` call-sites — `signals` (signalEngine supersede + insert), `contracts`, `user_preferences`, `app_config`, `external_api_metrics`, `access_attempts`, and the two `screener_jobs` crons (`jobsRetention`/`jobsReaper`) outside the `queue.ts` prototype. Folding these in would complete the "every table behind a module" rule but is a separate batch. Then the eventual mechanical `db/ → adapters/supabase/` folder move (Phase 1 → final layout).
 
 ### Batch ARCH-2 — trait_scores TableModule (3-writer showcase) (2026-06-10)
 - Owner: claude
