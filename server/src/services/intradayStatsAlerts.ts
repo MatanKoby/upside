@@ -16,13 +16,7 @@
 
 import { supabase } from './supabase.js';
 import { notifyIntradayStatsHit, notifyError } from './notify.js';
-
-interface StatsRow {
-  conid: number | string;
-  intraday_low_pct_p50: number | string | null;
-  intraday_low_pct_p75: number | string | null;
-  last_fired_at: string | null;
-}
+import { intradayStatsTableModule, type IntradayAlertStats } from '../db/intradayStatsTableModule.js';
 
 const COOLDOWN_HOURS = 24;
 
@@ -46,19 +40,16 @@ export async function checkIntradayStatsForConid(
   if (prev == null || !Number.isFinite(curr)) return;
   if (prev === curr) return;
 
-  const { data, error } = await supabase()
-    .from('intraday_stats')
-    .select('conid, intraday_low_pct_p50, intraday_low_pct_p75, last_fired_at')
-    .eq('conid', conid)
-    .maybeSingle();
-  if (error) {
-    void notifyError('intradayStatsAlerts.query', `query failed for conid ${conid}: ${error.message}`);
+  let stats: IntradayAlertStats | null;
+  try {
+    stats = await intradayStatsTableModule.getByConid(conid);
+  } catch (e) {
+    void notifyError('intradayStatsAlerts.query', `query failed for conid ${conid}: ${(e as Error).message}`);
     return;
   }
-  if (!data) return;
-  const stats = data as StatsRow;
-  const p50 = num(stats.intraday_low_pct_p50);
-  const p75 = num(stats.intraday_low_pct_p75);
+  if (!stats) return;
+  const p50 = stats.p50;
+  const p75 = stats.p75;
   if (p50 == null || p75 == null) return;
 
   // Need today's open to compute the band in price space.
@@ -78,7 +69,7 @@ export async function checkIntradayStatsForConid(
 
   // Cross-into-band: prev was above band_top, curr is at/below it.
   if (!(prev > bandTop && curr <= bandTop)) return;
-  if (!cooldownPassed(stats.last_fired_at)) return;
+  if (!cooldownPassed(stats.lastFiredAt)) return;
 
   try {
     await notifyIntradayStatsHit({
@@ -93,11 +84,9 @@ export async function checkIntradayStatsForConid(
   } catch (e) {
     void notifyError('intradayStatsAlerts.notify', `notify failed for ${symbol}: ${(e as Error).message}`, e);
   }
-  const upd = await supabase()
-    .from('intraday_stats')
-    .update({ last_fired_at: new Date().toISOString() })
-    .eq('conid', conid);
-  if (upd.error) {
-    void notifyError('intradayStatsAlerts.update', `last_fired_at update failed: ${upd.error.message}`);
+  try {
+    await intradayStatsTableModule.stampFired(conid);
+  } catch (e) {
+    void notifyError('intradayStatsAlerts.update', `last_fired_at update failed: ${(e as Error).message}`);
   }
 }

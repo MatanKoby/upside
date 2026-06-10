@@ -21,6 +21,7 @@ import { computeIntradayDipBounceScore } from './intradayScorer.js';
 import { computeSwingDipBounceScore } from './swingScorer.js';
 import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
 import { bandStateTableModule } from '../../db/bandStateTableModule.js';
+import { intradayStatsTableModule } from '../../db/intradayStatsTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,
@@ -112,15 +113,8 @@ async function loadQuotes(conids: number[]): Promise<Map<number, QuoteInput>> {
 
 async function loadStats(conids: number[]): Promise<Map<number, StatsInput>> {
   const out = new Map<number, StatsInput>();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('intraday_stats')
-      .select('conid, intraday_low_pct_p50, intraday_low_pct_p75')
-      .in('conid', conids.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      if (c != null) out.set(c, { p50: num((r as { intraday_low_pct_p50: unknown }).intraday_low_pct_p50), p75: num((r as { intraday_low_pct_p75: unknown }).intraday_low_pct_p75) });
-    }
+  for (const r of await intradayStatsTableModule.getByConids(conids)) {
+    out.set(r.conid, { p50: r.p50, p75: r.p75 });
   }
   return out;
 }

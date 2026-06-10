@@ -14,6 +14,7 @@
 // first tick has had a chance to populate fresh data on day-of-cron-deploy.
 
 import { supabase } from '../services/supabase.js';
+import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { traitScoresTableModule, type TraitScore } from '../db/traitScoresTableModule.js';
 import {
@@ -59,21 +60,18 @@ async function loadJoined(): Promise<UniverseStatsJoin[]> {
   if (universe.length === 0) return [];
 
   const conids = universe.map((r) => r.real_conid);
-  // Supabase 'in' filter caps at ~1000 values; chunk if needed.
-  const statsRows: Array<{ conid: number; intraday_low_pct_p50: number | null; intraday_low_pct_p75: number | null; sample_size: number }> = [];
-  for (let i = 0; i < conids.length; i += 900) {
-    const chunk = conids.slice(i, i + 900);
-    const { data, error } = await supabase()
-      .from('intraday_stats')
-      .select('conid, intraday_low_pct_p50, intraday_low_pct_p75, sample_size')
-      .in('conid', chunk);
-    if (error) {
-      void notifyError('intradayRangeTraderProducer.loadStats', error.message);
-      continue;
+  const statsByConid = new Map<number, IntradayStatsRow>();
+  try {
+    for (const s of await intradayStatsTableModule.getByConids(conids)) {
+      statsByConid.set(s.conid, {
+        intraday_low_pct_p50: s.p50,
+        intraday_low_pct_p75: s.p75,
+        sample_size: s.sampleSize,
+      });
     }
-    statsRows.push(...(data ?? []));
+  } catch (e) {
+    void notifyError('intradayRangeTraderProducer.loadStats', (e as Error).message);
   }
-  const statsByConid = new Map(statsRows.map((s) => [s.conid, s]));
 
   // today_open for the band-low projection lives on quotes (the watchlist
   // tracking surface). Universe-only tickers have no quote row; today_open

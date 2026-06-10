@@ -23,7 +23,6 @@
 // Spec: spec/signals/band-engine.md.
 
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
-import { supabase } from '../services/supabase.js';
 import {
   notifyError,
   notifyBandTouchLow,
@@ -42,6 +41,7 @@ import {
 } from '../services/bandEngine/walkingState.js';
 import type { RawIbHistoryBar } from '../types/index.js';
 import { bandStateTableModule } from '../db/bandStateTableModule.js';
+import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 
 const CADENCE_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 7 * 60_000;       // 7 min — lands after intradayStatsCron's first tick
@@ -113,19 +113,12 @@ function aggregateToDailyBars(bars: RawIbHistoryBar[]): SessionBar[] {
 
 async function loadIntradayStatsFor(conids: number[]): Promise<Map<number, { p50: number | null }>> {
   const out = new Map<number, { p50: number | null }>();
-  for (let i = 0; i < conids.length; i += 900) {
-    const chunk = conids.slice(i, i + 900);
-    const { data, error } = await supabase()
-      .from('intraday_stats')
-      .select('conid, intraday_low_pct_p50')
-      .in('conid', chunk);
-    if (error) {
-      void notifyError('bandEngineCron.loadStats', error.message);
-      continue;
+  try {
+    for (const r of await intradayStatsTableModule.getByConids(conids)) {
+      out.set(r.conid, { p50: r.p50 });
     }
-    for (const r of (data ?? []) as Array<{ conid: number; intraday_low_pct_p50: number | string | null }>) {
-      out.set(r.conid, { p50: num(r.intraday_low_pct_p50) });
-    }
+  } catch (e) {
+    void notifyError('bandEngineCron.loadStats', (e as Error).message);
   }
   return out;
 }

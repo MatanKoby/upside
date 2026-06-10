@@ -14,6 +14,7 @@ import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeIntradayStats, type IntradayBar } from '../services/intradayStats.js';
 import { supabase } from '../services/supabase.js';
+import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import type { RawIbHistory } from '../types/index.js';
 
@@ -99,15 +100,7 @@ async function tick(): Promise<void> {
         continue;
       }
       const stats = computeIntradayStats({ bars, lookbackDays: LOOKBACK_DAYS });
-      await supabase().from('intraday_stats').upsert(
-        {
-          conid,
-          symbol,
-          ...stats,
-          computed_at: new Date().toISOString(),
-        },
-        { onConflict: 'conid' },
-      );
+      await intradayStatsTableModule.upsert(conid, symbol, stats);
       okCount++;
     } catch (e) {
       failCount++;
