@@ -121,8 +121,14 @@ daily_bars → universe → quotes → positions → signal_fires/outcomes → r
 watchlist_* → analyses/analysis_locks`.
 (`screener_jobs` is already encapsulated in `services/jobs/queue.ts` — it's the prototype TableModule.)
 
-**Progress:** ✅ `news_sentiment` (ARCH-1) · ✅ `trait_scores` (ARCH-2). **Next: `curated_list`** (ARCH-3) —
-already partially surfaced: `curatedList/asof.ts` + `curatedListCron` read it directly today.
+**Progress (ARCH-3 = the remaining-tables rollout, one commit per table):**
+✅ `news_sentiment` (ARCH-1) · ✅ `trait_scores` (ARCH-2) · ✅ `curated_list` · ✅ `entry_zones` ·
+✅ `band_state` · ✅ `intraday_stats` · ✅ `daily_bars`. **That clears the single-writer half.**
+**Next: `universe`** — then the rest of the **multi-writer half** (`quotes`, `positions`,
+`signal_fires/outcomes`, `risk_flags`, `watchlist_*`, `analyses/analysis_locks`). Each of these has
+several writers, so the **one-writer-owner** call is the real work: the module becomes the sole writer
+and the producers/pollers call its named methods (e.g. `quotesTableModule.upsertQuote(...)` for the 5
+quote writers). ~15–16 call-sites across ~10 files apiece.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).
