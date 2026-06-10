@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Upside — Server Architecture (Arch batch planning)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0 0 6rem; color: #1a1a1a; background: #f7f7f8;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    background: #111827; color: #f9fafb; padding: 0.9rem 1.4rem;
+    box-shadow: 0 1px 6px rgba(0,0,0,.25);
+  }
+  header h1 { margin: 0; font-size: 1.05rem; }
+  header p  { margin: .25rem 0 0; font-size: .8rem; color: #9ca3af; }
+  nav { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .55rem; }
+  nav a {
+    font-size: .76rem; text-decoration: none; color: #c7d2fe;
+    border: 1px solid #374151; border-radius: 999px; padding: .15rem .6rem;
+  }
+  nav a:hover { background: #1f2937; }
+  section { max-width: 1500px; margin: 1.6rem auto; padding: 0 1.4rem; }
+  section h2 { font-size: 1.1rem; border-bottom: 2px solid #e5e7eb; padding-bottom: .3rem; }
+  .lede { color: #4b5563; font-size: .88rem; max-width: 70ch; }
+  .diagram {
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    padding: 1rem; overflow: auto; box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .legend { font-size: .78rem; color: #6b7280; margin: .5rem 0 0; }
+  .obs { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: .4rem 1.2rem; }
+  .obs li { margin: .4rem 0; }
+  code { background: #eef2ff; padding: .05rem .3rem; border-radius: 4px; font-size: .85em; }
+  .pill { display:inline-block; font-size:.7rem; padding:.05rem .45rem; border-radius:999px; background:#e0e7ff; color:#3730a3; margin-left:.3rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Upside — Server Architecture</h1>
+  <p>Generated for the Arch batch (SOLID/DRY planning) · source: <code>server/src/**</code> + <code>spec/data/consumers.md</code> · 2026-06-10</p>
+  <nav>
+    <a href="#overview">1 · System overview</a>
+    <a href="#queue">2 · Job-queue lifecycle</a>
+    <a href="#catalog">3 · Cron catalog &amp; cadences</a>
+    <a href="#price">4 · Price SSOT</a>
+    <a href="#observations">DRY/SOLID candidates</a>
+  </nav>
+</header>
+
+<!-- ============================================================ -->
+<section id="overview">
+  <h2>1 · System overview — boot &rarr; triggers &rarr; queue/direct &rarr; tables &rarr; consumers</h2>
+  <p class="lede">
+    Everything is started by <code>index.ts</code> at <code>app.listen()</code>. There is no external scheduler —
+    each cron is a self-rescheduling <code>setTimeout</code> loop inside the Node process. Work reaches storage by
+    one of three paths: <b>price pollers</b> (write <code>quotes</code> directly), <b>producer crons</b> (enqueue into
+    the <code>screener_jobs</code> queue, drained by worker pools), or <b>direct-compute crons</b> (compute and write a
+    table inline). API routes + client hooks read the resulting tables.
+  </p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  boot(["index.ts — app.listen()<br/>starts ~28 timers"]):::boot
+
+  subgraph POLL["Price pollers (poll loops)"]
+    direction TB
+    ibp["ibPricePoller<br/>10s RTH / 60s ext"]
+    fhp["finnhubPricePoller<br/>60s · IB-down fallback"]
+    wqp["watchlistQuotePoller<br/>60s"]
+  end
+
+  subgraph PROD["Producer crons (enqueue)"]
+    direction TB
+    conid["conidResolutionProducer"]
+    uqp["universeQuoteProducer<br/>(yahoo fallback)"]
+    cat["catalystReversalProducer<br/>stage1 → stage2"]
+    ped["postEarningsDriftProducer"]
+  end
+
+  q[("screener_jobs<br/>Postgres queue")]:::queue
+
+  subgraph WORK["Worker pools (consumers)"]
+    direction TB
+    wib["ib pool<br/>resolve_conid · catalyst1/2 · ped"]
+    wfh["finnhub pool<br/>fallback_yahoo_quote"]
+    wcmp["compute pool<br/>noop only ⚠"]
+  end
+
+  subgraph DIRECT["Direct-compute / write crons"]
+    direction TB
+    uni["universeCron 24h"]
+    mcap["marketCapRefreshCron 7d"]
+    istat["intradayStatsCron 24h"]
+    irt["intradayRangeTraderProducer 24h<br/>(compute, no queue)"]
+    band["bandEngineCron 5m"]
+    ez["entryZonesCron 15m"]
+    cur["curatedListCron 12h"]
+    dip["dipBounceCron 60s"]
+    sout["signalOutcomesCron 5m"]
+    risk["riskFlagsCron 1h"]
+    news["newsSentimentCron 12h"]
+  end
+
+  subgraph TABLES["Supabase tables (state)"]
+    direction TB
+    quotes[("quotes · price SSOT")]:::tbl
+    universe[("universe")]:::tbl
+    traits[("trait_scores")]:::tbl
+    istats[("intraday_stats")]:::tbl
+    bands[("band_state")]:::tbl
+    zones[("entry_zones")]:::tbl
+    curated[("curated_list")]:::tbl
+    fires[("signal_fires")]:::tbl
+    outcomes[("signal_outcomes")]:::tbl
+    riskf[("risk_flags")]:::tbl
+    newst[("news_sentiment")]:::tbl
+    dbars[("daily_bars")]:::tbl
+    positions[("positions")]:::tbl
+  end
+
+  subgraph CONSUME["Consumers"]
+    direction TB
+    routes["Express routes<br/>portfolio · marketdata · signals · watchlists · user · config"]
+    client["Client hooks/pages<br/>usePositions · useVirtualList · useWatchlistData · …"]
+  end
+
+  boot --> POLL & PROD & DIRECT
+
+  %% pollers
+  ibp --> quotes
+  ibp --> positions
+  fhp --> quotes
+  wqp --> quotes
+
+  %% producer → queue → workers
+  conid -->|resolve_conid| q
+  uqp -->|fallback_yahoo_quote| q
+  cat -->|"catalyst stage1/2"| q
+  ped -->|eval_post_earnings_drift| q
+  q --> wib & wfh & wcmp
+  wib --> universe
+  wib --> traits
+  wfh --> quotes
+  %% producers also drain results back (advance loop)
+  q -. "drainDone / drainFailed" .-> PROD
+
+  %% direct crons → tables
+  uni --> universe
+  mcap --> universe
+  istat --> istats
+  irt --> traits
+  band --> bands
+  ez --> zones
+  cur --> curated
+  dip --> fires
+  sout --> outcomes
+  risk --> riskf
+  news --> newst
+  uqp --> dbars
+
+  %% consumers
+  TABLES --> routes
+  TABLES --> client
+
+  classDef boot fill:#111827,color:#fff,stroke:#111827;
+  classDef queue fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#7c2d12;
+  classDef tbl fill:#ecfdf5,stroke:#059669,color:#064e3b;
+</pre>
+  </div>
+  <p class="legend">Dashed edge = producers poll the queue back for finished work in their <em>advance</em> loop (drainDone/drainFailed). The <b>compute</b> worker pool currently has no real action registered — only the <code>noop</code> smoke-test handlers.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="queue">
+  <h2>2 · Job-queue lifecycle — producer / worker / reaper</h2>
+  <p class="lede">
+    The async queue (<code>screener_jobs</code>) decouples rate-limited / intermittently-available upstreams (IB, Finnhub)
+    from the crons that need them. <b>Producers own retry policy &amp; dedup; workers are pure executors.</b> A producer runs two
+    loops: a slow <em>produce</em> loop (enqueue deduplicated work) and a fast <em>advance</em> loop (drain finished rows, apply retry/finalize).
+  </p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  subgraph P["PRODUCER cron"]
+    direction TB
+    prod1["produce loop (slow, e.g. 24h)<br/>build candidates"]
+    enq["enqueue(jobKey, action, pool)<br/>ON CONFLICT DO NOTHING<br/>→ created | deduped"]
+    adv["advance loop (fast, ~2m)"]
+    dd["drainDone(action)"]
+    df["drainFailed(action)"]
+    pol["retry policy:<br/>markRetry (re-queue) · finalizeFailure (give up + notify)"]
+    prod1 --> enq
+    adv --> dd
+    adv --> df
+    df --> pol
+  end
+
+  enq --> Q
+  Q[("screener_jobs<br/>status: queued → claimed → done|failed<br/>partial-unique on job_key (active rows)")]:::queue
+
+  subgraph W["WORKER (per pool: ib · finnhub · compute)"]
+    direction TB
+    tick["tick loop (setTimeout, idle 5s / 0 when busy)"]
+    pg{"poolGateOk?<br/>(ib: authenticated &amp; connected)"}
+    claim["claimNext()<br/>SELECT FOR UPDATE SKIP LOCKED<br/>+ lease (300s)"]
+    gate{"per-action gate ready?<br/>(e.g. requiresRthOpen)"}
+    exec["handler(payload) → writes target table"]
+    done["markDone (+result)"]
+    fail["markFailed (attempts++)"]
+    defer["deferJob (reschedule,<br/>attempts NOT ++)"]
+    circ["circuit breaker:<br/>≥10 fails / 5m → notifyCritical"]
+    tick --> pg
+    pg -->|open| claim
+    pg -->|closed| tick
+    claim -->|got job| gate
+    claim -->|none| tick
+    gate -->|not ready| defer
+    gate -->|ready| exec
+    exec -->|ok| done
+    exec -->|throw| fail
+    fail --> circ
+  end
+
+  Q --> claim
+  done --> Q
+  fail --> Q
+  defer --> Q
+  dd -->|act + deleteJob| Q
+  pol --> Q
+
+  reaper["jobsReaper (60s)<br/>lease expired → mark failed"]:::keep --> Q
+  retention["jobsRetention (24h)<br/>purge old done/failed"]:::keep --> Q
+
+  classDef queue fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#7c2d12;
+  classDef keep fill:#f3f4f6,stroke:#9ca3af,color:#374151;
+</pre>
+  </div>
+  <p class="legend">Handlers + gates self-register at module load via side effect: <code>ibRegistry['resolve_conid'] = …</code>, <code>gateRegistry['eval_catalyst_stage1'] = requiresRthOpen()</code>. The producer module must be imported for those assignments to run.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="catalog">
+  <h2>3 · Cron catalog &amp; cadences — grouped by role</h2>
+  <p class="lede">All 28 timers, grouped. Cadence in parentheses. <span class="pill">queue</span> = enqueues into <code>screener_jobs</code>; the rest write a table inline.</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  boot(["index.ts boot"]):::boot
+
+  subgraph G1["Price &amp; portfolio (poll loops)"]
+    direction TB
+    a1["ibPricePoller (10s/60s)"]
+    a2["finnhubPricePoller (60s)"]
+    a3["watchlistQuotePoller (60s)"]
+  end
+
+  subgraph G2["Universe pipeline (nightly chain)"]
+    direction TB
+    b1["universeCron (24h) — Finnhub symbol list"]
+    b2["universeQuoteProducer (24h) — Polygon+Yahoo"]
+    b3["conidResolutionProducer (cont.) — IB conid"]
+    b4["marketCapRefreshCron (7d) — Finnhub profile"]
+    b5["intradayStatsCron (24h) — IB 5-min bars"]
+    b1 --> b2 --> b3
+  end
+
+  subgraph G3["Screener traits → trait_scores"]
+    direction TB
+    c1["intradayRangeTraderProducer (24h, compute)"]
+    c2["catalystReversalProducer (24h produce + 2m advance)"]
+    c3["postEarningsDriftProducer (24h)"]
+    c4["traitScoresRetention (24h)"]
+  end
+
+  subgraph G4["Signals / bands / dip-bounce"]
+    direction TB
+    d1["bandEngineCron (5m)"]
+    d2["entryZonesCron (15m)"]
+    d3["curatedListCron (12h)"]
+    d4["dipBounceCron (60s)"]
+    d5["signalOutcomesCron (5m)"]
+  end
+
+  subgraph G5["Fundamentals / news"]
+    direction TB
+    e1["riskFlagsCron (1h)"]
+    e2["newsSentimentCron (12h)"]
+  end
+
+  subgraph G6["Housekeeping (no business data)"]
+    direction TB
+    f1["jobsReaper (60s)"]
+    f2["jobsRetention (24h)"]
+    f3["lockCleanup (60s)"]
+    f4["metricsRetention (24h)"]
+    f5["zoneGapCleanup (10m)"]
+    f6["keepalive (30s)"]
+    f7["tunnelWatcher"]
+  end
+
+  boot --> G1 & G2 & G3 & G4 & G5 & G6
+
+  classDef boot fill:#111827,color:#fff,stroke:#111827;
+</pre>
+  </div>
+  <p class="legend"><b>queue producers:</b> conidResolutionProducer, universeQuoteProducer (yahoo fallback), catalystReversalProducer, postEarningsDriftProducer. Note <code>intradayRangeTraderProducer</code> is named "Producer" but computes inline (no queue) — naming overload, see observations.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="price">
+  <h2>4 · Price SSOT — three writers, one canonical table</h2>
+  <p class="lede">
+    <code>quotes</code> is the single source of truth for current price (spec: <i>architecture.md → single source of truth</i>).
+    Three pollers write it depending on connection state; every price consumer joins <code>quotes</code> by conid and recomputes value/P&amp;L —
+    nothing caches a <code>current_price</code> on <code>positions</code> (resolved in Batch X5).
+  </p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  ibp["ibPricePoller<br/>IB up · 10s RTH"] --> quotes
+  fhp["finnhubPricePoller<br/>IB down · 60s"] --> quotes
+  wqp["watchlistQuotePoller<br/>60s"] -->|via services/quotes| quotes
+  quotes[("quotes<br/>(canonical_price)")]:::tbl
+
+  quotes --> r1["/api/portfolio/summary<br/>(recompute value + P&amp;L)"]
+  quotes --> r2["usePositions (client join)"]
+  quotes --> r3["useVirtualList / useWatchlistData"]
+  quotes --> r4["entryZonesCron · dipBounceCron · signalOutcomesCron"]
+
+  classDef tbl fill:#ecfdf5,stroke:#059669,color:#064e3b;
+</pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="observations">
+  <h2>DRY / SOLID candidates spotted (for the planning dialogue)</h2>
+  <ul class="obs">
+    <li><b>Cron-scheduler boilerplate (DRY).</b> ~20 crons hand-roll the same skeleton:
+      <code>FIRST_RUN_DELAY_MS</code> + <code>CADENCE_MS</code> + a recursive <code>setTimeout(loop, …).unref()</code> + try/catch + notify.
+      Candidate: one <code>scheduleCron({ name, firstDelay, cadence, run })</code> helper.</li>
+    <li><b>Producer/queue pattern (DRY + SRP).</b> The produce-loop (enqueue+dedup) / advance-loop (drainDone, drainFailed → markRetry/finalize) shape repeats across 4–5 producers. Candidate: a <code>JobProducer</code> base or factory carrying the retry policy.</li>
+    <li><b>Registry-by-side-effect (SOLID — DIP/explicitness).</b> Handlers + gates register by mutating module-level maps at import time. Works, but import-for-side-effect is fragile and untestable in isolation. Candidate: explicit registration / a register() call wired in boot.</li>
+    <li><b>"Producer" naming overload (SRP/clarity).</b> <code>intradayRangeTraderProducer</code> uses no queue (computes inline) while the others do. Same suffix, different contract.</li>
+    <li><b>Unused <code>compute</code> worker pool.</b> Only <code>noop</code> is registered — dead capacity or a placeholder to retire/fill.</li>
+    <li><b>Shared-table writers (ISP/ownership).</b> <code>trait_scores</code> has 3 writers, <code>universe</code> has many. Fan-in is fine, but worth a writer-ownership convention so columns aren't clobbered.</li>
+    <li><b>Client-side 6-table join</b> in <code>useVirtualList</code> (already flagged in consumers.md Obs 1) — server-side endpoint candidate, but FE-side, out of the server Arch scope.</li>
+  </ul>
+  <p class="legend">These are observations to discuss, not a committed plan. The full read/write matrix lives in <code>spec/data/consumers.md</code>.</p>
+</section>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    securityLevel: 'loose',
+    flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
+  });
+</script>
+</body>
+</html>
