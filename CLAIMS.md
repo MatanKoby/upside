@@ -8,16 +8,25 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X10.2 — Catalyst same-session pipeline (fast advance loop)
-- Owner: claude
-- Started: 2026-06-09 17:38
-
 ## Known issues (deferred fixes)
 
 - **TickerDetail loading/error states say "coming soon"** — `TickerDetailPage` reuses the `ComingSoon` placeholder for loading/error/not-held, so opening a position briefly shows "Loading SYMBOL… · SYMBOL — coming soon". Needs real skeleton/error/empty states. Folds into Batch 16 (loading/error/empty sweep). Spec: `screens/_design-system.md` → Screen 2 note.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X10.2 — Catalyst same-session pipeline (fast advance loop) (2026-06-10)
+- Owner: claude
+- Started: 2026-06-09 17:38 · Finished: 2026-06-10 05:19
+- Commit: d8ebff1 (code) · 79333c8 (spec)
+- **Why:** even with X10 (RTH gate) + X10.1 (snapshot fix), catalyst couldn't reach the lists same-day. The producer ran one combined **24h** tick (enqueue + drain), and each tick's drain only saw *prior* ticks' `done` rows (workers run async after the tick), so Stage-1→Stage-2→`trait_scores` spanned 2-3 daily ticks ≈ **1-2 days** — useless for an intraday signal.
+- **What shipped (`catalystReversalProducer.ts`):** split the single `tick()` into two loops.
+  - **`produceTick`** (24h, first run **boot+2min**, was 10min): Stage-0 candidates + `enqueueStage1`. Enqueue dedups on the active job_key so an in-flight name is a no-op. First-delay shortened because the candidate deps (`universe.last_avg_volume`, `real_conid`) persist in the DB.
+  - **`advanceTick`** (~2min): `drainStage1` (→ enqueue Stage-2 for qualifiers) + `drainStage2` (→ `trait_scores`) + the failure retries. **DB-only — no IB calls** (those stay in the gated worker handlers, enqueued once/name/day), so the tight cadence is cheap. Quiet log unless a stage moved.
+  - Net: a conid flows Stage-1→Stage-2→`trait_scores` within minutes of the workers finishing each stage, same session.
+- **Spec:** `job-queue.md` → Dependencies between actions — stage latency = drain-cycle length, not enqueue cadence; intraday pipelines split slow-produce / fast-advance (catalyst is the reference).
+- **Verification:** server typecheck clean; 204/204 tests (loop restructuring — verified live, not unit-tested). No migration.
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Then during RTH with IB up: produce fires ~boot+2min → Stage-1 runs (X10.1 → non-null `vol_multiple`, some `qualified:true`) → advance loop (~2min) enqueues Stage-2 → `trait_scores(catalyst_reversal)` rows within ~5-10 min; Intraday/Swing lists show catalyst chips. **This is the deploy that should finally show catalyst data same-session.**
 
 ### Batch X10.1 — Catalyst snapshot completeness (volume parse + field warmup) (2026-06-09)
 - Owner: claude
