@@ -121,6 +121,9 @@ daily_bars → universe → quotes → positions → signal_fires/outcomes → r
 watchlist_* → analyses/analysis_locks`.
 (`screener_jobs` is already encapsulated in `services/jobs/queue.ts` — it's the prototype TableModule.)
 
+**Progress:** ✅ `news_sentiment` (ARCH-1) · ✅ `trait_scores` (ARCH-2). **Next: `curated_list`** (ARCH-3) —
+already partially surfaced: `curatedList/asof.ts` + `curatedListCron` read it directly today.
+
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).
 - All call-sites use the named methods.

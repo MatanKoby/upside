@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-2 — trait_scores TableModule (3-writer showcase)
-- Owner: claude
-- Started: 2026-06-10 08:32
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,19 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-2 — trait_scores TableModule (3-writer showcase) (2026-06-10)
+- Owner: claude
+- Started: 2026-06-10 08:32 · Finished: 2026-06-10 08:39
+- Commit: 73a666f
+- **Why:** the second ARCH Phase-1 slice (`docs/arch/target-architecture.md` → Phase 1, "do second"). Where ARCH-1 (`news_sentiment`) proved the TableModule shape on a 1-writer table, `trait_scores` proves the **one-writer-OWNER** rule under **3 producers** writing the same table — the case the pattern exists for. **No behavior change** — same SQL/rows/conflict key, relocated behind intention-revealing methods.
+- **What shipped:**
+  - **`server/src/db/traitScoresTableModule.ts` (new)** — sole gatekeeper + singleton. Writers: `upsertScores(scores[])` (chunked batch upsert on `conid,trait,asof_date`, stamps `computed_at`) and `stampFirstFire(conid, trait, asofDate)` (the atomic `last_fired_at` latch — returns true only on the first stamp so the caller pings once). Retention: `purgeOlderThan(trait, cutoff)` → deleted count. Readers: `getScoresByTrait` (curated seeds), `latestAsof(trait?|traits[])`, `getConidsByTraits`. Exports the `TraitScore` domain type + `TraitKind` union (`intraday_range_trader | catalyst_reversal | post_earnings_drift`).
+  - **`server/src/db/TableModule.ts`** — added the `runCount(op, query)` base mechanic (affected-row count for `count:'exact'` deletes/updates, same `<table>.<op>` error wrap) consumed by per-trait retention. `PgResult` gained an optional `count`.
+  - **Rewired all call-sites** to the module: the 3 producers — `intradayRangeTraderProducer` (batch upsert), `catalystReversalProducer` + `postEarningsDriftProducer` (single upsert + first-fire stamp; the catalyst `universe.auto_promoted` write stays inline — universe gets its own module later) — plus `traitScoresRetention` (per-trait purge; **dropped its `supabase` import**), `curatedListCron` (`loadSeeds` + `loadEventTraitConids` readers), and `curatedList/asof.ts` (the `trait_scores` branch → module; `curated_list` branch stays a direct read until ARCH-3). The `TraitKind` union also tightened `latestTraitAsof` + `SHELF_LIFE_DAYS`.
+- **Verification:** grep gate — no `from('trait_scores')` anywhere in `server/src` outside the module. Server typecheck clean; **204/204** tests pass. Pure relocation, no new tests, no migration, no env/Discord change.
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Behaviorally identical — all three producers write `trait_scores` and `curatedListCron` reads it exactly as before; nothing user-visible changes.
+- **Follow-ups:** ARCH-3 = next table on the rollout list (`curated_list` — already half-touched here: `asof.ts`/`curatedListCron` read it directly), then `entry_zones → band_state → intraday_stats → daily_bars → universe → quotes → …` per the design doc. Eventual mechanical folder move `db/ → adapters/supabase/`.
 
 ### Batch ARCH-1 — TableModule persistence layer (reference slice) (2026-06-10)
 - Owner: claude
