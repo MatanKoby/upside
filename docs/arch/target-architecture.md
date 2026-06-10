@@ -141,9 +141,13 @@ reconciliation, change-detection, profit-zone transitions, the quotes mirror) st
 sole `signal_fires` writer (`insertFire`) + a cooldown reader (`getRecentByKinds`); signalOutcomesCron
 reads fires (`getRecentSince`) and owns `signal_outcomes` end-to-end (`getExistingOffsets` dedup +
 `upsertOutcomes`). The dedup-to-newest map + the elapsed-offset/due math stay in the crons.
-**Next: `risk_flags`** — then the rest of the **multi-writer half** (`watchlist_*`,
-`analyses/analysis_locks`). Each has several writers, so the **one-writer-owner** call is the real
-work: the module becomes the sole writer and the producers/pollers call its named methods.
+✅ `risk_flags` — already funnelled through one engine (`riskFlags/engine.ts` evaluateAndStore, driven
+by both riskFlagsCron + signalEngine), so the module is a clean lift: 1 reader (`getPrevRow`
+since-carry) + 2 writers (`deleteRow` clean-ticker clear, `upsertRow`). The since-carry policy + the
+compute stay in the engine/domain; `flags` stays an opaque jsonb payload.
+**Next: `watchlist_*`** — then `analyses/analysis_locks`. Each has several writers, so the
+**one-writer-owner** call is the real work: the module becomes the sole writer and the producers/
+pollers call its named methods.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).

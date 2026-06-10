@@ -5,7 +5,7 @@
 // It loads the prior day's `since` dates, computes, and writes the row (or
 // deletes it when the ticker is clean). Spec: spec/signals/risk-flags.md.
 
-import { supabase } from '../supabase.js';
+import { riskFlagsTableModule } from '../../db/riskFlagsTableModule.js';
 import { computeRiskFlags, type RiskFlagInputs, type RiskFlagRow } from './computeRiskFlags.js';
 import type { RiskFlagConfig, RiskFlagKey } from '../../config/riskFlags.js';
 
@@ -20,39 +20,24 @@ async function loadPrevSince(
   conid: number,
   asofDate: string,
 ): Promise<Partial<Record<RiskFlagKey, string>>> {
-  const { data } = await supabase()
-    .from('risk_flags')
-    .select('asof_date, flags')
-    .eq('conid', conid)
-    .lt('asof_date', asofDate)
-    .order('asof_date', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const prev = await riskFlagsTableModule.getPrevRow(conid, asofDate).catch(() => null);
   const out: Partial<Record<RiskFlagKey, string>> = {};
-  const flags = (data?.flags ?? []) as Array<{ key?: RiskFlagKey; since?: string }>;
-  for (const f of flags) {
-    if (f.key) out[f.key] = f.since ?? (data?.asof_date as string);
+  for (const f of prev?.flags ?? []) {
+    if (f.key) out[f.key as RiskFlagKey] = f.since ?? prev!.asofDate;
   }
   return out;
 }
 
 async function persist(conid: number, asofDate: string, row: RiskFlagRow | null): Promise<void> {
-  const db = supabase();
   if (!row) {
-    // Clean ticker → remove any stale row so the badge clears.
-    await db.from('risk_flags').delete().eq('conid', conid).eq('asof_date', asofDate);
+    // Clean ticker → remove any stale row so the badge clears. Best-effort
+    // (the prior code swallowed write errors here too).
+    await riskFlagsTableModule.deleteRow(conid, asofDate).catch(() => undefined);
     return;
   }
-  await db.from('risk_flags').upsert(
-    {
-      conid,
-      asof_date: asofDate,
-      flags: row.flags,
-      severity: row.severity,
-      computed_at: new Date().toISOString(),
-    },
-    { onConflict: 'conid,asof_date' },
-  );
+  await riskFlagsTableModule
+    .upsertRow(conid, asofDate, row.flags, row.severity, new Date().toISOString())
+    .catch(() => undefined);
 }
 
 export async function evaluateAndStore(
