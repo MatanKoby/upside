@@ -25,6 +25,7 @@ import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { polygonGroupedDaily, yahooChart, type DailyOhlcv } from '../services/universeQuote.js';
 import { recentWeekdays, buildDailyBarRows } from '../services/dailyBars.js';
+import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 import { enqueue, drainDone, drainFailed, deleteJob, markRetry, finalizeFailure } from '../services/jobs/queue.js';
 import { makeKey } from '../services/jobs/keys.js';
 import { finnhubRegistry } from '../services/jobs/actions.js';
@@ -36,7 +37,6 @@ const MAX_RETRY_ATTEMPTS = 2;
 const DAILY_BARS_LOOKBACK_DAYS = 30; // bootstrap depth (covers ATR(14) + 30d median ADV)
 const DAILY_BARS_RETENTION_DAYS = 45; // keep a little slack past the 30d window
 const POLYGON_MIN_INTERVAL_MS = 13_000; // free tier is 5 calls/min → ≥12s apart
-const BAR_CHUNK = 1000;
 const PAGE = 1000;
 
 function sleep(ms: number): Promise<void> {
@@ -91,15 +91,12 @@ async function writeOhlcvToUniverse(
 
 /** Does daily_bars already hold rows for this trading date? */
 async function dateHasBars(date: string): Promise<boolean> {
-  const { count, error } = await supabase()
-    .from('daily_bars')
-    .select('conid', { count: 'exact', head: true })
-    .eq('date', date);
-  if (error) {
-    void notifyError(`universeQuoteProducer.dateHasBars.${date}`, error.message);
+  try {
+    return (await dailyBarsTableModule.countForDate(date)) > 0;
+  } catch (e) {
+    void notifyError(`universeQuoteProducer.dateHasBars.${date}`, (e as Error).message);
     return true; // assume present on error so we don't hammer Polygon
   }
-  return (count ?? 0) > 0;
 }
 
 async function writeDailyBars(
@@ -109,11 +106,10 @@ async function writeDailyBars(
   nowIso: string,
 ): Promise<number> {
   const rows = buildDailyBarRows(date, grouped, symbolToConid, 'polygon', nowIso);
-  for (let i = 0; i < rows.length; i += BAR_CHUNK) {
-    const { error } = await supabase()
-      .from('daily_bars')
-      .upsert(rows.slice(i, i + BAR_CHUNK), { onConflict: 'conid,date' });
-    if (error) void notifyError(`universeQuoteProducer.dailyBars.upsert.${date}`, error.message);
+  try {
+    await dailyBarsTableModule.upsertBars(rows);
+  } catch (e) {
+    void notifyError(`universeQuoteProducer.dailyBars.upsert.${date}`, (e as Error).message);
   }
   return rows.length;
 }
@@ -122,8 +118,11 @@ async function retainDailyBars(): Promise<void> {
   const cutoff = new Date(Date.now() - DAILY_BARS_RETENTION_DAYS * 24 * 60 * 60_000)
     .toISOString()
     .slice(0, 10);
-  const { error } = await supabase().from('daily_bars').delete().lt('date', cutoff);
-  if (error) void notifyError('universeQuoteProducer.dailyBars.retention', error.message);
+  try {
+    await dailyBarsTableModule.purgeOlderThan(cutoff);
+  } catch (e) {
+    void notifyError('universeQuoteProducer.dailyBars.retention', (e as Error).message);
+  }
 }
 
 async function refreshAvgVolume(): Promise<void> {
@@ -322,7 +321,11 @@ finnhubRegistry['fallback_yahoo_quote'] = async (payloadIn) => {
       nowIso,
     );
     if (rows.length > 0) {
-      await supabase().from('daily_bars').upsert(rows, { onConflict: 'conid,date' });
+      try {
+        await dailyBarsTableModule.upsertBars(rows);
+      } catch (e) {
+        void notifyError(`universeQuoteProducer.yahooBars.upsert.${payload.symbol}`, (e as Error).message);
+      }
     }
   }
 };

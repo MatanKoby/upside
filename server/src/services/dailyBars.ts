@@ -6,8 +6,8 @@
 // read it here instead of calling IB history — so they survive IB 503s
 // (weekends, off-hours). See spec/data/sources.md → daily_bars.
 
-import { supabase } from './supabase.js';
 import type { DailyOhlcv } from './universeQuote.js';
+import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 
 export interface DailyBar {
   date: string; // YYYY-MM-DD
@@ -89,25 +89,11 @@ export function buildDailyBarRows(
  * (e.g. a held name outside the universe, or before the first producer run).
  */
 export async function loadDailyBars(conid: number, lookbackDays = 90): Promise<DailyBar[]> {
-  const { data, error } = await supabase()
-    .from('daily_bars')
-    .select('date, o, h, l, c, v')
-    .eq('conid', conid)
-    .order('date', { ascending: false })
-    .limit(lookbackDays);
-  if (error || !data) return [];
-  // came newest-first (so the limit takes the most recent N); flip to oldest-first.
-  const rows = [...data].reverse();
-  return rows.map((r) => {
-    const date = (r as { date: string }).date;
-    return {
-      date,
-      t: new Date(date).getTime(),
-      o: Number((r as { o: unknown }).o),
-      h: Number((r as { h: unknown }).h),
-      l: Number((r as { l: unknown }).l),
-      c: Number((r as { c: unknown }).c),
-      v: Number((r as { v: unknown }).v),
-    };
-  });
+  let rows;
+  try {
+    rows = await dailyBarsTableModule.getBars(conid, lookbackDays);
+  } catch {
+    return []; // a held name outside the universe, or before the first producer run
+  }
+  return rows.map((r) => ({ ...r, t: new Date(r.date).getTime() }));
 }

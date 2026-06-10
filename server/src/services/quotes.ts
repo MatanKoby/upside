@@ -10,6 +10,7 @@
 // to join contracts to render rows.
 
 import { supabase } from './supabase.js';
+import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 import { notifyError } from './notify.js';
 import { checkMarkersForConid } from './markers.js';
 import { checkEntryZonesForConid } from './entryZoneAlerts.js';
@@ -113,8 +114,7 @@ export async function seedDailyQuotes(conids: number[]): Promise<number> {
   const db = supabase();
 
   // Global latest daily-bar date → the honest as-of stamp for all seeded rows.
-  const { data: maxRow } = await db.from('daily_bars').select('date').order('date', { ascending: false }).limit(1);
-  const latestBarDate = (maxRow?.[0] as { date: string } | undefined)?.date ?? null;
+  const latestBarDate = await dailyBarsTableModule.latestDate();
   const asOfStamp = latestBarDate ? `${latestBarDate}T21:00:00.000Z` : new Date().toISOString();
 
   // universe price + symbol (keyed by real_conid), and which conids a live poller owns.
@@ -123,12 +123,17 @@ export async function seedDailyQuotes(conids: number[]): Promise<number> {
   const sparkByConid = new Map<number, number[]>();
   const barCutoff = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
 
+  // Sparkline closes from the daily_bars SSOT (last ~40d), each chunk date-asc
+  // so per-conid order is chronological.
+  for (const r of await dailyBarsTableModule.getClosesSince(uniq, barCutoff)) {
+    (sparkByConid.get(r.conid) ?? sparkByConid.set(r.conid, []).get(r.conid)!).push(r.c);
+  }
+
   for (let i = 0; i < uniq.length; i += 900) {
     const chunk = uniq.slice(i, i + 900);
-    const [u, q, bars] = await Promise.all([
+    const [u, q] = await Promise.all([
       db.from('universe').select('real_conid, symbol, last_price').in('real_conid', chunk),
       db.from('quotes').select('conid, canonical_source').in('conid', chunk),
-      db.from('daily_bars').select('conid, date, c').in('conid', chunk).gte('date', barCutoff).order('date', { ascending: true }),
     ]);
     for (const r of u.data ?? []) {
       const c = asNum((r as { real_conid: number | string | null }).real_conid);
@@ -138,12 +143,6 @@ export async function seedDailyQuotes(conids: number[]): Promise<number> {
       const c = asNum((r as { conid: number | string | null }).conid);
       const src = (r as { canonical_source: string | null }).canonical_source;
       if (c != null && (src === 'ib' || src === 'finnhub')) liveOwned.add(c);
-    }
-    for (const r of bars.data ?? []) {
-      const c = asNum((r as { conid: number | string | null }).conid);
-      const close = asNum((r as { c: number | string | null }).c);
-      if (c == null || close == null) continue;
-      (sparkByConid.get(c) ?? sparkByConid.set(c, []).get(c)!).push(close);
     }
   }
 
