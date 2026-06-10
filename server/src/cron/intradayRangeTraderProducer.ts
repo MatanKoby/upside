@@ -15,6 +15,7 @@
 
 import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
+import { traitScoresTableModule, type TraitScore } from '../db/traitScoresTableModule.js';
 import {
   scoreIntradayRangeTrader,
   type IntradayStatsRow,
@@ -111,11 +112,7 @@ async function tick(): Promise<void> {
   }
 
   let qualified = 0;
-  const rows: Array<{
-    conid: number; trait: string; asof_date: string;
-    score: number; payload: unknown; computed_at: string;
-  }> = [];
-  const nowIso = new Date().toISOString();
+  const rows: TraitScore[] = [];
   for (const j of joined) {
     const r = scoreIntradayRangeTrader(j.stats, j.today_open, j.last_price);
     if (!r) continue;
@@ -123,22 +120,18 @@ async function tick(): Promise<void> {
     rows.push({
       conid: j.real_conid,
       trait: 'intraday_range_trader',
-      asof_date: asof,
+      asofDate: asof,
       score: r.score,
       payload: r.payload,
-      computed_at: nowIso,
     });
   }
 
-  // Batch upsert (PostgREST UPSERT on the composite PK).
-  for (let i = 0; i < rows.length; i += 500) {
-    const chunk = rows.slice(i, i + 500);
-    const { error } = await supabase()
-      .from('trait_scores')
-      .upsert(chunk, { onConflict: 'conid,trait,asof_date' });
-    if (error) {
-      void notifyError('intradayRangeTraderProducer.upsert', error.message);
-    }
+  // Sole writer of the intraday_range_trader trait — chunked batch upsert
+  // behind the module (PostgREST UPSERT on the composite PK).
+  try {
+    await traitScoresTableModule.upsertScores(rows);
+  } catch (e) {
+    void notifyError('intradayRangeTraderProducer.upsert', (e as Error).message);
   }
 
   console.log(

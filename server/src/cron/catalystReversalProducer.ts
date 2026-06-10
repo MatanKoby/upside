@@ -26,6 +26,7 @@
 
 import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
+import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
 import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,
@@ -184,7 +185,6 @@ async function drainStage2(): Promise<{ scored: number; nulled: number; retried:
     return [] as JobRow[];
   });
   let scored = 0, nulled = 0;
-  const nowIso = new Date().toISOString();
   for (const j of done) {
     const payload = j.payload as { real_conid?: number; symbol?: string; asof_date?: string };
     const r = j.result as unknown as { score: number | null; payload: Record<string, unknown> } | undefined;
@@ -198,42 +198,33 @@ async function drainStage2(): Promise<{ scored: number; nulled: number; retried:
       await deleteJob(j.id).catch(() => undefined);
       continue;
     }
-    const { error } = await supabase()
-      .from('trait_scores')
-      .upsert(
+    try {
+      await traitScoresTableModule.upsertScores([
         {
           conid: payload.real_conid,
           trait: 'catalyst_reversal',
-          asof_date: payload.asof_date,
+          asofDate: payload.asof_date,
           score: r.score,
           payload: r.payload,
-          computed_at: nowIso,
         },
-        { onConflict: 'conid,trait,asof_date' },
-      );
-    if (error) {
-      void notifyError(`catalystReversalProducer.upsert.${payload.symbol}`, error.message);
+      ]);
+    } catch (e) {
+      void notifyError(`catalystReversalProducer.upsert.${payload.symbol}`, (e as Error).message);
       continue;
     }
     // Auto-promote so other traits + the FE pick it up regardless of
-    // Ring-1 IN status.
+    // Ring-1 IN status. (universe gets its own TableModule later in the rollout.)
     await supabase()
       .from('universe')
       .update({ auto_promoted: true })
       .eq('real_conid', payload.real_conid);
 
-    // First-fire ping — gate on last_fired_at to keep idempotent re-runs
-    // quiet. Atomic UPDATE … RETURNING via PostgREST returns rows only
-    // when the condition matched.
-    const { data: stamped } = await supabase()
-      .from('trait_scores')
-      .update({ last_fired_at: nowIso })
-      .eq('conid', payload.real_conid)
-      .eq('trait', 'catalyst_reversal')
-      .eq('asof_date', payload.asof_date)
-      .is('last_fired_at', null)
-      .select('conid');
-    if (stamped && stamped.length > 0) {
+    // First-fire ping — the module's atomic last_fired_at latch returns true
+    // only on the first stamp, so idempotent re-runs stay quiet.
+    const firstFire = await traitScoresTableModule
+      .stampFirstFire(payload.real_conid, 'catalyst_reversal', payload.asof_date)
+      .catch(() => false);
+    if (firstFire) {
       void notifyTraitFirstFire({
         trait: 'catalyst_reversal',
         symbol: payload.symbol,

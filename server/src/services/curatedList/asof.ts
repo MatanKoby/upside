@@ -11,27 +11,28 @@
 
 import { supabase } from '../supabase.js';
 import { notifyError } from '../notify.js';
+import { traitScoresTableModule, type TraitKind } from '../../db/traitScoresTableModule.js';
 
 /** Days of slack past which "latest" is treated as stale (covers a weekend). */
 export const STALENESS_CAP_DAYS = 4;
 
-async function latestAsof(table: 'trait_scores' | 'curated_list', trait?: string): Promise<string | null> {
-  let q = supabase().from(table).select('asof_date').order('asof_date', { ascending: false }).limit(1);
-  if (trait) q = q.eq('trait', trait);
-  const { data, error } = await q;
+export function latestTraitAsof(trait: TraitKind): Promise<string | null> {
+  return traitScoresTableModule.latestAsof(trait);
+}
+
+// curated_list isn't behind a TableModule yet (next in the ARCH rollout); read
+// it directly here until then.
+export async function latestCuratedAsof(): Promise<string | null> {
+  const { data, error } = await supabase()
+    .from('curated_list')
+    .select('asof_date')
+    .order('asof_date', { ascending: false })
+    .limit(1);
   if (error) {
-    void notifyError(`asof.latest.${table}`, error.message);
+    void notifyError('asof.latest.curated_list', error.message);
     return null;
   }
   return (data?.[0] as { asof_date: string } | undefined)?.asof_date ?? null;
-}
-
-export function latestTraitAsof(trait: string): Promise<string | null> {
-  return latestAsof('trait_scores', trait);
-}
-
-export function latestCuratedAsof(): Promise<string | null> {
-  return latestAsof('curated_list');
 }
 
 /** True when `asof` (YYYY-MM-DD) is older than the staleness cap relative to now. */

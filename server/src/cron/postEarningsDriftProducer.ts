@@ -16,6 +16,7 @@
 
 import { supabase } from '../services/supabase.js';
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
+import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
 import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,
@@ -130,7 +131,6 @@ async function drainResults(): Promise<{ scored: number; dropped: number; retrie
     return [] as JobRow[];
   });
   let scored = 0, dropped = 0;
-  const nowIso = new Date().toISOString();
   for (const j of done) {
     const payload = j.payload as { real_conid?: number; symbol?: string; asof_date?: string };
     const r = j.result as unknown as PedJobResult | undefined;
@@ -149,32 +149,24 @@ async function drainResults(): Promise<{ scored: number; dropped: number; retrie
       await deleteJob(j.id).catch(() => undefined);
       continue;
     }
-    const { error } = await supabase()
-      .from('trait_scores')
-      .upsert(
+    try {
+      await traitScoresTableModule.upsertScores([
         {
           conid: payload.real_conid,
           trait: 'post_earnings_drift',
-          asof_date: payload.asof_date,
+          asofDate: payload.asof_date,
           score: result.score,
           payload: result.payload,
-          computed_at: nowIso,
         },
-        { onConflict: 'conid,trait,asof_date' },
-      );
-    if (error) {
-      void notifyError(`postEarningsDriftProducer.upsert.${payload.symbol}`, error.message);
+      ]);
+    } catch (e) {
+      void notifyError(`postEarningsDriftProducer.upsert.${payload.symbol}`, (e as Error).message);
       continue;
     }
-    const { data: stamped } = await supabase()
-      .from('trait_scores')
-      .update({ last_fired_at: nowIso })
-      .eq('conid', payload.real_conid)
-      .eq('trait', 'post_earnings_drift')
-      .eq('asof_date', payload.asof_date)
-      .is('last_fired_at', null)
-      .select('conid');
-    if (stamped && stamped.length > 0) {
+    const firstFire = await traitScoresTableModule
+      .stampFirstFire(payload.real_conid, 'post_earnings_drift', payload.asof_date)
+      .catch(() => false);
+    if (firstFire) {
       void notifyTraitFirstFire({
         trait: 'post_earnings_drift',
         symbol: payload.symbol,

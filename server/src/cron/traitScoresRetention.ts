@@ -9,13 +9,13 @@
 // Cadence: 24h, 7-min boot delay so the screener producers finish their
 // first writes before retention starts trimming.
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
+import { traitScoresTableModule, type TraitKind } from '../db/traitScoresTableModule.js';
 
 const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 7 * 60_000;
 
-const SHELF_LIFE_DAYS: Record<string, number> = {
+const SHELF_LIFE_DAYS: Record<TraitKind, number> = {
   intraday_range_trader: 1,
   catalyst_reversal:     3,
   post_earnings_drift:   5,
@@ -27,18 +27,16 @@ function daysAgoIsoDate(days: number): string {
 
 async function tick(): Promise<void> {
   let totalDeleted = 0;
-  for (const [trait, days] of Object.entries(SHELF_LIFE_DAYS)) {
+  for (const [trait, days] of Object.entries(SHELF_LIFE_DAYS) as Array<[TraitKind, number]>) {
     const cutoff = daysAgoIsoDate(days);
-    const { error, count } = await supabase()
-      .from('trait_scores')
-      .delete({ count: 'exact' })
-      .eq('trait', trait)
-      .lt('asof_date', cutoff);
-    if (error) {
-      void notifyError(`traitScoresRetention.${trait}`, error.message);
+    let count: number;
+    try {
+      count = await traitScoresTableModule.purgeOlderThan(trait, cutoff);
+    } catch (e) {
+      void notifyError(`traitScoresRetention.${trait}`, (e as Error).message);
       continue;
     }
-    if (count && count > 0) {
+    if (count > 0) {
       totalDeleted += count;
       console.log(`[traitScoresRetention] ${trait}: deleted ${count} rows older than ${cutoff}`);
     }

@@ -23,6 +23,7 @@ import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';
 import { buildCuratedList, type CuratedCandidate } from '../services/curatedList/buildCuratedList.js';
 import { latestTraitAsof } from '../services/curatedList/asof.js';
+import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
 import { seedDailyQuotes } from '../services/quotes.js';
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../config/curatedList.js';
 
@@ -58,20 +59,12 @@ interface Seed {
 // the same daily bars as ATR (see dailyMetrics), so the volume gate lives in
 // buildCuratedList alongside the ATR gate.
 async function loadSeeds(asof: string): Promise<Seed[]> {
-  const { data: ts, error } = await supabase()
-    .from('trait_scores')
-    .select('conid, score')
-    .eq('trait', 'intraday_range_trader')
-    .eq('asof_date', asof);
-  if (error) {
-    void notifyError('curatedListCron.loadTraits', error.message);
+  let seeds: Seed[];
+  try {
+    seeds = await traitScoresTableModule.getScoresByTrait('intraday_range_trader', asof);
+  } catch (e) {
+    void notifyError('curatedListCron.loadTraits', (e as Error).message);
     return [];
-  }
-  const seeds: Seed[] = [];
-  for (const r of ts ?? []) {
-    const c = num((r as { conid: unknown }).conid);
-    const sc = num((r as { score: unknown }).score);
-    if (c != null && sc != null) seeds.push({ conid: c, score: sc });
   }
   seeds.sort((a, b) => b.score - a.score);
   return seeds.slice(0, MAX_CANDIDATES);
@@ -124,26 +117,13 @@ async function persist(asof: string, rows: ReturnType<typeof buildCuratedList>):
 // the event traits — matching useVirtualList's traitAsof — so the names it
 // shows get a seeded quote and aren't dropped on the join.
 async function loadEventTraitConids(): Promise<number[]> {
-  const db = supabase();
-  const { data: latest } = await db
-    .from('trait_scores')
-    .select('asof_date')
-    .in('trait', EVENT_TRAITS as unknown as string[])
-    .order('asof_date', { ascending: false })
-    .limit(1);
-  const asof = (latest?.[0] as { asof_date?: string } | undefined)?.asof_date;
-  if (!asof) return [];
-  const { data } = await db
-    .from('trait_scores')
-    .select('conid')
-    .eq('asof_date', asof)
-    .in('trait', EVENT_TRAITS as unknown as string[]);
-  const out: number[] = [];
-  for (const r of data ?? []) {
-    const c = num((r as { conid: unknown }).conid);
-    if (c != null) out.push(c);
+  try {
+    const asof = await traitScoresTableModule.latestAsof(EVENT_TRAITS);
+    if (!asof) return [];
+    return await traitScoresTableModule.getConidsByTraits(EVENT_TRAITS, asof);
+  } catch {
+    return [];
   }
-  return out;
 }
 
 async function retention(): Promise<void> {

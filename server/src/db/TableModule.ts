@@ -13,6 +13,7 @@ import { supabase } from '../services/supabase.js';
 interface PgResult<T> {
   data: T | null;
   error: { message: string } | null;
+  count?: number | null;
 }
 
 export abstract class TableModule {
@@ -29,6 +30,15 @@ export abstract class TableModule {
     const { data, error } = await query;
     if (error) throw new Error(`${this.table}.${op}: ${error.message}`);
     return data;
+  }
+
+  /** Like `run`, but for a delete/update issued with `{ count: 'exact' }`:
+   *  returns the affected-row count (0 when the driver omits it). Same
+   *  `<table>.<op>` error wrapping. */
+  protected async runCount(op: string, query: PromiseLike<PgResult<unknown>>): Promise<number> {
+    const { error, count } = await query;
+    if (error) throw new Error(`${this.table}.${op}: ${error.message}`);
+    return count ?? 0;
   }
 
   /** Retention primitive — delete rows whose `dateColumn` is older than
