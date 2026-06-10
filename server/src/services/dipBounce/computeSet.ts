@@ -6,6 +6,7 @@
 import { supabase } from '../supabase.js';
 import { activeWatchlistOnlyConids } from '../quotes.js';
 import { latestCuratedAsof } from '../curatedList/asof.js';
+import { curatedListTableModule } from '../../db/curatedListTableModule.js';
 
 export interface ComputeMember {
   conid: number;
@@ -41,8 +42,7 @@ export async function loadComputeSet(): Promise<ComputeMember[]> {
 
   // Curated list (latest date) — symbols resolved via universe.real_conid.
   if (asof) {
-    const { data: cur } = await db.from('curated_list').select('conid').eq('asof_date', asof);
-    const curConids = (cur ?? []).map((r) => fin((r as { conid: unknown }).conid)).filter((c): c is number => c != null);
+    const curConids = await curatedListTableModule.getConidsByDate(asof);
     const missing = curConids.filter((c) => !byConid.has(c));
     for (let i = 0; i < missing.length; i += 900) {
       const chunk = missing.slice(i, i + 900);

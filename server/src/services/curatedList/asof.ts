@@ -9,9 +9,9 @@
 // money-safety gate lives at firing time (dip-bounce-scorer.md → Fresh-price
 // firing gate), not here. See spec/signals/curated-list.md → Population & freshness.
 
-import { supabase } from '../supabase.js';
 import { notifyError } from '../notify.js';
 import { traitScoresTableModule, type TraitKind } from '../../db/traitScoresTableModule.js';
+import { curatedListTableModule } from '../../db/curatedListTableModule.js';
 
 /** Days of slack past which "latest" is treated as stale (covers a weekend). */
 export const STALENESS_CAP_DAYS = 4;
@@ -20,19 +20,13 @@ export function latestTraitAsof(trait: TraitKind): Promise<string | null> {
   return traitScoresTableModule.latestAsof(trait);
 }
 
-// curated_list isn't behind a TableModule yet (next in the ARCH rollout); read
-// it directly here until then.
 export async function latestCuratedAsof(): Promise<string | null> {
-  const { data, error } = await supabase()
-    .from('curated_list')
-    .select('asof_date')
-    .order('asof_date', { ascending: false })
-    .limit(1);
-  if (error) {
-    void notifyError('asof.latest.curated_list', error.message);
+  try {
+    return await curatedListTableModule.latestAsof();
+  } catch (e) {
+    void notifyError('asof.latest.curated_list', (e as Error).message);
     return null;
   }
-  return (data?.[0] as { asof_date: string } | undefined)?.asof_date ?? null;
 }
 
 /** True when `asof` (YYYY-MM-DD) is older than the staleness cap relative to now. */

@@ -15,6 +15,7 @@ import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
 import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
+import { curatedListTableModule } from '../db/curatedListTableModule.js';
 import { NEWS_LOOKBACK_HOURS } from '../config/news.js';
 
 const CADENCE_MS = 12 * 60 * 60_000; // twice a day — the 48h window changes slowly
@@ -54,10 +55,8 @@ async function workingSet(): Promise<Target[]> {
   // Today's curated_list — symbols come from quotes (curated_list carries only
   // conid; universe is not granted to this read path consistently, quotes is).
   const asof = utcDate();
-  const { data: curated } = await db.from('curated_list').select('conid').eq('asof_date', asof);
-  const missing = (curated ?? [])
-    .map((c) => num(c.conid))
-    .filter((c): c is number => c != null && !byConid.has(c));
+  const curated = await curatedListTableModule.getConidsByDate(asof);
+  const missing = curated.filter((c) => !byConid.has(c));
   if (missing.length > 0) {
     const { data: q } = await db.from('quotes').select('conid, symbol').in('conid', missing);
     for (const r of q ?? []) {

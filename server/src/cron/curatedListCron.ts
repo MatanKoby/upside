@@ -17,31 +17,25 @@
 // "rebuild a couple times a day"). Bounded: the top MAX_CANDIDATES seeds by
 // trait score are probed. Retention drops rows older than 7 days.
 
-import { supabase } from '../services/supabase.js';
 import { notifyError } from '../services/notify.js';
 import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';
 import { buildCuratedList, type CuratedCandidate } from '../services/curatedList/buildCuratedList.js';
 import { latestTraitAsof } from '../services/curatedList/asof.js';
 import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
+import { curatedListTableModule } from '../db/curatedListTableModule.js';
 import { seedDailyQuotes } from '../services/quotes.js';
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../config/curatedList.js';
 
 const CADENCE_MS = 12 * 3600 * 1000;
 const FIRST_RUN_DELAY_MS = 90_000;
 const MAX_CANDIDATES = TARGET_SIZE * 3; // cap IB probes (top-N by score that pass volume)
-const CHUNK = 900;
 
 // The virtual lists render curated_list ∪ these event traits (catalyst → both
 // lists, post-earnings → swing). They need a `quotes` row too or the FE drops
 // them on the join — without this the swing list collapses onto the curated set.
 // Mirrors useVirtualList's EVENT_TRAITS.
 const EVENT_TRAITS = ['catalyst_reversal', 'post_earnings_drift'] as const;
-
-function num(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function median(nums: number[]): number {
   const s = [...nums].sort((a, b) => a - b);
@@ -88,30 +82,6 @@ async function dailyMetrics(conid: number): Promise<{ atrPct: number | null; med
   return { atrPct, medAdv };
 }
 
-async function persist(asof: string, rows: ReturnType<typeof buildCuratedList>): Promise<void> {
-  const db = supabase();
-  if (rows.length > 0) {
-    const payload = rows.map((r) => ({
-      conid: r.conid,
-      asof_date: asof,
-      rank: r.rank,
-      intraday_range_trader_score: r.intradayRangeTraderScore,
-      avg_daily_volume: r.avgDailyVolume,
-      daily_atr_pct: r.dailyAtrPct,
-      computed_at: new Date().toISOString(),
-    }));
-    const { error } = await db.from('curated_list').upsert(payload, { onConflict: 'conid,asof_date' });
-    if (error) { void notifyError('curatedListCron.persist', error.message); return; }
-  }
-  // Drop today's rows that fell out of the new set.
-  const keep = new Set(rows.map((r) => r.conid));
-  const { data: existing } = await db.from('curated_list').select('conid').eq('asof_date', asof);
-  const stale = (existing ?? []).map((r) => num((r as { conid: unknown }).conid)).filter((c): c is number => c != null && !keep.has(c));
-  for (let i = 0; i < stale.length; i += CHUNK) {
-    await db.from('curated_list').delete().eq('asof_date', asof).in('conid', stale.slice(i, i + CHUNK));
-  }
-}
-
 // The latest event-trait conids (catalyst_reversal / post_earnings_drift) the FE
 // will render in the swing/intraday union. Resolved at the latest date across
 // the event traits — matching useVirtualList's traitAsof — so the names it
@@ -128,7 +98,7 @@ async function loadEventTraitConids(): Promise<number[]> {
 
 async function retention(): Promise<void> {
   const cutoff = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-  await supabase().from('curated_list').delete().lt('asof_date', cutoff);
+  await curatedListTableModule.purgeOlderThan(cutoff);
 }
 
 async function tick(): Promise<void> {
@@ -170,7 +140,7 @@ async function tick(): Promise<void> {
   }
 
   const rows = buildCuratedList(candidates);
-  await persist(asof, rows);
+  await curatedListTableModule.replaceForDate(asof, rows);
   await retention();
   // Seed daily-close quotes for the whole rendered union — curated ∪ the latest
   // event-trait names (Batch X9). The virtual lists + dip-bounce scorer read
