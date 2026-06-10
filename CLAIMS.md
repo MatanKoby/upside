@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-2 — trait_scores TableModule (3-writer showcase)
+- Owner: claude
+- Started: 2026-06-10 08:32
 
 ## Known issues (deferred fixes)
 
