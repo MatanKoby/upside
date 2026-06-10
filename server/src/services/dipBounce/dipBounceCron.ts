@@ -20,6 +20,7 @@ import { loadComputeSet, type ComputeMember } from './computeSet.js';
 import { computeIntradayDipBounceScore } from './intradayScorer.js';
 import { computeSwingDipBounceScore } from './swingScorer.js';
 import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
+import { bandStateTableModule } from '../../db/bandStateTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,
@@ -126,16 +127,8 @@ async function loadStats(conids: number[]): Promise<Map<number, StatsInput>> {
 
 async function loadBands(conids: number[], sessionDate: string): Promise<Map<number, BandInput>> {
   const out = new Map<number, BandInput>();
-  for (let i = 0; i < conids.length; i += CHUNK) {
-    const { data } = await supabase()
-      .from('band_state')
-      .select('conid, session_regime, vol_regime_shift')
-      .eq('session_date', sessionDate)
-      .in('conid', conids.slice(i, i + CHUNK));
-    for (const r of data ?? []) {
-      const c = num((r as { conid: unknown }).conid);
-      if (c != null) out.set(c, { sessionRegime: ((r as { session_regime: string | null }).session_regime) ?? null, volRegimeShift: (r as { vol_regime_shift: boolean | null }).vol_regime_shift ?? null });
-    }
+  for (const r of await bandStateTableModule.getRegimes(conids, sessionDate)) {
+    out.set(r.conid, { sessionRegime: r.sessionRegime, volRegimeShift: r.volRegimeShift });
   }
   return out;
 }

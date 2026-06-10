@@ -41,6 +41,7 @@ import {
   type AnchorEvent,
 } from '../services/bandEngine/walkingState.js';
 import type { RawIbHistoryBar } from '../types/index.js';
+import { bandStateTableModule } from '../db/bandStateTableModule.js';
 
 const CADENCE_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 7 * 60_000;       // 7 min — lands after intradayStatsCron's first tick
@@ -131,65 +132,49 @@ async function loadIntradayStatsFor(conids: number[]): Promise<Map<number, { p50
 
 async function loadBandStateFor(conids: number[], sessionDate: string): Promise<Map<number, BandStateRow>> {
   const out = new Map<number, BandStateRow>();
-  for (let i = 0; i < conids.length; i += 900) {
-    const chunk = conids.slice(i, i + 900);
-    const { data, error } = await supabase()
-      .from('band_state')
-      .select('*')
-      .eq('session_date', sessionDate)
-      .in('conid', chunk);
-    if (error) {
-      void notifyError('bandEngineCron.loadState', error.message);
-      continue;
-    }
-    for (const r of (data ?? []) as Array<{
-      conid: number;
-      session_date: string;
-      anchors: AnchorEvent[];
-      current_low_band: number | string | null;
-      current_high_band: number | string | null;
-      session_regime: SessionRegime | 'ah_low_confidence' | null;
-      vol_scalar: number | string | null;
-      vol_regime_shift: boolean;
-      band_touch_last_fired_at: Record<string, string | null> | null;
-      updated_at: string;
-    }>) {
-      // Reconstruct the walk state from persisted anchors + bands. We don't
-      // round-trip running_max/running_min through the DB — the cron is the
-      // sole writer and the next tick recomputes them by replaying anchors
-      // against the latest bar. For v1 we approximate by treating the most
-      // recent anchor's price as the running extremum on the *opposite* side
-      // and the current price (later applied) as the active side.
-      const anchors = (r.anchors ?? []) as AnchorEvent[];
-      const lastAnchor = anchors[anchors.length - 1];
-      const lastLow = [...anchors].reverse().find((a) => a.kind === 'low')?.price;
-      const lastHigh = [...anchors].reverse().find((a) => a.kind === 'high')?.price;
-      const seedLow = num(lastLow) ?? num(r.current_low_band) ?? 0;
-      const seedHigh = num(lastHigh) ?? num(r.current_high_band) ?? 0;
-      const walk: BandWalkState = {
-        anchor_low: seedLow,
-        anchor_high: seedHigh,
-        running_max: seedHigh,
-        running_min: seedLow,
-        leg_direction: lastAnchor ? (lastAnchor.kind === 'low' ? 'up' : 'down') : null,
-        anchors,
-        current_low_band: num(r.current_low_band),
-        current_high_band: num(r.current_high_band),
-      };
-      out.set(r.conid, {
-        conid: r.conid,
-        session_date: r.session_date,
-        anchors,
-        current_low_band: num(r.current_low_band),
-        current_high_band: num(r.current_high_band),
-        session_regime: r.session_regime,
-        vol_scalar: num(r.vol_scalar),
-        vol_regime_shift: !!r.vol_regime_shift,
-        band_touch_last_fired_at: r.band_touch_last_fired_at ?? {},
-        updated_at: r.updated_at,
-        walk,
-      });
-    }
+  let records;
+  try {
+    records = await bandStateTableModule.getBySessionDate(conids, sessionDate);
+  } catch (e) {
+    void notifyError('bandEngineCron.loadState', (e as Error).message);
+    return out;
+  }
+  for (const r of records) {
+    // Reconstruct the walk state from persisted anchors + bands. We don't
+    // round-trip running_max/running_min through the DB — the cron is the
+    // sole writer and the next tick recomputes them by replaying anchors
+    // against the latest bar. For v1 we approximate by treating the most
+    // recent anchor's price as the running extremum on the *opposite* side
+    // and the current price (later applied) as the active side.
+    const anchors = (r.anchors ?? []) as AnchorEvent[];
+    const lastAnchor = anchors[anchors.length - 1];
+    const lastLow = [...anchors].reverse().find((a) => a.kind === 'low')?.price;
+    const lastHigh = [...anchors].reverse().find((a) => a.kind === 'high')?.price;
+    const seedLow = num(lastLow) ?? r.currentLowBand ?? 0;
+    const seedHigh = num(lastHigh) ?? r.currentHighBand ?? 0;
+    const walk: BandWalkState = {
+      anchor_low: seedLow,
+      anchor_high: seedHigh,
+      running_max: seedHigh,
+      running_min: seedLow,
+      leg_direction: lastAnchor ? (lastAnchor.kind === 'low' ? 'up' : 'down') : null,
+      anchors,
+      current_low_band: r.currentLowBand,
+      current_high_band: r.currentHighBand,
+    };
+    out.set(r.conid, {
+      conid: r.conid,
+      session_date: r.sessionDate,
+      anchors,
+      current_low_band: r.currentLowBand,
+      current_high_band: r.currentHighBand,
+      session_regime: r.sessionRegime as SessionRegime | 'ah_low_confidence' | null,
+      vol_scalar: r.volScalar,
+      vol_regime_shift: r.volRegimeShift,
+      band_touch_last_fired_at: r.bandTouchLastFiredAt,
+      updated_at: r.updatedAt,
+      walk,
+    });
   }
   return out;
 }
@@ -372,22 +357,20 @@ async function processOne(args: ProcessOneArgs): Promise<void> {
   // 8. Persist updated band_state.
   const newCooldowns = { ...cooldowns };
   if (firedKind) newCooldowns[firedKind] = new Date().toISOString();
-  const { error } = await supabase()
-    .from('band_state')
-    .upsert({
+  try {
+    await bandStateTableModule.upsert({
       conid,
-      session_date: sessionDate,
+      sessionDate,
       anchors: walk.anchors,
-      current_low_band: walk.current_low_band,
-      current_high_band: walk.current_high_band,
-      session_regime: regime,
-      vol_scalar: vs.scalar,
-      vol_regime_shift: volRegimeShift,
-      band_touch_last_fired_at: newCooldowns,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'conid,session_date' });
-  if (error) {
-    void notifyError(`bandEngineCron.persist.${symbol}`, error.message);
+      currentLowBand: walk.current_low_band,
+      currentHighBand: walk.current_high_band,
+      sessionRegime: regime,
+      volScalar: vs.scalar,
+      volRegimeShift,
+      bandTouchLastFiredAt: newCooldowns,
+    });
+  } catch (e) {
+    void notifyError(`bandEngineCron.persist.${symbol}`, (e as Error).message);
   }
   // suppress unused-var lint without changing functional shape.
   void prevHighBand;
