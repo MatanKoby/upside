@@ -8,7 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-3 — remaining TableModules rollout (curated_list → analyses)
+- Owner: claude
+- Started: 2026-06-10 09:30
+- **Scope:** continue Phase 1 of `docs/arch/target-architecture.md` — move every remaining table behind its TableModule, in rollout order: `curated_list → entry_zones → band_state → intraday_stats → daily_bars → universe → quotes → positions → signal_fires/outcomes → risk_flags → watchlist_* → analyses/analysis_locks`. One table per commit (`batch-ARCH-3: <table> TableModule`), each grep-verified (no `from('<table>')` outside its module) + typecheck + tests green, no behavior change. The multi-writer tables (`universe`, `quotes`, `positions`, `signal_fires/outcomes`, `risk_flags`, `analyses`) each carry a writer-owner decision surfaced when reached. ARCH-1 (`news_sentiment`) + ARCH-2 (`trait_scores`) are the reference pattern.
 
 ## Known issues (deferred fixes)
 
