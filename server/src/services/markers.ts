@@ -7,26 +7,8 @@
 // are accepted in schema for forward-compatibility but skipped here until
 // their channels land.
 
-import { supabase } from './supabase.js';
+import { watchlistMarkersTableModule, type MarkerRow } from '../db/watchlistMarkersTableModule.js';
 import { notifyDipBuyMarkerHit, notifyError } from './notify.js';
-
-interface MarkerRow {
-  id: string;
-  user_id: string;
-  conid: number | string;
-  label: string | null;
-  price: number | string;
-  condition: 'at_or_above' | 'at_or_below' | 'about';
-  enabled: boolean;
-  cooldown_hours: number | string;
-  last_fired_at: string | null;
-}
-
-function num(v: number | string | null | undefined): number | null {
-  if (v == null) return null;
-  const x = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(x) ? x : null;
-}
 
 function cooldownPassed(cooldownHours: number, lastFiredAt: string | null): boolean {
   if (!lastFiredAt) return true;
@@ -76,23 +58,20 @@ export async function checkMarkersForConid(
   // One query, no item-chain join. Service role bypasses RLS, so the poller
   // reads all users' markers in one pass (single-user MVP — revisit when
   // multi-user lands).
-  const { data, error } = await supabase()
-    .from('watchlist_markers')
-    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at')
-    .eq('conid', conid)
-    .eq('enabled', true);
-  if (error) {
-    void notifyError('markers.check', `query failed for conid ${conid}: ${error.message}`);
+  let markers: MarkerRow[];
+  try {
+    markers = await watchlistMarkersTableModule.getEnabledByConid(conid);
+  } catch (e) {
+    void notifyError('markers.check', `query failed for conid ${conid}: ${(e as Error).message}`);
     return;
   }
-  const markers = (data ?? []) as MarkerRow[];
 
   for (const m of markers) {
-    const price = num(m.price);
-    const cd = Number(m.cooldown_hours);
+    const price = m.price;
+    const cd = m.cooldownHours;
     if (price == null) continue;
     if (!crossed(m.condition, price, prev, curr)) continue;
-    if (!cooldownPassed(cd, m.last_fired_at)) continue;
+    if (!cooldownPassed(cd, m.lastFiredAt)) continue;
 
     // Fire BEFORE updating last_fired_at so a slow notify doesn't lose the
     // event on a transient DB hiccup. Idempotency is enforced by the
@@ -113,12 +92,10 @@ export async function checkMarkersForConid(
       void notifyError('markers.notify', `dip-buy notify failed for ${symbol}: ${(e as Error).message}`, e);
     }
     const now = new Date().toISOString();
-    const upd = await supabase()
-      .from('watchlist_markers')
-      .update({ last_fired_at: now })
-      .eq('id', m.id);
-    if (upd.error) {
-      void notifyError('markers.update', `last_fired_at update failed for marker ${m.id}: ${upd.error.message}`);
+    try {
+      await watchlistMarkersTableModule.stampFired(m.id, now);
+    } catch (e) {
+      void notifyError('markers.update', `last_fired_at update failed for marker ${m.id}: ${(e as Error).message}`);
     }
   }
 }

@@ -9,7 +9,8 @@
 // Idempotent UPSERTs keyed by conid. Symbol is also written so FE doesn't have
 // to join contracts to render rows.
 
-import { supabase } from './supabase.js';
+import { watchlistListsTableModule } from '../db/watchlistListsTableModule.js';
+import { watchlistItemsTableModule } from '../db/watchlistItemsTableModule.js';
 import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 import { universeTableModule } from '../db/universeTableModule.js';
 import { quotesTableModule, type DailySeedRow } from '../db/quotesTableModule.js';
@@ -158,23 +159,15 @@ export async function activeWatchlistOnlyConids(
 ): Promise<Array<{ conid: number; symbol: string }>> {
   // Two queries — first the active list ids, then their items. PostgREST
   // doesn't support a single-query JOIN-with-filter the way we'd want it.
-  const lists = await supabase()
-    .from('watchlist_lists')
-    .select('id')
-    .eq('active', true);
-  const listIds = (lists.data ?? []).map((r) => r.id as string);
+  const listIds = await watchlistListsTableModule.getActiveListIds().catch(() => []);
   if (listIds.length === 0) return [];
 
-  const items = await supabase()
-    .from('watchlist_items')
-    .select('conid, symbol')
-    .in('list_id', listIds);
+  const items = await watchlistItemsTableModule.getItemsByListIds(listIds).catch(() => []);
 
   const out = new Map<number, string>();
-  for (const r of items.data ?? []) {
-    const conid = Number(r.conid);
-    if (!Number.isFinite(conid) || heldConids.has(conid)) continue;
-    if (!out.has(conid)) out.set(conid, String(r.symbol ?? ''));
+  for (const r of items) {
+    if (!Number.isFinite(r.conid) || heldConids.has(r.conid)) continue;
+    if (!out.has(r.conid)) out.set(r.conid, r.symbol);
   }
   return Array.from(out, ([conid, symbol]) => ({ conid, symbol }));
 }

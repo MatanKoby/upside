@@ -13,7 +13,8 @@
 // watchlist_lists WHERE active=true to pick its symbol set).
 
 import { ibWatchlists, ibWatchlist } from './ibGateway.js';
-import { supabase } from './supabase.js';
+import { watchlistListsTableModule } from '../db/watchlistListsTableModule.js';
+import { watchlistItemsTableModule } from '../db/watchlistItemsTableModule.js';
 import { notifyError } from './notify.js';
 import type { RawIbWatchlistInstrument } from '../types/index.js';
 
@@ -58,7 +59,6 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
       `IB /iserver/watchlists returned 200 but user_lists is empty. top_keys=[${topKeys.join(',')}] system_lists_len=${sysLen}. Sample payload top: ${JSON.stringify(top).slice(0, 400)}`,
     );
   }
-  const db = supabase();
   const now = new Date().toISOString();
 
   let totalItems = 0;
@@ -72,42 +72,26 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
     if (!list.id || !list.name) continue;
 
     // Look up an existing row to decide insert vs update-without-active.
-    const existing = await db
-      .from('watchlist_lists')
-      .select('id, active')
-      .eq('user_id', userId)
-      .eq('ib_list_id', list.id)
-      .maybeSingle();
+    const existing = await watchlistListsTableModule.getByIbListId(userId, list.id).catch(() => null);
+    const ibModifiedAt = list.modified ? new Date(list.modified).toISOString() : null;
 
     let localListId: string;
-    if (existing.data) {
-      localListId = existing.data.id as string;
-      await db
-        .from('watchlist_lists')
-        .update({
-          name: list.name,
-          ib_modified_at: list.modified ? new Date(list.modified).toISOString() : null,
-          synced_at: now,
-        })
-        .eq('id', localListId);
+    if (existing) {
+      localListId = existing.id;
+      await watchlistListsTableModule.updateSyncMeta(localListId, list.name, ibModifiedAt, now).catch(() => undefined);
     } else {
-      const ins = await db
-        .from('watchlist_lists')
-        .insert({
-          user_id: userId,
-          ib_list_id: list.id,
+      try {
+        localListId = await watchlistListsTableModule.insertList({
+          userId,
+          ibListId: list.id,
           name: list.name,
-          active: false,          // opt-in default per spec/screens/watchlist.md
-          ib_modified_at: list.modified ? new Date(list.modified).toISOString() : null,
-          synced_at: now,
-        })
-        .select('id')
-        .single();
-      if (ins.error || !ins.data) {
-        void notifyError('watchlists.sync', `insert list failed for ${list.id}: ${ins.error?.message}`);
+          ibModifiedAt,
+          syncedAt: now,
+        });
+      } catch (e) {
+        void notifyError('watchlists.sync', `insert list failed for ${list.id}: ${(e as Error).message}`);
         continue;
       }
-      localListId = ins.data.id as string;
       newLists++;
     }
 
@@ -118,42 +102,32 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
     const itemsToUpsert = instruments
       .filter((i) => i.conid && pickSymbol(i))
       .map((i) => ({
-        list_id: localListId,
+        listId: localListId,
         conid: i.conid,
         symbol: pickSymbol(i),
         // IB's `instrument.name` is the company name (e.g. "MICRON TECHNOLOGY
         // INC"); free to capture during sync rather than hit /contract/info
         // per ticker later. Falls back to symbol when missing.
-        company_name: typeof i.name === 'string' && i.name.trim() ? i.name.trim() : null,
+        companyName: typeof i.name === 'string' && i.name.trim() ? i.name.trim() : null,
       }));
 
     const fromIbConids = new Set<number>(itemsToUpsert.map((i) => i.conid));
 
     if (itemsToUpsert.length) {
-      const upRes = await db
-        .from('watchlist_items')
-        .upsert(itemsToUpsert, { onConflict: 'list_id,conid' });
-      if (upRes.error) {
-        void notifyError(
-          'watchlists.sync',
-          `upsert items failed for list ${list.id}: ${upRes.error.message}`,
-        );
+      try {
+        await watchlistItemsTableModule.upsertItems(itemsToUpsert);
+      } catch (e) {
+        void notifyError('watchlists.sync', `upsert items failed for list ${list.id}: ${(e as Error).message}`);
       }
       totalItems += itemsToUpsert.length;
     }
 
     // Delete items that disappeared from IB (IB owns membership).
-    const existingItems = await db
-      .from('watchlist_items')
-      .select('id, conid')
-      .eq('list_id', localListId);
-    if (!existingItems.error && existingItems.data) {
-      const orphans = existingItems.data.filter((r) => !fromIbConids.has(Number(r.conid)));
-      if (orphans.length) {
-        const ids = orphans.map((r) => r.id);
-        await db.from('watchlist_items').delete().in('id', ids);
-        removedItems += orphans.length;
-      }
+    const existingItems = await watchlistItemsTableModule.getItemsByListId(localListId).catch(() => []);
+    const orphans = existingItems.filter((r) => !fromIbConids.has(r.conid));
+    if (orphans.length) {
+      await watchlistItemsTableModule.deleteItemsByIds(orphans.map((r) => r.id)).catch(() => undefined);
+      removedItems += orphans.length;
     }
   }
 
@@ -171,10 +145,10 @@ export async function setListActive(
   listId: string,
   active: boolean,
 ): Promise<boolean> {
-  const res = await supabase()
-    .from('watchlist_lists')
-    .update({ active })
-    .eq('user_id', userId)
-    .eq('id', listId);
-  return !res.error;
+  try {
+    await watchlistListsTableModule.setActive(userId, listId, active);
+    return true;
+  } catch {
+    return false;
+  }
 }

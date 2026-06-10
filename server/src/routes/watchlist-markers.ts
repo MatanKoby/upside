@@ -7,7 +7,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { supabase } from '../services/supabase.js';
+import { watchlistMarkersTableModule } from '../db/watchlistMarkersTableModule.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -45,30 +45,22 @@ function parseCreate(body: CreatePayload): {
 }
 
 async function ownsMarker(userId: string, markerId: string): Promise<boolean> {
-  const { data } = await supabase()
-    .from('watchlist_markers')
-    .select('user_id')
-    .eq('id', markerId)
-    .maybeSingle();
-  return data?.user_id === userId;
+  const owner = await watchlistMarkersTableModule.getOwnerUserId(markerId).catch(() => null);
+  return owner === userId;
 }
 
 router.post('/', async (req: Request, res: Response) => {
   if (!req.user) { res.status(401).json({ error: 'unauthorized' }); return; }
   const parsed = parseCreate(req.body ?? {});
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
-  // We trust the JWT's user.id and stamp user_id ourselves — supabase()
+  // We trust the JWT's user.id and stamp user_id ourselves — the module write
   // bypasses RLS, so we don't get the policy's user_id check for free.
-  const ins = await supabase()
-    .from('watchlist_markers')
-    .insert({ ...parsed.row, user_id: req.user.id })
-    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
-    .single();
-  if (ins.error || !ins.data) {
-    res.status(500).json({ error: ins.error?.message ?? 'insert failed' });
-    return;
+  try {
+    const created = await watchlistMarkersTableModule.insertMarker(parsed.row, req.user.id);
+    res.status(201).json(created);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
   }
-  res.status(201).json(ins.data);
 });
 
 router.patch('/:id', async (req: Request, res: Response) => {
@@ -91,17 +83,12 @@ router.patch('/:id', async (req: Request, res: Response) => {
     update.cooldown_hours = Math.round(body.cooldown_hours);
   }
   if (Object.keys(update).length === 0) { res.status(400).json({ error: 'no_valid_fields' }); return; }
-  const upd = await supabase()
-    .from('watchlist_markers')
-    .update(update)
-    .eq('id', id)
-    .select('id, user_id, conid, label, price, condition, enabled, cooldown_hours, last_fired_at, created_at')
-    .single();
-  if (upd.error || !upd.data) {
-    res.status(500).json({ error: upd.error?.message ?? 'update failed' });
-    return;
+  try {
+    const updated = await watchlistMarkersTableModule.updateMarker(id, update);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
   }
-  res.json(upd.data);
 });
 
 router.delete('/:id', async (req: Request, res: Response) => {
@@ -111,9 +98,12 @@ router.delete('/:id', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'forbidden' });
     return;
   }
-  const del = await supabase().from('watchlist_markers').delete().eq('id', id);
-  if (del.error) { res.status(500).json({ error: del.error.message }); return; }
-  res.status(204).end();
+  try {
+    await watchlistMarkersTableModule.deleteMarker(id);
+    res.status(204).end();
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 export default router;

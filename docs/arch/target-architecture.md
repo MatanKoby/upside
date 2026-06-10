@@ -145,9 +145,15 @@ reads fires (`getRecentSince`) and owns `signal_outcomes` end-to-end (`getExisti
 by both riskFlagsCron + signalEngine), so the module is a clean lift: 1 reader (`getPrevRow`
 since-carry) + 2 writers (`deleteRow` clean-ticker clear, `upsertRow`). The since-carry policy + the
 compute stay in the engine/domain; `flags` stays an opaque jsonb payload.
-**Next: `watchlist_*`** — then `analyses/analysis_locks`. Each has several writers, so the
-**one-writer-owner** call is the real work: the module becomes the sole writer and the producers/
-pollers call its named methods.
+✅ `watchlist_*` — the trio, three modules. `watchlist_lists` (sync insert/meta-update + active toggle
++ the poller's active-id seed), `watchlist_items` (sync upsert + IB-orphan sweep + the active-set
+read), `watchlist_markers` (the CRUD route's create/update/delete/ownership + markers.ts's
+enabled-by-conid check + stampFired). The IB-reconciliation, transition/cooldown, and payload-
+validation policy stay in the services/route; CRUD writes still return the raw snake_case row (the FE
+wire contract).
+**Next: `analyses` / `analysis_locks`** — the last of the **multi-writer half**. Each has several
+writers, so the **one-writer-owner** call is the real work: the module becomes the sole writer and the
+producers/pollers call its named methods.
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).
