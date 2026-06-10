@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-1 — TableModule persistence layer (reference slice)
-- Owner: claude
-- Started: 2026-06-10 06:05
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,19 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-1 — TableModule persistence layer (reference slice) (2026-06-10)
+- Owner: claude
+- Started: 2026-06-10 06:05 · Finished: 2026-06-10 07:56
+- Commit: de53296
+- **Why:** first implementation batch off the ARCH review (`docs/arch/target-architecture.md` → Phase 1). Establishes the per-table persistence pattern — a **TableModule** is the single gatekeeper for one Supabase table (the only place that table is read/written, one writer-owner) — using `news_sentiment` (1 writer + 1 reader) as the reference template every other table will follow. **No behavior change** — same SQL/rows, relocated behind intention-revealing methods.
+- **What shipped:**
+  - **`server/src/db/TableModule.ts` (new)** — thin abstract base, owns only *mechanics*: client/table binding (`from()`), consistent `<table>.<op>` error-wrapping (`run()`), and the `deleteOlderThan(col, cutoff)` retention primitive. ~40 lines, zero business logic — meaning (row mapping + intention-revealing methods) lives in each subclass.
+  - **`server/src/db/newsSentimentTableModule.ts` (new)** — the reference module + singleton: `save()` (upsert, sole writer), `getByConids(conids, asofDate)` (risk-flags reader), `purgeOlderThan(cutoff)` (binds `asof_date`), plus the `NewsSentiment` domain type and snake↔camel `fromRow` mapping.
+  - **`newsSentimentCron`** (writer + retention) and **`riskFlagsCron`** (reader) rewired to the module; their direct `from('news_sentiment')` calls deleted. `supabase`/`num` imports stay — both still used for other tables.
+- **Verification:** grep gate — no `from('news_sentiment')` anywhere in `server/src` outside the module (it's the sole gatekeeper). Server typecheck clean; **204/204** tests pass. Pure relocation, no new tests, no migration, no env/Discord change.
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Behaviorally identical — `news_sentiment` rows produced by `newsSentimentCron` and read by `riskFlagsCron` exactly as before; nothing user-visible changes.
+- **Follow-ups:** ARCH-2 (the `trait_scores` 3-writer showcase — proves the pattern under multiple writer-owners); roll the rest of the tables onto TableModules per the rollout list in the design doc; the eventual mechanical folder move to `adapters/supabase/`.
 
 ### Batch X10.2 — Catalyst same-session pipeline (fast advance loop) (2026-06-10)
 - Owner: claude

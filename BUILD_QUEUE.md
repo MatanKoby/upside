@@ -176,32 +176,6 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ---
 
-## Batch ARCH-1: TableModule persistence layer (reference slice)
-
-**Depends on:** `docs/arch/target-architecture.md` (ARCH review output, committed). First implementation batch off the ARCH review — ARCH stays an open review track, not a gating completed-batch.
-
-**Scope:** Introduce the per-table persistence pattern — a **TableModule** is the single gatekeeper module for one Supabase table (the only place that table is read/written; one writer-owner). This batch ships the **thin base + the `news_sentiment` reference** (1 writer + 1 reader) as the template every other table follows. **No behavior change** — same SQL / same rows, just relocated behind intention-revealing methods.
-
-### Deliverables
-1. `server/src/db/TableModule.ts` — thin abstract base: client/table binding, error-wrapping `run()`, generic `purgeOlderThan(col, cutoff)`. ~30 lines, no business logic.
-2. `server/src/db/newsSentimentTableModule.ts` — `save` / `getByConids` / `purgeOlderThan` + the row type.
-3. Wire `newsSentimentCron` (writer + retention) and `riskFlagsCron` (reader) to the module; delete their direct `from('news_sentiment')` calls.
-
-### Does NOT touch
-- Other tables (`trait_scores` → ARCH-2, the 3-writer showcase; rest per the rollout list in the design doc).
-- The eventual folder move to `adapters/supabase/` (later, mechanical).
-- Any behavior — verified by the crons producing identical rows.
-
-### Verification
-- `grep "from('news_sentiment')" server/src` returns only `db/newsSentimentTableModule.ts`.
-- server typecheck clean; existing tests pass.
-
-### Files this batch creates/edits
-- New: `server/src/db/TableModule.ts`, `server/src/db/newsSentimentTableModule.ts`
-- Edit: `server/src/cron/newsSentimentCron.ts`, `server/src/cron/riskFlagsCron.ts`
-
----
-
 # Blocked / deferred
 
 ## Batch 13.3: Secondary IBKR user + desired-state IBeam toggle

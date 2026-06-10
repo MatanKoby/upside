@@ -8,6 +8,9 @@ Archive of completed batch summaries. The active queue lives in `BUILD_QUEUE.md`
 
 > Compact one-paragraph summaries. For full original batch descriptions, see git history. For the durable design baked in by each batch, see the relevant file(s) in `spec/`.
 
+### Batch ARCH-1: TableModule persistence layer (reference slice) — COMPLETE
+First implementation batch off the ARCH review (`docs/arch/target-architecture.md` → Phase 1). Introduced the per-table persistence pattern — a **TableModule** is the single gatekeeper for one Supabase table (only place it's read/written, one writer-owner). Shipped the thin abstract base (`server/src/db/TableModule.ts` — client/table binding, error-wrapping `run()`, `deleteOlderThan` retention primitive, zero business logic) + the `news_sentiment` reference module (`save`/`getByConids`/`purgeOlderThan` + snake↔camel mapping) as the template every other table follows. Rewired `newsSentimentCron` (writer) + `riskFlagsCron` (reader) through it; deleted their direct `from('news_sentiment')` calls. No behavior change — same SQL/rows. No migration. 204/204 tests. Commit: de53296. Follow-ups: ARCH-2 (`trait_scores` 3-writer showcase), roll remaining tables on, eventual `adapters/supabase/` move.
+
 ### Batch 1: Portfolio home screen — COMPLETE
 Scaffolded React + Vite + TypeScript. Built Portfolio Home with mock data: `PositionCard`, `SummaryStrip`, `SortBar`, `MarketPeriodBadge`, `Sparkline`, `BottomNav`. Dark mode via CSS variables, mobile-first 375-390px. PWA manifest + service worker shell. Commit: 86b0b83.
 
