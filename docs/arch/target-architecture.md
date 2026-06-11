@@ -248,7 +248,7 @@ export const polygon: PolygonPort = new PolygonAdapter();
 Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDaily(date)`.
 
 **Rollout order** (reference-first, low surface → high):
-1. **`polygon` + `yahoo`** — the reference; also builds `HttpAdapter` + the `adapters/` root + the supabase folder move.
+1. ✅ **`polygon` + `yahoo`** (ARCH-5) — the reference; built `HttpAdapter` + the `adapters/` root + the supabase folder move.
 2. **`discord`** (`notify.ts`) — already one chokepoint + 14 typed `notify*` fns; just name the `Notifier` interface and invert the dependency. Near-free.
 3. **`finnhub`** — ~20 call-sites, half-encapsulated; the queue (`finnhubQueue.ts`) is the rate-limit quirk the adapter owns.
 4. **`ib`** — its own multi-slice sub-batch (the monster: 20+ files, app-owned gateway lifecycle via `ibContainer`, 503-off-hours). Deliberately last.
@@ -264,6 +264,20 @@ Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDai
 - No behavior change — same endpoints, params, mapping; 204/204 vitest green.
 - One commit per vendor; wire/domain types live with the adapter.
 - Test seam: prod singleton; the adapter takes its http client via constructor so a test can inject a fake — added only where a test needs it.
+
+**Progress (ARCH-5 — reference slice shipped 2026-06-11):** `HttpAdapter` base + the
+`adapters/` root stood up; Polygon + Yahoo extracted out of `services/universeQuote.ts`
+into `adapters/polygon/` + `adapters/yahoo/` (vendor-shaped Ports + `polygon`/`yahoo`
+singletons), the shared `DailyOhlcv` moved to `types/`, `universeQuote.ts` deleted (its 9
+parser tests split into co-located `polygonAdapter.test.ts` + `yahooAdapter.test.ts`, which
+mock `axios.create` to inject a fake client — the test seam). The deferred **`db/ →
+adapters/supabase/` move is done** — all 25 TableModules now live under `adapters/`, closing
+the last Phase-1 housekeeping item. The base shipped **minimal** (one client + base URL +
+permissive `validateStatus`); it absorbs the metric/notify/retry that `finnhub.ts` +
+`ibGateway.ts` hand-roll **when those vendors migrate** (the next slices), the way
+`TableModule` grew `runCount` only when a slice needed it. No behavior change; grep gate
+clean (vendor base/key only under `adapters/`); 204/204. **Next: `discord` (`notify.ts` →
+`Notifier`).**
 
 ## Strategy
 
