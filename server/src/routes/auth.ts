@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
+import { accessAttemptsTableModule } from '../db/accessAttemptsTableModule.js';
 import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
 import { getIbContainerState, startIbContainer, stopIbContainer, restartIbContainer } from '../services/ibContainer.js';
 import { notifyError } from '../services/notify.js';
@@ -56,16 +57,17 @@ router.post('/google/callback', async (req: Request, res: Response) => {
   const email = (data.user.email ?? '').toLowerCase();
   const granted = !!email && env.allowedEmails.includes(email);
 
-  const { error: insertErr } = await supabase().from('access_attempts').insert({
-    email,
-    granted,
-    ip_address: req.ip ?? null,
-    user_agent: req.header('user-agent') ?? null,
-  });
-  if (insertErr) {
+  try {
+    await accessAttemptsTableModule.record({
+      email,
+      granted,
+      ipAddress: req.ip ?? null,
+      userAgent: req.header('user-agent') ?? null,
+    });
+  } catch (e: unknown) {
     // Don't block the auth decision on logging failure — but make sure it's
     // visible. Silent failures here cost us a debugging round-trip in batch 12.
-    void notifyError('auth.access_attempts.insert', insertErr.message);
+    void notifyError('auth.access_attempts.insert', e instanceof Error ? e.message : String(e));
   }
 
   if (!granted) {
