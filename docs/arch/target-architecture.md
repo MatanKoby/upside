@@ -36,8 +36,8 @@ A cron then = four small things in four homes: **when** (`triggers/`) → **what
 
 ## Refactor order (each is its own Arch sub-batch)
 
-1. **TableModules** ← *start here.* Mechanical, safe, no behavior change.
-2. **Ports & adapters** — wrap each vendor behind a port.
+1. ✅ **TableModules** — done (Phase 1). Mechanical, safe, no behavior change.
+2. **Ports & adapters** ← *current.* Wrap each vendor behind a port.
 3. **`schedule()` primitive** — collapse the ~20 `setTimeout` loops.
 4. **Relocate pure core** into `domain/`.
 5. *(optional)* **Explicit pipeline** for the screener chain (`universe → stats → traits → curated → fires → outcomes`).
@@ -47,7 +47,7 @@ and are independently verifiable by grep — lowest risk, and they build the mus
 
 ---
 
-## Phase 1 — TableModules (current work)
+## Phase 1 — TableModules (✅ complete)
 
 **Rule.** Every `supabase().from('<table>')` read/write moves behind `<table>TableModule`.
 **One writer-owner per table.** Same SQL, same row shape — just relocated and named. No behavior change.
@@ -183,6 +183,87 @@ folder move (deferred — a trivial later relocation). Next: Phase 2 (ports & ad
 - All call-sites use the named methods.
 - Row type lives with the module.
 - No behavior change — verified by the existing crons still producing the same rows.
+
+## Phase 2 — Ports & adapters (current work)
+
+**Rule.** Every external vendor sits behind **one adapter — the sole path of access to that vendor.**
+Callers depend on a **Port** (a TS interface describing only the calls we actually make), never the
+vendor SDK / HTTP client. Same three-part shape as TableModule, transposed from DB to HTTP:
+
+| TableModule (Phase 1) | Port / Adapter (Phase 2) |
+| --- | --- |
+| `TableModule` base — `run(op, query)` error-wraps | **`HttpAdapter` base** — `get/post`: time → `externalApiMetrics.record` → classify status → `notifyApiFailure` → retry/timeout |
+| subclass — snake↔camel + intention-revealing methods | **adapter** — wire→domain mapping + vendor quirks (rate-limit queue) |
+| `export const xTableModule = new X()` | `export const polygon: PolygonPort = new PolygonAdapter()` |
+| grep gate: no `from('<table>')` outside the module | grep gate: vendor base/key only under `adapters/<vendor>/` |
+
+**Vendor-shaped, not capability-shaped.** One Port *per vendor*, shaped by what we actually call on
+it — `PolygonPort`, `FinnhubPort`, `IbPort`, `Notifier`. **Not** a generic `PricesPort`: the
+integrations don't offer the same surface (IB → positions/contracts/history; Finnhub →
+news/fundamentals; Polygon → grouped daily; Discord → delivery), so a capability port would force
+each vendor to fake methods it doesn't have. And prices — the one genuinely multi-vendor capability —
+carry a deliberate **source-arbitration policy** (which source is canonical, freshness/ownership
+gates, the prev-canonical probe; see `spec/architecture.md` + `spec/signals/playbook.md`) that lives
+in `quotes.ts` / the pollers and **must not** dissolve into "any provider" — that's a behavior change
+on a live trading system. Same call TableModule made: one gatekeeper per concrete thing, **policy
+stays in callers.** A thin capability port can wrap the vendor ports *later* if we ever want runtime
+price-provider swapping; we don't pay for it now.
+
+**The base earns its keep.** `finnhub.ts` and `ibGateway.ts` are already de-facto adapters (one
+private axios client, one `BASE`, the sole `notifyApiFailure`) — but each **hand-rolls the same
+instrumentation** (time → record metric → classify status → notify → retry). `HttpAdapter` absorbs
+that duplication, the way `TableModule.run()` absorbed error-wrapping. Phase 2 is relocation **+
+de-dup**, not relocation alone.
+
+**Home.** `adapters/<vendor>/` — `port.ts` (the interface) + `<vendor>Adapter.ts` (the impl). Slice 1
+creates the `adapters/` root + the `HttpAdapter` base, and **folds in the deferred `db/ →
+adapters/supabase/` move** (the TableModules relocate to their final home in the same structural
+slice — a mechanical path change, no logic touched).
+
+**Reference (do first): `polygon` + `yahoo`.** Polygon isn't a chokepoint today — it lives in
+`services/universeQuote.ts` cohabiting with Yahoo (raw `axios.get`, both vendor bases side by side).
+The reference slice is genuine consolidation: two tiny adapters, and `universeQuote.ts` empties to
+(at most) pure mapping helpers. Both bases must leave that file for the gate to pass.
+
+```ts
+// adapters/polygon/port.ts — the contract callers depend on
+export interface PolygonPort {
+  /** Whole-market grouped daily bars for a date. null when the key is unset. */
+  groupedDaily(date: string): Promise<DailyOhlcv[] | null>;
+}
+
+// adapters/polygon/polygonAdapter.ts — SOLE importer of the Polygon base + key
+class PolygonAdapter extends HttpAdapter implements PolygonPort {
+  constructor() { super('polygon', 'https://api.polygon.io'); }     // base = grep anchor
+  async groupedDaily(date: string): Promise<DailyOhlcv[] | null> {
+    if (!env.polygonApiKey) return null;
+    const raw = await this.get(`/v2/aggs/grouped/locale/us/market/stocks/${date}`,
+      { params: { adjusted: 'true', apiKey: env.polygonApiKey } }); // base owns metric+notify+retry
+    return mapGrouped(raw);                                          // wire → DailyOhlcv[]
+  }
+}
+export const polygon: PolygonPort = new PolygonAdapter();
+```
+
+Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDaily(date)`.
+
+**Rollout order** (reference-first, low surface → high):
+1. **`polygon` + `yahoo`** — the reference; also builds `HttpAdapter` + the `adapters/` root + the supabase folder move.
+2. **`discord`** (`notify.ts`) — already one chokepoint + 14 typed `notify*` fns; just name the `Notifier` interface and invert the dependency. Near-free.
+3. **`finnhub`** — ~20 call-sites, half-encapsulated; the queue (`finnhubQueue.ts`) is the rate-limit quirk the adapter owns.
+4. **`ib`** — its own multi-slice sub-batch (the monster: 20+ files, app-owned gateway lifecycle via `ibContainer`, 503-off-hours). Deliberately last.
+- **Deferred:** `llm` (Analyze-flow is roadmap Track 4 — `spec/roadmap.md`); `yahoo` rides slice 1 but stays minimal.
+
+**Grep-gate anchors:** `api.polygon.io` / `env.polygonApiKey` · `query1.finance.yahoo.com` ·
+`finnhub.io` / `env.finnhubApiKey` · `env.ibGatewayUrl` (the gateway client) · the
+`env.discord*WebhookUrl` set — each appears only under its `adapters/<vendor>/`.
+
+**Definition of done, per vendor:**
+- A `Port` interface callers depend on; the adapter is the sole vendor-SDK/base importer (grep-enforced).
+- Cross-cutting (timing, metric, notify, retry) in `HttpAdapter`; business policy (price arbitration, cooldowns) stays in callers.
+- No behavior change — same endpoints, params, mapping; 204/204 vitest green.
+- One commit per vendor; wire/domain types live with the adapter.
+- Test seam: prod singleton; the adapter takes its http client via constructor so a test can inject a fake — added only where a test needs it.
 
 ## Strategy
 
