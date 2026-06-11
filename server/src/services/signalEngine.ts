@@ -17,6 +17,7 @@ import { quotesTableModule } from '../db/quotesTableModule.js';
 import { positionsTableModule } from '../db/positionsTableModule.js';
 import { analysesTableModule } from '../db/analysesTableModule.js';
 import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
+import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -95,11 +96,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // --- Position + preferences ------------------------------------------
     const position = await positionsTableModule.getByUserAndSymbol(userId, sym).catch(() => null);
 
-    const { data: prefs } = await db
-      .from('user_preferences')
-      .select('signal_min_market_value, suppressed_symbols, profit_zone_threshold_pct, risk_flag_config')
-      .eq('user_id', userId)
-      .maybeSingle();
+    const prefs = await userPreferencesTableModule.getByUserId(userId);
 
     // --- Direction by holding status -------------------------------------
     // Held → SELL playbook; not held (watchlist candidate) → BUY. MVP is
@@ -108,12 +105,12 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     const direction: SignalDirection = isHeld ? 'sell' : 'buy';
 
     // --- Pre-LLM filters (skip entirely) ---------------------------------
-    if ((prefs?.suppressed_symbols ?? []).includes(sym)) {
+    if ((prefs?.suppressedSymbols ?? []).includes(sym)) {
       console.log(`[signalEngine] ${sym} suppressed — skipping`);
       return;
     }
     if (isHeld) {
-      const minMktValue = Number(prefs?.signal_min_market_value ?? 1000);
+      const minMktValue = prefs?.signalMinMarketValue ?? 1000;
       // Price SSOT (Batch X5): market value = quotes.canonical_price × shares.
       const heldConid = position?.conid != null ? Number(position.conid) : null;
       let heldPrice: number | null = null;
@@ -210,7 +207,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // Reuses the bars + earnings + market cap we already pulled. Persists the
     // row (Realtime → card badge / Risk-flags section, Batch R2) and feeds the
     // LLM both as prompt context and, on CRITICAL, a hard quality clamp.
-    const riskConfig = resolveRiskFlagConfig(prefs?.risk_flag_config);
+    const riskConfig = resolveRiskFlagConfig(prefs?.riskFlagConfig);
     const riskInputs = buildRiskFlagInputs({
       closes: dailyBars.c,
       volumes: dailyBars.v,
@@ -226,7 +223,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     const riskRow = await evaluateAndStore(conid, riskInputs, riskConfig, riskFlagAsofDate());
 
     // --- Contextual triggers (profit-taking zone) ------------------------
-    const thresholdPct = Number(prefs?.profit_zone_threshold_pct ?? 2.0);
+    const thresholdPct = prefs?.profitZoneThresholdPct ?? 2.0;
     const zoneEnteredAt = position?.zoneEnteredAt;
     const inZone = zoneEnteredAt != null;
     const inProfitTakingZone = inZone

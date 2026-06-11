@@ -10,7 +10,7 @@
 // Re-entry chop near the threshold within the window is suppressed. Zone-exit
 // never notifies in MVP — exit data is recorded for post-mortem only.
 
-import { supabase } from './supabase.js';
+import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 
 const ZONE_NOTIFY_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4h
@@ -77,12 +77,8 @@ export function computeZoneState(
 // The owner's configured threshold, falling back to the default when the
 // preferences row or column is missing/invalid.
 export async function getProfitZoneThreshold(userId: string): Promise<number> {
-  const { data } = await supabase()
-    .from('user_preferences')
-    .select('profit_zone_threshold_pct')
-    .eq('user_id', userId)
-    .maybeSingle();
-  const raw = data?.profit_zone_threshold_pct;
+  const prefs = await userPreferencesTableModule.getByUserId(userId);
+  const raw = prefs?.profitZoneThresholdPct;
   const n = raw == null ? DEFAULT_THRESHOLD_PCT : Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_THRESHOLD_PCT;
 }

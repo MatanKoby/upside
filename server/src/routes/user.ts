@@ -12,7 +12,11 @@
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { supabase } from '../services/supabase.js';
+import {
+  userPreferencesTableModule,
+  type UserPreferences,
+  type UserPreferencesPatch,
+} from '../db/userPreferencesTableModule.js';
 import {
   resolveRiskFlagConfig,
   RISK_FLAG_DEFAULTS,
@@ -49,41 +53,29 @@ const GENERAL_DEFAULTS: GeneralPreferences = {
 
 const NUMERIC_PREFS: Record<
   keyof GeneralPreferences,
-  { col: string; min: number; max: number; int?: boolean }
+  { min: number; max: number; int?: boolean }
 > = {
-  profitZoneThresholdPct: { col: 'profit_zone_threshold_pct', min: 0.5, max: 10 },
+  profitZoneThresholdPct: { min: 0.5, max: 10 },
 };
 
 const NUMERIC_KEYS = Object.keys(NUMERIC_PREFS) as (keyof GeneralPreferences)[];
 
-interface StoredRow {
-  risk_flag_config: unknown;
-  profit_zone_threshold_pct: number | null;
+async function readStored(userId: string): Promise<UserPreferences | null> {
+  return userPreferencesTableModule.getByUserId(userId);
 }
 
-const SELECT_COLS = 'risk_flag_config, profit_zone_threshold_pct';
-
-async function readStored(userId: string): Promise<StoredRow | null> {
-  const { data } = await supabase()
-    .from('user_preferences')
-    .select(SELECT_COLS)
-    .eq('user_id', userId)
-    .maybeSingle();
-  return (data as StoredRow | null) ?? null;
-}
-
-function resolveGeneral(row: StoredRow | null): GeneralPreferences {
+function resolveGeneral(row: UserPreferences | null): GeneralPreferences {
   return {
     profitZoneThresholdPct:
-      row?.profit_zone_threshold_pct ?? GENERAL_DEFAULTS.profitZoneThresholdPct,
+      row?.profitZoneThresholdPct ?? GENERAL_DEFAULTS.profitZoneThresholdPct,
   };
 }
 
-function body(row: StoredRow | null) {
+function body(row: UserPreferences | null) {
   return {
-    riskFlagConfig: resolveRiskFlagConfig(row?.risk_flag_config ?? null),
+    riskFlagConfig: resolveRiskFlagConfig(row?.riskFlagConfig ?? null),
     defaults: RISK_FLAG_DEFAULTS,
-    isCustom: row?.risk_flag_config != null,
+    isCustom: row?.riskFlagConfig != null,
     preferences: resolveGeneral(row),
   };
 }
@@ -104,16 +96,13 @@ router.put('/preferences', async (req: Request, res: Response) => {
   }
 
   const stored = await readStored(req.user.id);
-  // Single upsert payload; absent fields keep their current stored value, so a
-  // partial PUT is a partial override, not a reset.
-  const update: Record<string, unknown> = {
-    user_id: req.user.id,
-    updated_at: new Date().toISOString(),
-  };
+  // Partial patch; absent fields keep their current stored value, so a partial
+  // PUT is a partial override, not a reset (the module stamps user_id/updated_at).
+  const patch: UserPreferencesPatch = {};
 
   if (hasRiskFlags) {
     const o = incoming.riskFlagConfig as Partial<Record<keyof RiskFlagConfig, unknown>>;
-    const current = resolveRiskFlagConfig(stored?.risk_flag_config ?? null);
+    const current = resolveRiskFlagConfig(stored?.riskFlagConfig ?? null);
     const next: RiskFlagConfig = { ...current };
     for (const key of KEYS) {
       if (!(key in o) || o[key] == null) continue;
@@ -125,7 +114,7 @@ router.put('/preferences', async (req: Request, res: Response) => {
       }
       next[key] = v;
     }
-    update.risk_flag_config = next;
+    patch.riskFlagConfig = next;
   }
 
   if (hasGeneral) {
@@ -138,20 +127,16 @@ router.put('/preferences', async (req: Request, res: Response) => {
         res.status(400).json({ error: `${key} must be ${b.int ? 'an integer ' : ''}in [${b.min}, ${b.max}]` });
         return;
       }
-      update[b.col] = v;
+      patch[key] = v;
     }
   }
 
-  const up = await supabase()
-    .from('user_preferences')
-    .upsert(update, { onConflict: 'user_id' })
-    .select(SELECT_COLS)
-    .single();
-  if (up.error) {
-    res.status(500).json({ error: up.error.message });
-    return;
+  try {
+    const saved = await userPreferencesTableModule.upsert(req.user.id, patch);
+    res.json(body(saved ?? stored));
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
-  res.json(body((up.data as StoredRow | null) ?? stored));
 });
 
 export default router;

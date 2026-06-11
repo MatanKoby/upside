@@ -13,7 +13,7 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { basicFinancials, earningsCalendar } from '../services/finnhub.js';
-import { supabase } from '../services/supabase.js';
+import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
 import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
 import { positionsTableModule } from '../db/positionsTableModule.js';
@@ -31,12 +31,8 @@ function num(v: unknown): number | null {
 }
 
 async function loadConfig(): Promise<RiskFlagConfig> {
-  const { data } = await supabase()
-    .from('user_preferences')
-    .select('risk_flag_config')
-    .limit(1)
-    .maybeSingle();
-  return resolveRiskFlagConfig(data?.risk_flag_config);
+  const prefs = await userPreferencesTableModule.getAny();
+  return resolveRiskFlagConfig(prefs?.riskFlagConfig);
 }
 
 interface Target {
