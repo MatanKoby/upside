@@ -8,7 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-5 — Ports & adapters (Phase 2): polygon + yahoo reference slice
+- Owner: claude
+- Started: 2026-06-11 08:56
+- Scope: first Phase-2 slice — stand up the `HttpAdapter` base + the `adapters/` root, then extract Polygon + Yahoo out of `services/universeQuote.ts` into vendor-shaped Port/adapter pairs (`adapters/polygon/`, `adapters/yahoo/`), moving the shared `DailyOhlcv` type to `types/`. No behavior change (same endpoints/params/mapping; callers keep their own notify policy). Reference spec: `docs/arch/target-architecture.md` → Phase 2. The mechanical `db/ → adapters/supabase/` relocation rides this batch as its own commit.
 
 ## Known issues (deferred fixes)
 
