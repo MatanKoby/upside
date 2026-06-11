@@ -12,13 +12,13 @@
 // fail soft — a malformed LLM response (after one stricter retry) is persisted
 // as a `no_signal` row rather than crashing the api.
 
-import { supabase } from './supabase.js';
 import { quotesTableModule } from '../db/quotesTableModule.js';
 import { positionsTableModule } from '../db/positionsTableModule.js';
 import { analysesTableModule } from '../db/analysesTableModule.js';
 import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
 import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
 import { contractsTableModule } from '../db/contractsTableModule.js';
+import { signalsTableModule, type SignalInsert } from '../db/signalsTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -325,7 +325,6 @@ async function persistAnalysis(
   featurePack: FeaturePack,
   output: LlmAnalysisOutput,
 ): Promise<void> {
-  const db = supabase();
   const analyzedAt = new Date().toISOString();
   const sig = output.signal;
 
@@ -355,28 +354,24 @@ async function persistAnalysis(
 
   // Whole-analysis supersede: every prior non-superseded signal for this
   // (user, symbol) points at the new analysis. Runs before inserting the new
-  // row so it can't supersede itself.
-  await db
-    .from('signals')
-    .update({ superseded_by_analysis_id: analysisId })
-    .eq('user_id', userId)
-    .eq('symbol', sym)
-    .is('superseded_by_analysis_id', null);
+  // row so it can't supersede itself. Lenient — a supersede miss must not
+  // block the new insert (matches the pre-module silent-await behavior).
+  await signalsTableModule.supersedePriorForSymbol(userId, sym, analysisId).catch(() => undefined);
 
-  let row: Record<string, unknown>;
+  let signalInsert: SignalInsert;
   if (sig && sig.legs.length > 0) {
     const leg0 = sig.legs[0]!;
     const range = legToRange(leg0, featurePack);
-    row = {
-      user_id: userId,
+    signalInsert = {
+      userId,
       symbol: sym,
       conid,
-      analysis_id: analysisId,
-      signal_type: sig.direction,
-      signal_quality: Math.round(sig.signalQuality),
-      price_range_low: range.low,
-      price_range_high: range.high,
-      optimal_price: range.optimal,
+      analysisId,
+      signalType: sig.direction,
+      signalQuality: Math.round(sig.signalQuality),
+      priceRangeLow: range.low,
+      priceRangeHigh: range.high,
+      optimalPrice: range.optimal,
       motivation: sig.motivation,
       rationale: leg0.reasoning,
       playbook: {
@@ -387,24 +382,27 @@ async function persistAnalysis(
         horizonWindow: sig.horizonWindow,
         legs: sig.legs,
       },
-      analyzed_at: analyzedAt,
-      expires_at: expiresAt,
+      analyzedAt,
+      expiresAt,
     };
   } else {
-    row = {
-      user_id: userId,
+    signalInsert = {
+      userId,
       symbol: sym,
       conid,
-      analysis_id: analysisId,
-      signal_type: 'no_signal',
-      signal_quality: 0,
-      analyzed_at: analyzedAt,
-      expires_at: expiresAt,
+      analysisId,
+      signalType: 'no_signal',
+      signalQuality: 0,
+      analyzedAt,
+      expiresAt,
     };
   }
 
-  const { error: sErr } = await db.from('signals').insert(row);
-  if (sErr) void notifyError('signalEngine.persist', `insert signal failed for ${sym}: ${sErr.message}`);
+  try {
+    await signalsTableModule.insertSignal(signalInsert);
+  } catch (e: unknown) {
+    void notifyError('signalEngine.persist', `insert signal failed for ${sym}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // Writes a single no_signal row (unresolved contract / LLM failure) so the
