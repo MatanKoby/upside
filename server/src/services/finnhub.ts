@@ -7,7 +7,7 @@
 
 import axios, { type AxiosInstance } from 'axios';
 import { env } from '../env.js';
-import { supabase } from './supabase.js';
+import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
 import { finnhubQueue } from './finnhubQueue.js';
 import { notifyApiFailure } from './notify.js';
 
@@ -35,21 +35,17 @@ function recordMetric(
   status: number,
   succeeded: boolean,
 ): void {
-  void supabase()
-    .from('external_api_metrics')
-    .insert({
+  void externalApiMetricsTableModule
+    .record({
       provider: 'finnhub',
       endpoint: `finnhub:${category}`,
       conid: null,
-      duration_ms: durationMs,
+      durationMs,
       retries: 0,
       status,
       succeeded,
     })
-    .then(
-      () => undefined,
-      (err) => console.error('[external_api_metrics insert]', err?.message ?? err),
-    );
+    .catch((err) => console.error('[external_api_metrics insert]', err?.message ?? err));
 }
 
 // Wraps a single Finnhub call with the queue and audit insert.

@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
 import https from 'node:https';
 import { env } from '../env.js';
-import { supabase } from './supabase.js';
+import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
 import { notifyApiFailure } from './notify.js';
 import type {
   RawIbPosition,
@@ -73,18 +73,17 @@ async function instrumented<T>(
     };
   } finally {
     const durationMs = Math.round(performance.now() - start);
-    void supabase()
-      .from('external_api_metrics')
-      .insert({
+    void externalApiMetricsTableModule
+      .record({
         provider: 'ib',
         endpoint: opts.endpoint,
         conid: opts.conid ?? null,
-        duration_ms: durationMs,
+        durationMs,
         retries,
         status: lastStatus,
         succeeded,
       })
-      .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
+      .catch((err) => console.error('[external_api_metrics insert]', err?.message ?? err));
     // Surface API error responses to Discord via the shared policy (suppresses
     // expected churn, rate-limited per endpoint). Without this, non-2xx
     // responses only ever reached the metrics table — Discord stayed blind.
@@ -127,18 +126,17 @@ async function instrumentedWithRetry<T>(
     };
   } finally {
     const durationMs = Math.round(performance.now() - start);
-    void supabase()
-      .from('external_api_metrics')
-      .insert({
+    void externalApiMetricsTableModule
+      .record({
         provider: 'ib',
         endpoint: opts.endpoint,
         conid: opts.conid ?? null,
-        duration_ms: durationMs,
+        durationMs,
         retries,
         status: lastStatus,
         succeeded,
       })
-      .then(() => undefined, (err) => console.error('[external_api_metrics insert]', err?.message ?? err));
+      .catch((err) => console.error('[external_api_metrics insert]', err?.message ?? err));
     // Same Discord surfacing as instrumented() — fires once after all internal
     // retries (succeeded reflects the final attempt), so a flaky-then-recovered
     // call stays quiet. Debug-passthrough probes are excluded as above.

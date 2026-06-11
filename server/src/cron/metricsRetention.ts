@@ -9,7 +9,7 @@
 // time, so a long-running container still gets one sweep per day even if
 // we miss UTC midnight). Deletes rows older than RETENTION_DAYS days.
 
-import { supabase } from '../services/supabase.js';
+import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
 import { notifyError } from '../services/notify.js';
 
 const RETENTION_DAYS = 30;
@@ -20,15 +20,12 @@ let timer: NodeJS.Timeout | null = null;
 
 async function sweep(): Promise<void> {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const { error, count } = await supabase()
-    .from('external_api_metrics')
-    .delete({ count: 'exact' })
-    .lt('captured_at', cutoff);
-  if (error) {
-    void notifyError('metricsRetention.delete', error.message);
-    return;
+  try {
+    const count = await externalApiMetricsTableModule.purgeOlderThan(cutoff);
+    console.log(`[metricsRetention] deleted ${count} rows older than ${RETENTION_DAYS}d (cutoff ${cutoff})`);
+  } catch (e: unknown) {
+    void notifyError('metricsRetention.delete', e instanceof Error ? e.message : String(e));
   }
-  console.log(`[metricsRetention] deleted ${count ?? '?'} rows older than ${RETENTION_DAYS}d (cutoff ${cutoff})`);
 }
 
 export function startMetricsRetention(): void {
