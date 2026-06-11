@@ -249,7 +249,7 @@ Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDai
 
 **Rollout order** (reference-first, low surface → high):
 1. ✅ **`polygon` + `yahoo`** (ARCH-5) — the reference; built `HttpAdapter` + the `adapters/` root + the supabase folder move.
-2. **`discord`** (`notify.ts`) — already one chokepoint + 14 typed `notify*` fns; just name the `Notifier` interface and invert the dependency. Near-free.
+2. ✅ **`discord`** (ARCH-6) — `notify.ts` → `Notifier`; the adapter owns channel→webhook-URL resolution + delivery, `notify.ts` keeps cooldown + the 14 formatters.
 3. **`finnhub`** — ~20 call-sites, half-encapsulated; the queue (`finnhubQueue.ts`) is the rate-limit quirk the adapter owns.
 4. **`ib`** — its own multi-slice sub-batch (the monster: 20+ files, app-owned gateway lifecycle via `ibContainer`, 503-off-hours). Deliberately last.
 - **Deferred:** `llm` (Analyze-flow is roadmap Track 4 — `spec/roadmap.md`); `yahoo` rides slice 1 but stays minimal.
@@ -276,8 +276,21 @@ the last Phase-1 housekeeping item. The base shipped **minimal** (one client + b
 permissive `validateStatus`); it absorbs the metric/notify/retry that `finnhub.ts` +
 `ibGateway.ts` hand-roll **when those vendors migrate** (the next slices), the way
 `TableModule` grew `runCount` only when a slice needed it. No behavior change; grep gate
-clean (vendor base/key only under `adapters/`); 204/204. **Next: `discord` (`notify.ts` →
-`Notifier`).**
+clean (vendor base/key only under `adapters/`); 204/204.
+
+**Progress (ARCH-6 — discord shipped 2026-06-11):** `notify.ts` inverted onto a new
+`adapters/discord/` — `port.ts` (`Notifier`: `post(channel, payload)` + `has(channel)` over
+logical `DiscordChannel` names) + `discordAdapter.ts` (SOLE importer of the 9
+`env.discord*WebhookUrl` fields; owns channel→URL resolution incl. the critical→routine
+fallback, the 5s-timeout `axios.post`, never-throw swallow, no-op-when-unconfigured).
+Discord is a multi-full-URL delivery sink, not a single-base REST API, so the adapter does
+**not** extend `HttpAdapter` (the "implement their own version" case) — its delivery is an
+injectable constructor seam instead. `notify.ts` keeps all policy: the cooldown state,
+severity→color, and the 14 alert formatters; `has()` preserves the exact
+early-bail-before-cooldown semantics of the old `webhookFor()`/`!url` guard. No behavior
+change; grep gate clean (`env.discord*` only under `adapters/discord/`); 208/208 (+4 adapter
+tests). **Next: `finnhub` (`finnhub.ts` + `finnhubQueue.ts` → `FinnhubPort`; the slice that
+makes `HttpAdapter` absorb the hand-rolled metric/notify/retry instrumentation).**
 
 ## Strategy
 
