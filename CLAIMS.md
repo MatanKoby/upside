@@ -8,7 +8,10 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-4 — remaining-tables TableModule rollout (finish Phase 1)
+- Owner: claude
+- Started: 2026-06-11 03:42
+- Scope: fold the stragglers never in the ARCH-3 rollout list behind TableModules so every table is gatekept — `app_config`, `access_attempts`, `external_api_metrics`, `screener_jobs` (jobsReaper/jobsRetention outside the queue.ts prototype), `user_preferences`, `contracts`, `signals`. Same mechanical pattern as ARCH-1/2/3: one commit per table, grep-gate + server typecheck + 204 tests per slice. No behavior change. Design ref: `docs/arch/target-architecture.md` → "Out of the original ARCH-3 scope".
 
 ## Known issues (deferred fixes)
 
