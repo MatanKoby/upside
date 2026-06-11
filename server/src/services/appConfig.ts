@@ -4,25 +4,18 @@
 // the api owns writes via the service role. Keep secrets OUT of here — values
 // are readable by the browser.
 
-import { supabase } from './supabase.js';
+import { appConfigTableModule } from '../db/appConfigTableModule.js';
 import { notifyError } from './notify.js';
 
 export async function getAppConfig(key: string): Promise<string | null> {
-  const { data, error } = await supabase()
-    .from('app_config')
-    .select('value')
-    .eq('key', key)
-    .maybeSingle();
-  if (error) {
-    void notifyError(`appConfig.get.${key}`, error.message);
+  try {
+    return await appConfigTableModule.getValue(key);
+  } catch (e: unknown) {
+    void notifyError(`appConfig.get.${key}`, e instanceof Error ? e.message : String(e));
     return null;
   }
-  return data?.value ?? null;
 }
 
 export async function setAppConfig(key: string, value: string): Promise<void> {
-  const { error } = await supabase()
-    .from('app_config')
-    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
-  if (error) throw new Error(`app_config upsert '${key}' failed: ${error.message}`);
+  await appConfigTableModule.setValue(key, value);
 }

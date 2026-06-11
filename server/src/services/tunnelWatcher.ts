@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { env } from '../env.js';
-import { supabase } from './supabase.js';
+import { appConfigTableModule } from '../db/appConfigTableModule.js';
 import { notifyError } from './notify.js';
 
 // Detects current Cloudflare Quick Tunnel URLs from cloudflared logfiles
@@ -37,14 +37,10 @@ async function parseLatestUrl(logPath: string): Promise<string | null> {
 }
 
 async function upsertUrl(configKey: string, url: string): Promise<boolean> {
-  const { error } = await supabase()
-    .from('app_config')
-    .upsert(
-      { key: configKey, value: url, updated_at: new Date().toISOString() },
-      { onConflict: 'key' },
-    );
-  if (error) {
-    void notifyError(`tunnelWatcher.${configKey}.upsert`, error.message);
+  try {
+    await appConfigTableModule.setValue(configKey, url);
+  } catch (e: unknown) {
+    void notifyError(`tunnelWatcher.${configKey}.upsert`, e instanceof Error ? e.message : String(e));
     return false;
   }
   console.log(`[tunnelWatcher:${configKey}] upserted: ${url}`);
