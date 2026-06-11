@@ -7,8 +7,8 @@
 // failures within the window are dropped silently. The count since last
 // notification is included in the next message so you know it kept happening.
 
-import axios from 'axios';
-import { env } from '../env.js';
+import { discord } from '../adapters/discord/discordAdapter.js';
+import type { DiscordChannel } from '../adapters/discord/port.js';
 
 const COOLDOWN_MS = 5 * 60_000;
 const MAX_DESC_CHARS = 1800; // Discord embeds cap descriptions ~4k; stay well under
@@ -37,15 +37,6 @@ function describe(message: string, err: unknown): string {
   return out.length > MAX_DESC_CHARS ? out.slice(0, MAX_DESC_CHARS - 3) + '...' : out;
 }
 
-async function postWebhook(url: string, payload: Record<string, unknown>): Promise<void> {
-  if (!url) return; // silently no-op when not configured
-  try {
-    await axios.post(url, payload, { timeout: 5_000, validateStatus: () => true });
-  } catch {
-    // Don't let the notifier itself blow up the caller.
-  }
-}
-
 type Severity = 'error' | 'critical' | 'info';
 
 const VISUAL: Record<Severity, { emoji: string; color: number }> = {
@@ -54,13 +45,10 @@ const VISUAL: Record<Severity, { emoji: string; color: number }> = {
   info:     { emoji: '🟢', color: 0x43A047 },
 };
 
-function webhookFor(sev: Severity): string {
-  if (sev === 'critical') {
-    // Critical routes to its own channel; fall back to the routine channel
-    // if the critical webhook isn't configured (so we don't drop the message).
-    return env.discordCriticalWebhookUrl || env.discordWebhookUrl;
-  }
-  return env.discordWebhookUrl;
+function channelForSeverity(sev: Severity): DiscordChannel {
+  // Critical routes to its own channel; the adapter falls back to the routine
+  // channel when the critical webhook isn't configured (so we don't drop it).
+  return sev === 'critical' ? 'errorsCritical' : 'errors';
 }
 
 type EmbedField = { name: string; value: string; inline?: boolean };
@@ -81,8 +69,8 @@ async function notify(
     console.error(`[${key}] ${message}`);
   }
 
-  const url = webhookFor(sev);
-  if (!url) return;
+  const channel = channelForSeverity(sev);
+  if (!discord.has(channel)) return;
 
   const now = Date.now();
   const prev = state.get(key);
@@ -110,7 +98,7 @@ async function notify(
       inline: f.inline ?? false,
     }));
   }
-  await postWebhook(url, { username: 'upside', embeds: [embed] });
+  await discord.post(channel, { username: 'upside', embeds: [embed] });
 }
 
 /**
@@ -199,9 +187,7 @@ export function notifyProfitZoneEntry(args: {
   const gapSuffix = viaGap ? ' · entered outside regular hours (gap — often fades at open)' : '';
   const line = `🔔 ${symbol} entered profit-taking zone — P&L +${pnlPct.toFixed(2)}% (threshold +${thresholdPct}%)${gapSuffix}`;
   console.log(`[zone] ${line}`);
-  const url = env.discordZoneProfitWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('zoneProfit', {
     username: 'upside',
     embeds: [{
       title: `🔔 ${symbol} · profit-taking zone`,
@@ -239,9 +225,7 @@ export function notifyEntryZoneHit(args: {
   const { symbol, horizon, zonePrice, currentPrice, reasoning, confidence } = args;
   const line = `🟢 ${symbol} hit ${horizon} entry zone — $${zonePrice} (${reasoning}, ${confidence}%) · current $${currentPrice}`;
   console.log(`[entry-zones] ${line}`);
-  const url = env.discordDipBuysWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('dipBuys', {
     username: 'upside',
     embeds: [{
       title: `🟢 ${symbol} · ${horizon} entry zone hit`,
@@ -276,9 +260,7 @@ export function notifyIntradayStatsHit(args: {
     `band $${bandTop.toFixed(2)}–$${bandBottom.toFixed(2)} ` +
     `(typical -${typicalDipPct.toFixed(1)}% / deep -${deepDipPct.toFixed(1)}%)`;
   console.log(`[intraday-stats] ${line}`);
-  const url = env.discordStatsAlertsWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('statsAlerts', {
     username: 'upside',
     embeds: [{
       title: `📊 ${symbol} · typical intraday-low band`,
@@ -307,7 +289,6 @@ export function notifyTraitFirstFire(args: {
   payload: Record<string, unknown>;
 }): Promise<void> {
   const { trait, symbol, score, payload } = args;
-  const url = env.discordEventAlertsWebhookUrl;
   // Trait-specific one-line summary so the channel reads at a glance.
   let summary = '';
   if (trait === 'catalyst_reversal') {
@@ -329,8 +310,7 @@ export function notifyTraitFirstFire(args: {
   }
   const line = `🚨 ${symbol} · ${trait} · score ${score} · ${summary}`;
   console.log(`[trait-fire] ${line}`);
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('eventAlerts', {
     username: 'upside',
     embeds: [{
       title: `🚨 ${symbol} · ${trait}`,
@@ -376,9 +356,7 @@ export function notifyBandTouchLow(args: {
     `🟢 ${symbol} touched predicted low band — $${currentPrice.toFixed(2)} ` +
     `(band $${lowBand.toFixed(2)}–$${highBand.toFixed(2)})${regimeNote}${scalarNote}`;
   console.log(`[band-engine] ${line}`);
-  const url = env.discordDipBuysWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('dipBuys', {
     username: 'upside',
     embeds: [{
       title: `🟢 ${symbol} · band-engine low touch`,
@@ -411,9 +389,7 @@ export function notifyBandTouchHigh(args: {
     `🔺 ${symbol} touched predicted high band — $${currentPrice.toFixed(2)} ` +
     `(band $${lowBand.toFixed(2)}–$${highBand.toFixed(2)})${regimeNote}${scalarNote}`;
   console.log(`[band-engine] ${line}`);
-  const url = env.discordSellZonesWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('sellZones', {
     username: 'upside',
     embeds: [{
       title: `🔺 ${symbol} · band-engine high touch`,
@@ -449,9 +425,7 @@ export function notifyIntradayDipBounce(args: {
     `🟢 ${symbol} — intraday dip-bounce (score ${Math.round(score)})\n` +
     `Current ${px} · drop from open ${drop} · session ${sessionRegime ?? 'n/a'}${zone}`;
   console.log(`[dip-bounce] ${line.replace('\n', ' ')}`);
-  const url = env.discordIntradaySuggestionsWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('intradaySuggestions', {
     username: 'upside',
     embeds: [{
       title: `🟢 ${symbol} · intraday dip-bounce`,
@@ -487,9 +461,7 @@ export function notifySwingDipBounce(args: {
     `Current ${px} · daily trend ${trend ?? 'n/a'}${rsiNote}` +
     (zones ? `\n${zones}` : '');
   console.log(`[dip-bounce] ${line.replace(/\n/g, ' ')}`);
-  const url = env.discordSwingSuggestionsWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('swingSuggestions', {
     username: 'upside',
     embeds: [{
       title: `🟢 ${symbol} · swing dip-bounce`,
@@ -510,9 +482,7 @@ export function notifyDipBuyMarkerHit(args: {
   const tag = label ? ` ("${label}")` : '';
   const line = `🟢 ${symbol} hit dip-buy at $${markerPrice}${tag} — current $${currentPrice}`;
   console.log(`[markers] ${line}`);
-  const url = env.discordDipBuysWebhookUrl;
-  if (!url) return Promise.resolve();
-  return postWebhook(url, {
+  return discord.post('dipBuys', {
     username: 'upside',
     embeds: [{
       title: `🟢 ${symbol} · dip-buy hit`,
