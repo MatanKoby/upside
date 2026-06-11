@@ -5,30 +5,19 @@
 // drainFailed path picks them up. Covers: worker crashed mid-job, worker
 // hung on a slow upstream past the lease, container restart mid-claim.
 
-import { supabase } from '../services/supabase.js';
+import { reapExpiredClaims } from '../services/jobs/queue.js';
 import { notifyError } from '../services/notify.js';
 
 const CADENCE_MS = 60_000;
 
 async function tick(): Promise<void> {
-  const nowIso = new Date().toISOString();
-  const { data, error } = await supabase()
-    .from('screener_jobs')
-    .update({
-      status: 'failed',
-      last_error: 'lease expired',
-      completed_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('status', 'claimed')
-    .lt('lease_expires_at', nowIso)
-    .select('id');
-  if (error) {
-    void notifyError('jobsReaper.tick', error.message);
-    return;
-  }
-  if (data && data.length > 0) {
-    console.log(`[jobsReaper] reaped ${data.length} lease-expired claim(s)`);
+  try {
+    const reaped = await reapExpiredClaims();
+    if (reaped > 0) {
+      console.log(`[jobsReaper] reaped ${reaped} lease-expired claim(s)`);
+    }
+  } catch (e: unknown) {
+    void notifyError('jobsReaper.tick', e instanceof Error ? e.message : String(e));
   }
 }
 

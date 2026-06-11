@@ -220,3 +220,43 @@ export async function claimNext(
   // directly (not an array). null when no eligible job.
   return (data && (data as JobRow).id) ? (data as JobRow) : null;
 }
+
+/**
+ * Maintenance (jobsReaper) — flip lease-expired `claimed` rows to `failed`
+ * (last_error 'lease expired') so the producer's normal drainFailed path
+ * recovers them: worker crashed mid-job, hung past the lease, or restarted
+ * mid-claim. Returns the number of claims reaped.
+ */
+export async function reapExpiredClaims(): Promise<number> {
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase()
+    .from('screener_jobs')
+    .update({
+      status: 'failed',
+      last_error: 'lease expired',
+      completed_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq('status', 'claimed')
+    .lt('lease_expires_at', nowIso)
+    .select('id');
+  if (error) throw new Error(`reapExpiredClaims failed: ${error.message}`);
+  return data?.length ?? 0;
+}
+
+/**
+ * Maintenance (jobsRetention) — delete terminal (`done`/`failed`) rows whose
+ * `completed_at` is older than `cutoff`. Safety net for rows a producer never
+ * drained (disabled mid-cycle, action no longer scheduled). Returns the
+ * number of rows deleted.
+ */
+export async function purgeTerminalOlderThan(cutoff: string): Promise<number> {
+  const { data, error } = await supabase()
+    .from('screener_jobs')
+    .delete()
+    .in('status', ['done', 'failed'])
+    .lt('completed_at', cutoff)
+    .select('id');
+  if (error) throw new Error(`purgeTerminalOlderThan failed: ${error.message}`);
+  return data?.length ?? 0;
+}

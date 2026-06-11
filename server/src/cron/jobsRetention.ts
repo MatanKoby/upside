@@ -6,7 +6,7 @@
 // disabled mid-cycle, an action no longer being scheduled). Daily cadence
 // is plenty.
 
-import { supabase } from '../services/supabase.js';
+import { purgeTerminalOlderThan } from '../services/jobs/queue.js';
 import { notifyError } from '../services/notify.js';
 
 const CADENCE_MS = 24 * 60 * 60_000;
@@ -14,18 +14,13 @@ const RETAIN_DAYS = 7;
 
 async function tick(): Promise<void> {
   const cutoff = new Date(Date.now() - RETAIN_DAYS * 86400_000).toISOString();
-  const { data, error } = await supabase()
-    .from('screener_jobs')
-    .delete()
-    .in('status', ['done', 'failed'])
-    .lt('completed_at', cutoff)
-    .select('id');
-  if (error) {
-    void notifyError('jobsRetention.tick', error.message);
-    return;
-  }
-  if (data && data.length > 0) {
-    console.log(`[jobsRetention] deleted ${data.length} rows older than ${RETAIN_DAYS}d`);
+  try {
+    const deleted = await purgeTerminalOlderThan(cutoff);
+    if (deleted > 0) {
+      console.log(`[jobsRetention] deleted ${deleted} rows older than ${RETAIN_DAYS}d`);
+    }
+  } catch (e: unknown) {
+    void notifyError('jobsRetention.tick', e instanceof Error ? e.message : String(e));
   }
 }
 
