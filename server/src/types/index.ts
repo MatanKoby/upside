@@ -3,6 +3,18 @@ export type SessionStatus = 'connected' | 'disconnected' | 'expired';
 
 export type SignalType = 'sell' | 'no_signal';
 
+// Daily OHLCV bar — the shared daily-grain shape produced by the Polygon
+// (grouped) + Yahoo (per-symbol) market-data adapters and consumed by
+// services/dailyBars.ts. Lives here (not in an adapter) because it's spoken by
+// two adapters + a service.
+export interface DailyOhlcv {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
 export interface Position {
   // IB identity
   conid: number;

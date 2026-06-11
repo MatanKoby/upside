@@ -10,7 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('./supabase.js', () => ({ supabase: () => ({}) }));
 
 import { recentWeekdays, buildDailyBarRows } from './dailyBars.js';
-import type { DailyOhlcv } from './universeQuote.js';
+import type { DailyOhlcv } from '../types/index.js';
 
 describe('recentWeekdays', () => {
   it('returns N weekdays, most-recent first, starting at yesterday', () => {

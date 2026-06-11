@@ -22,7 +22,9 @@
 // rebuilds over the weekend with no IB history.
 
 import { notifyError } from '../services/notify.js';
-import { polygonGroupedDaily, yahooChart, type DailyOhlcv } from '../services/universeQuote.js';
+import { polygon } from '../adapters/polygon/polygonAdapter.js';
+import { yahoo } from '../adapters/yahoo/yahooAdapter.js';
+import type { DailyOhlcv } from '../types/index.js';
 import { recentWeekdays, buildDailyBarRows } from '../services/dailyBars.js';
 import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
 import { universeTableModule } from '../db/universeTableModule.js';
@@ -180,7 +182,7 @@ async function tick(): Promise<void> {
   //    daily_bars when the primary date is missing.
   let primaryMap: Record<string, DailyOhlcv> = {};
   try {
-    primaryMap = await polygonGroupedDaily(primary);
+    primaryMap = await polygon.groupedDaily(primary);
   } catch (e) {
     void notifyError('universeQuoteProducer.polygon', (e as Error).message, e);
     // Don't return — drain fallback results from the previous run anyway.
@@ -214,7 +216,7 @@ async function tick(): Promise<void> {
     await sleep(POLYGON_MIN_INTERVAL_MS);
     let map: Record<string, DailyOhlcv> = {};
     try {
-      map = await polygonGroupedDaily(d);
+      map = await polygon.groupedDaily(d);
     } catch (e) {
       void notifyError(`universeQuoteProducer.dailyBars.polygon.${d}`, (e as Error).message);
       continue;
@@ -287,7 +289,7 @@ interface YahooQuoteJobPayload {
 finnhubRegistry['fallback_yahoo_quote'] = async (payloadIn) => {
   const payload = payloadIn as unknown as YahooQuoteJobPayload;
   if (!payload.symbol) throw new Error('fallback_yahoo_quote: missing payload.symbol');
-  const ohlcv = await yahooChart(payload.symbol);
+  const ohlcv = await yahoo.chart(payload.symbol);
   if (!ohlcv) {
     throw new Error(`yahoo had no data for ${payload.symbol}`);
   }
