@@ -12,7 +12,6 @@
 //   - no whitelisted Supabase user has signed in yet (sleeps 60s)
 //   - no IB account discoverable (sleeps 30s)
 
-import { supabase } from '../services/supabase.js';
 import {
   ibPositions,
   ibSnapshot,
@@ -30,6 +29,8 @@ import {
   currentVwap,
   ibBarToOhlc,
 } from '../services/ibMappers.js';
+import { contractsTableModule } from '../db/contractsTableModule.js';
+import type { Contract } from '../types/index.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
 import { notifyError, notifyCritical, notifyProfitZoneEntry } from '../services/notify.js';
 import { marketPeriodAt, tradingDaysHeld } from '../utils/marketHours.js';
@@ -74,49 +75,24 @@ function num(v: unknown): number | null {
   return null;
 }
 
-interface ContractsCacheRow {
-  conid: number;
-  symbol: string;
-  company_name: string | null;
-  industry: string | null;
-  category: string | null;
-  asset_class: string;
-  currency: string;
-  exchange: string | null;
-  valid_exchanges: string | null;
-  refreshed_at: string;
-}
-
-async function ensureContractCached(conid: number, symbol: string): Promise<ContractsCacheRow | null> {
-  const { data: existing } = await supabase()
-    .from('contracts')
-    .select('*')
-    .eq('conid', conid)
-    .maybeSingle();
+async function ensureContractCached(conid: number, symbol: string): Promise<Contract | null> {
+  const existing = await contractsTableModule.getByConid(conid);
 
   const stale = !existing
-    || (Date.now() - new Date(existing.refreshed_at).getTime()) > CONTRACTS_REFRESH_AGE_MS;
-  if (!stale) return existing as ContractsCacheRow;
+    || (Date.now() - new Date(existing.refreshedAt).getTime()) > CONTRACTS_REFRESH_AGE_MS;
+  if (!stale) return existing;
 
   const raw = await ibContractInfo(conid);
-  if (!raw) return (existing as ContractsCacheRow | null) ?? null;
+  if (!raw) return existing ?? null;
 
   const contract = ibContractInfoToContract(raw);
-  const row: ContractsCacheRow = {
-    conid: contract.conid,
-    symbol: contract.symbol || symbol,
-    company_name: contract.companyName,
-    industry: contract.industry,
-    category: contract.category,
-    asset_class: contract.assetClass,
-    currency: contract.currency,
-    exchange: contract.exchange,
-    valid_exchanges: contract.validExchanges,
-    refreshed_at: contract.refreshedAt,
-  };
-  const { error: upErr } = await supabase().from('contracts').upsert(row, { onConflict: 'conid' });
-  if (upErr) void notifyError('ibPricePoller.contracts.upsert', upErr.message);
-  return row;
+  const resolved: Contract = { ...contract, symbol: contract.symbol || symbol };
+  try {
+    await contractsTableModule.upsert(resolved);
+  } catch (e: unknown) {
+    void notifyError('ibPricePoller.contracts.upsert', e instanceof Error ? e.message : String(e));
+  }
+  return resolved;
 }
 
 // Today's intraday bars for VWAP. Period 1d / bar 5mins gives ~78 bars during
@@ -204,7 +180,7 @@ function snapNum(snap: RawIbSnapshot | undefined, code: string): number | null {
 async function assemblePosition(
   raw: RawIbPosition,
   snap: RawIbSnapshot | undefined,
-  contract: ContractsCacheRow | null,
+  contract: Contract | null,
   userId: string,
   entryInfo: EntryInfo,
 ): Promise<AssembledPosition> {
@@ -226,7 +202,7 @@ async function assemblePosition(
     conid: partial.conid,
     account_id: partial.accountId,
     symbol: partial.symbol,
-    company_name: contract?.company_name ?? null,
+    company_name: contract?.companyName ?? null,
     shares: partial.shares,
     avg_cost: partial.avgCost,
     current_price: partial.currentPrice,

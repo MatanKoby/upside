@@ -18,6 +18,7 @@ import { positionsTableModule } from '../db/positionsTableModule.js';
 import { analysesTableModule } from '../db/analysesTableModule.js';
 import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
 import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
+import { contractsTableModule } from '../db/contractsTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
@@ -90,7 +91,6 @@ function toBars(hist: RawIbHistory | null): Bars {
 export async function runAnalysis(opts: RunOpts): Promise<void> {
   const { userId, lockId } = opts;
   const sym = opts.symbol.toUpperCase();
-  const db = supabase();
 
   try {
     // --- Position + preferences ------------------------------------------
@@ -142,30 +142,26 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     }
 
     // --- Ensure contracts cache row (lazy) -------------------------------
-    const { data: contractRow } = await db
-      .from('contracts')
-      .select('conid, company_name')
-      .eq('conid', conid)
-      .maybeSingle();
+    const contractRow = await contractsTableModule.getByConid(conid);
     if (!contractRow) {
       const info = await ibContractInfo(conid);
       if (info) {
         companyName = companyName ?? info.company_name ?? null;
-        await db.from('contracts').upsert({
+        await contractsTableModule.upsert({
           conid,
           symbol: sym,
-          company_name: info.company_name,
+          companyName: info.company_name,
           industry: info.industry,
           category: info.category,
-          asset_class: info.instrument_type ?? 'STK',
+          assetClass: info.instrument_type ?? 'STK',
           currency: info.currency ?? 'USD',
           exchange: info.exchange,
-          valid_exchanges: info.valid_exchanges,
-          refreshed_at: new Date().toISOString(),
+          validExchanges: info.valid_exchanges,
+          refreshedAt: new Date().toISOString(),
         });
       }
     } else {
-      companyName = companyName ?? contractRow.company_name ?? null;
+      companyName = companyName ?? contractRow.companyName ?? null;
     }
 
     // --- Current price (IB snapshot, fall back to canonical quote) -------
