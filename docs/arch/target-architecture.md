@@ -250,7 +250,7 @@ Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDai
 **Rollout order** (reference-first, low surface → high):
 1. ✅ **`polygon` + `yahoo`** (ARCH-5) — the reference; built `HttpAdapter` + the `adapters/` root + the supabase folder move.
 2. ✅ **`discord`** (ARCH-6) — `notify.ts` → `Notifier`; the adapter owns channel→webhook-URL resolution + delivery, `notify.ts` keeps cooldown + the 14 formatters.
-3. **`finnhub`** — ~20 call-sites, half-encapsulated; the queue (`finnhubQueue.ts`) is the rate-limit quirk the adapter owns.
+3. ✅ **`finnhub`** (ARCH-7) — `FinnhubPort` + the `finnhub` singleton; the queue (`finnhubQueue.ts`) moved in as the adapter's rate-limit quirk, and the hand-rolled instrumentation landed on `HttpAdapter.instrumented()`.
 4. **`ib`** — its own multi-slice sub-batch (the monster: 20+ files, app-owned gateway lifecycle via `ibContainer`, 503-off-hours). Deliberately last.
 - **Deferred:** `llm` (Analyze-flow is roadmap Track 4 — `spec/roadmap.md`); `yahoo` rides slice 1 but stays minimal.
 
@@ -289,8 +289,23 @@ injectable constructor seam instead. `notify.ts` keeps all policy: the cooldown 
 severity→color, and the 14 alert formatters; `has()` preserves the exact
 early-bail-before-cooldown semantics of the old `webhookFor()`/`!url` guard. No behavior
 change; grep gate clean (`env.discord*` only under `adapters/discord/`); 208/208 (+4 adapter
-tests). **Next: `finnhub` (`finnhub.ts` + `finnhubQueue.ts` → `FinnhubPort`; the slice that
-makes `HttpAdapter` absorb the hand-rolled metric/notify/retry instrumentation).**
+tests). 
+
+**Progress (ARCH-7 — finnhub shipped 2026-06-11):** `services/finnhub.ts` inverted into
+`adapters/finnhub/` — `port.ts` (`FinnhubPort` + the five vendor-shaped types) +
+`finnhubAdapter.ts` (SOLE importer of `env.finnhubApiKey`, sole path to `finnhub.io`), with
+`finnhubQueue.ts` moved in as the adapter's own quirk (the per-call rate-limit + min-interval
+ceiling polygon/yahoo lack; the token rides as a `?token=` query param). **The base earned its
+keep:** the timing → `external_api_metrics` → `notifyApiFailure` wrapper `finnhub.ts` hand-rolled
+now lives in `HttpAdapter.instrumented()`, with provider/endpoint/notify-key derived from the
+`vendor` field (`<vendor>` / `<vendor>:<category>` / `<vendor>_api.<category>`) — shared, not
+finnhub-specific. polygon/yahoo keep calling raw `get()` (their callers own their notify policy)
+and never touch `instrumented()`. All 9 callers rewired from free functions to the `finnhub`
+singleton; the two externally-used vendor types (`FinnhubMetrics`, `FinnhubEarningsRow`) moved to
+the port. No behavior change; grep gate clean (`finnhub.io` / `env.finnhubApiKey` / `finnhubQueue`
+only under `adapters/finnhub/`); 215/215 (+7 adapter tests). **Next: `ib` — its own multi-slice
+sub-batch (the monster: app-owned gateway lifecycle, 503-off-hours), deliberately last.** `llm`
+deferred (roadmap Track 4).**
 
 ## Strategy
 

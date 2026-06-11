@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-7 — Ports & adapters (Phase 2): finnhub adapter
-- Owner: claude
-- Started: 2026-06-11 18:40
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,52 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-7 — Ports & adapters (Phase 2): finnhub adapter (2026-06-11)
+- Owner: claude
+- Started: 2026-06-11 18:40
+- Finished: 2026-06-11 21:05
+- Commit: 74ecc86
+
+**What shipped.** `services/finnhub.ts` inverted into `adapters/finnhub/` — the fourth
+Phase-2 vendor slice. `port.ts` defines `FinnhubPort` (the 8 vendor-shaped methods) + the five
+vendor types (`FinnhubQuote`, `FinnhubProfile2`, `FinnhubMetrics`, `FinnhubSymbolRow`,
+`FinnhubEarningsRow`); `finnhubAdapter.ts` is now the SOLE importer of `env.finnhubApiKey` and
+the sole path to `finnhub.io`. `finnhubQueue.ts` **moved into** `adapters/finnhub/` as the
+adapter's own quirk — the global token-bucket + per-(category,key) min-interval ceiling that
+polygon/yahoo don't have; the auth token rides as a `?token=` query param on every call.
+
+**The base earned its keep (the point of this slice).** The timing →
+`external_api_metrics` → `notifyApiFailure` instrumentation `finnhub.ts` hand-rolled now lives
+in `HttpAdapter.instrumented()`: `provider`/`endpoint`/`notify-key` derive from the existing
+`vendor` field (`<vendor>` / `<vendor>:<category>` / `<vendor>_api.<category>`), so it's
+shared, not finnhub-specific. polygon/yahoo keep calling raw `get()` (their callers own their
+own notify policy) and never touch `instrumented()` — so their behavior is unchanged. The
+queue's defensive 429-retry stays in `finnhubQueue` (a network-error retry, not a status one,
+since the client is `validateStatus: () => true`).
+
+All 9 callers rewired from free functions to the `finnhub` singleton
+(`marketCapRefreshCron`, `watchlistQuotePoller`, `finnhubPricePoller`, `riskFlagsCron`,
+`universeCron`, `newsSentimentCron`, `signalEngine`, `routes/marketdata`, `earningsCalendar`);
+the two externally-imported types (`FinnhubMetrics` in `routes/marketdata` + `riskFlags/inputs`,
+`FinnhubEarningsRow` in `earningsCalendar`) repointed to the port. `services/finnhub.ts`
+deleted.
+
+- **Live-flip prereqs:** none. Pure relocation; same endpoints, params, queueing, field
+  mapping. `git pull && ./bin/upside rebuild api` is behaviorally identical.
+- **Verification:** typecheck clean; **215/215** vitest green (+7 new `finnhubAdapter.test.ts`:
+  5 parsing cases + 2 instrumentation cases asserting the absorbed metric/notify path + token).
+  Grep gate clean — `finnhub.io` / `env.finnhubApiKey` / `finnhubQueue` only under
+  `adapters/finnhub/` (all external `finnhubQueue` mentions are comments). Two test files
+  touched: `earningsCalendar.test.ts` now mocks the `finnhub` singleton; `yahooAdapter.test.ts`
+  gained an `env.js` stub (HttpAdapter now transitively imports supabase→env via
+  `instrumented()`).
+- **Commits:** `74ecc86` (adapter + queue move + HttpAdapter.instrumented() + 9 callers) ·
+  `docs(arch):` ARCH-7 progress note (in the meta commit).
+- **Follow-ups deferred:** last Phase-2 vendor = **`ib`** — its own multi-slice sub-batch (the
+  monster: 20+ files, app-owned gateway lifecycle via `ibContainer`, 503-off-hours). `ib` is the
+  second `instrumented()` consumer; this slice already shaped the base for it. `llm` deferred
+  (roadmap Track 4).
 
 ### Batch ARCH-6 — Ports & adapters (Phase 2): discord adapter (2026-06-11)
 - Owner: claude
