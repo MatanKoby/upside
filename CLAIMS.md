@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-7 — Ports & adapters (Phase 2): finnhub adapter
+- Owner: claude
+- Started: 2026-06-11 18:40
 
 ## Known issues (deferred fixes)
 
