@@ -8,10 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-5 — Ports & adapters (Phase 2): polygon + yahoo reference slice
-- Owner: claude
-- Started: 2026-06-11 08:56
-- Scope: first Phase-2 slice — stand up the `HttpAdapter` base + the `adapters/` root, then extract Polygon + Yahoo out of `services/universeQuote.ts` into vendor-shaped Port/adapter pairs (`adapters/polygon/`, `adapters/yahoo/`), moving the shared `DailyOhlcv` type to `types/`. No behavior change (same endpoints/params/mapping; callers keep their own notify policy). Reference spec: `docs/arch/target-architecture.md` → Phase 2. The mechanical `db/ → adapters/supabase/` relocation rides this batch as its own commit.
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -19,6 +16,20 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-5 — Ports & adapters (Phase 2): polygon + yahoo reference slice (2026-06-11)
+- Owner: claude
+- Started: 2026-06-11 08:56 · Finished: 2026-06-11 09:24
+- Commits: `e738b52` ports reference (HttpAdapter + polygon/yahoo) · `4077f79` db/ → adapters/supabase/ relocation · `232a09b` arch doc
+- **Why:** first Phase-2 slice off `docs/arch/target-architecture.md` → Phase 2. Establishes the **ports & adapters** pattern — one adapter is the SOLE path of access to a vendor; callers depend on a **vendor-shaped Port** interface, never the SDK — the HTTP analog of TableModule. Polygon is the reference because it wasn't a chokepoint (it cohabited Yahoo inside `services/universeQuote.ts` with raw `axios.get`), so the slice is genuine consolidation. **No behavior change.**
+- **What shipped:**
+  - **`adapters/HttpAdapter.ts` (new)** — shared base: one axios client bound to the vendor base URL + permissive `validateStatus` (the adapter inspects/maps/throws). The HTTP analog of `TableModule.ts`. Shipped **minimal** on purpose — it grows to absorb the metric/notify/retry `finnhub.ts` + `ibGateway.ts` hand-roll when those vendors migrate (next slices), the way `TableModule` gained `runCount` only when a slice needed it.
+  - **`adapters/polygon/`** — `PolygonPort.groupedDaily` + the `polygon` singleton; sole path to `api.polygon.io`. **`adapters/yahoo/`** — `YahooPort.chart` + the `yahoo` singleton; sole path to `query1.finance.yahoo.com`. Both lifted out of `services/universeQuote.ts` (deleted), same endpoints/params/headers/mapping.
+  - Shared **`DailyOhlcv`** moved to `types/index.ts` (spoken by both adapters + `dailyBars.ts`). `universeQuoteProducer` rewired to `polygon.groupedDaily` / `yahoo.chart` — it keeps its own `notifyError` policy (adapters don't notify). The 9 parser tests split into co-located `polygonAdapter.test.ts` (5) + `yahooAdapter.test.ts` (4), mocking `axios.create` to inject a fake client (the test seam).
+  - **`db/ → adapters/supabase/` move** — folded in: all 25 TableModule files relocated to their final home under `adapters/` (git-tracked as 25 renames). Pure path change (one level deeper → moved files' `../` parent imports shift to `../../`; 83 external importers + one lazy `await import()` in `services/supabase.ts` rewritten). Closes the last Phase-1 housekeeping item.
+- **Verification:** typecheck clean; **204/204** tests green (per commit). Grep gate: vendor base/key (`api.polygon.io` / `query1.finance.yahoo.com` / `env.polygonApiKey`) only under `adapters/`. No migration, no env/Discord/schema change.
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Behaviorally identical — the universe producer pulls Polygon + gap-fills Yahoo exactly as before.
+- **Follow-ups (next Phase-2 slices):** `discord` (`notify.ts` → `Notifier` interface — already one chokepoint, near-free), then `finnhub` (the `finnhubQueue` rate-limit quirk becomes the adapter's; absorbs `instrumented()` into `HttpAdapter`), then `ib` as its own multi-slice sub-batch (the monster). `llm` deferred (roadmap Track 4).
 
 ### Batch ARCH-4 — remaining-tables TableModule rollout (Phase 1 fully done) (2026-06-11)
 - Owner: claude

@@ -173,7 +173,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 ### Output
 - A markdown findings doc (committed) ranking each item by impact/risk, plus drafted follow-up batch entries for the ones worth doing. No production code change in this batch.
 - **Review output produced (2026-06-10):** `docs/arch/server-architecture.html` (live-system map) + `docs/arch/target-architecture.md` (target model — ports/adapters, pure core, TableModules, scheduler — + refactor order). Follow-up implementation batches drafted there (ARCH-1 …).
-- **Progress:** ARCH-1…4 shipped — **Phase 1 (TableModules) complete**, every Supabase table gatekept (see `BUILD_QUEUE_DONE.md` + `docs/arch/target-architecture.md` → Phase 1). **Next claimable: ARCH-5 = Ports & adapters (Phase 2)** — specced in `docs/arch/target-architecture.md` → Phase 2; reference slice = `polygon` + `yahoo` (builds the `HttpAdapter` base + `adapters/` root + folds in the `db/ → adapters/supabase/` move), then `discord` → `finnhub` → `ib` (its own sub-batch).
+- **Progress:** ARCH-1…5 shipped — **Phase 1 (TableModules) complete** + **Phase 2 (ports & adapters) begun**: ARCH-5 stood up the `HttpAdapter` base + `adapters/` root, the `polygon`/`yahoo` reference adapters, and the `db/ → adapters/supabase/` relocation (see `BUILD_QUEUE_DONE.md` + `docs/arch/target-architecture.md` → Phase 2). **Next claimable: ARCH-6 = the `discord` adapter** (`notify.ts` → `Notifier` — near-free), then `finnhub` (absorbs the hand-rolled instrumentation into `HttpAdapter`), then `ib` (its own multi-slice sub-batch).
 
 ---
 
