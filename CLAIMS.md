@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-6 — discord adapter (notify.ts → Notifier)
+- Owner: claude
+- Started: 2026-06-11 15:03
 
 ## Known issues (deferred fixes)
 
