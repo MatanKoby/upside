@@ -15,7 +15,7 @@
 // state. market_value / unrealized_pnl[_pct] are computed locally only to drive
 // the profit-zone check; the FE recomputes them from `quotes.canonical_price`.
 
-import { getQuote } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { ibStatus } from '../services/ibGateway.js';
 import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
@@ -75,7 +75,7 @@ async function tick(): Promise<void> {
     // failures don't stop the loop.
     for (const p of stale) {
       try {
-        const quote = await getQuote(p.symbol);
+        const quote = await finnhub.getQuote(p.symbol);
         if (!quote || quote.c == null || quote.c === 0) {
           // Finnhub returns zeros for unknown symbols. Skip silently.
           continue;

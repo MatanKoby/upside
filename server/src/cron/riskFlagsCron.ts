@@ -12,7 +12,7 @@
 
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
-import { basicFinancials, earningsCalendar } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { userPreferencesTableModule } from '../adapters/supabase/userPreferencesTableModule.js';
 import { newsSentimentTableModule } from '../adapters/supabase/newsSentimentTableModule.js';
 import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
@@ -94,8 +94,8 @@ async function tick(): Promise<void> {
       const bars = daily?.data ?? [];
       if (bars.length === 0) continue;
       const [metric, earnings] = await Promise.all([
-        basicFinancials(symbol).catch(() => null),
-        earningsCalendar(symbol).catch(() => null),
+        finnhub.basicFinancials(symbol).catch(() => null),
+        finnhub.earningsCalendar(symbol).catch(() => null),
       ]);
       const inputs = buildRiskFlagInputs({
         closes: bars.map((b) => b.c),

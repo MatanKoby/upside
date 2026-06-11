@@ -1,7 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { ibSnapshot, ibHistory, ibStatus } from '../services/ibGateway.js';
 import { ibHistoryToBundle } from '../services/ibMappers.js';
-import { getQuote, basicFinancials, type FinnhubMetrics } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
+import type { FinnhubMetrics } from '../adapters/finnhub/port.js';
 import {
   get as redisGet,
   setWithTtl,
@@ -115,7 +116,7 @@ router.get('/sparkline/:symbol', async (req: Request, res: Response) => {
 //   • Fundamentals (52-week range, P/E, EPS, beta, market cap, avg vol,
 //     dividend): Finnhub /stock/metric, but cached 6h — these don't change
 //     intraday, so one call per symbol covers a whole session of opens.
-// (Why Finnhub for fundamentals, not IB: see finnhub.ts:basicFinancials.)
+// (Why Finnhub for fundamentals, not IB: see adapters/finnhub/finnhubAdapter.ts:basicFinancials.)
 // ---------------------------------------------------------------------------
 const INTRADAY_TTL_S = 60;
 const FUNDAMENTALS_TTL_S = 6 * 60 * 60; // 6h — fundamentals are daily-grain
@@ -255,7 +256,7 @@ async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
     result.prevClose == null;
   let fhContributed = false;
   if (missing) {
-    const quote = await getQuote(symbol).catch(() => null);
+    const quote = await finnhub.getQuote(symbol).catch(() => null);
     if (quote) {
       const before = { ...result };
       result.last ??= nz(quote.c ?? null);
@@ -363,7 +364,7 @@ async function getFundamentals(symbol: string): Promise<FinnhubMetrics | null> {
   } catch {
     // Redis down → compute fresh.
   }
-  const metric = await basicFinancials(symbol).catch(() => null);
+  const metric = await finnhub.basicFinancials(symbol).catch(() => null);
   if (metric) void setWithTtl(key, JSON.stringify(metric), FUNDAMENTALS_TTL_S).catch(() => undefined);
   return metric;
 }

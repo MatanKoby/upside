@@ -15,7 +15,7 @@
 //   - One retry on 429 (defensive; the buffer below Finnhub's 60/min ceiling
 //     should prevent these in normal operation).
 
-import { env } from '../env.js';
+import { env } from '../../env.js';
 
 interface QueuedRequest<T> {
   category: string;

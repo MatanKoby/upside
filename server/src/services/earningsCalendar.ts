@@ -9,7 +9,8 @@
 //
 // See spec/data/sources.md → Observations.
 
-import { earningsCalendarRange, type FinnhubEarningsRow } from './finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
+import type { FinnhubEarningsRow } from '../adapters/finnhub/port.js';
 
 // Must be ≥ the largest lookback any consumer requests (catalyst 3, postEarnings
 // 5). Bump this if a new consumer needs a wider window.
@@ -35,7 +36,7 @@ export async function getEarningsWindow(): Promise<FinnhubEarningsRow[]> {
   const today = todayIso();
   if (cache && cache.date === today) return cache.rows;
   if (!inflight) {
-    inflight = earningsCalendarRange(isoDaysAgo(EARNINGS_WINDOW_DAYS), today)
+    inflight = finnhub.earningsCalendarRange(isoDaysAgo(EARNINGS_WINDOW_DAYS), today)
       .then((rows) => {
         cache = { date: today, rows };
         return rows;

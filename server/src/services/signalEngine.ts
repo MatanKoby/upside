@@ -21,7 +21,7 @@ import { contractsTableModule } from '../adapters/supabase/contractsTableModule.
 import { signalsTableModule, type SignalInsert } from '../adapters/supabase/signalsTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
-import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { buildFeaturePack, type Bars, type FeaturePack } from './technicals.js';
 import { buildRiskFlagInputs } from './riskFlags/inputs.js';
 import { scoreNews, type NewsArticle } from './news/scoreNews.js';
@@ -193,10 +193,10 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     const to = new Date().toISOString().slice(0, 10);
     const from = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
     const [news, earnings, insider, metric] = await Promise.all([
-      companyNews(sym, from, to).catch(() => [] as unknown[]),
-      earningsCalendar(sym).catch(() => null),
-      insiderTransactions(sym).catch(() => null),
-      basicFinancials(sym).catch(() => null),
+      finnhub.companyNews(sym, from, to).catch(() => [] as unknown[]),
+      finnhub.earningsCalendar(sym).catch(() => null),
+      finnhub.insiderTransactions(sym).catch(() => null),
+      finnhub.basicFinancials(sym).catch(() => null),
     ]);
 
     // --- Risk flags (daily-grain; on-demand top-up + LLM clamp) ----------

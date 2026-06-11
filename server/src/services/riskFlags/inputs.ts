@@ -4,7 +4,7 @@
 // on-demand top-up.
 
 import { rsi } from '../technicals.js';
-import type { FinnhubMetrics } from '../finnhub.js';
+import type { FinnhubMetrics } from '../../adapters/finnhub/port.js';
 import type { RiskFlagConfig } from '../../config/riskFlags.js';
 import type { RiskFlagInputs } from './computeRiskFlags.js';
 

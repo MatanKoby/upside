@@ -8,6 +8,10 @@ vi.mock('axios', () => {
   const client = { get, post: vi.fn() };
   return { default: { create: vi.fn(() => client) } };
 });
+// Yahoo needs no key, but HttpAdapter now imports the supabase metrics module
+// (→ env.ts) for instrumented(); stub env so loading the base doesn't require
+// real SUPABASE_* vars in the test environment.
+vi.mock('../../env.js', () => ({ env: {} }));
 
 import axios from 'axios';
 import { yahoo } from './yahooAdapter.js';

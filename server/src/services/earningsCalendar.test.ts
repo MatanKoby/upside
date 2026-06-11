@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./finnhub.js', () => ({
-  earningsCalendarRange: vi.fn(async () => [{ symbol: 'AAA', date: '2026-06-05' }]),
+vi.mock('../adapters/finnhub/finnhubAdapter.js', () => ({
+  finnhub: { earningsCalendarRange: vi.fn(async () => [{ symbol: 'AAA', date: '2026-06-05' }]) },
 }));
 
-import { earningsCalendarRange } from './finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { getEarningsWindow, _resetEarningsCache } from './earningsCalendar.js';
 
 describe('earningsCalendar — shared daily pull (Batch X6)', () => {
   beforeEach(() => {
     _resetEarningsCache();
-    vi.mocked(earningsCalendarRange).mockReset();
-    vi.mocked(earningsCalendarRange).mockResolvedValue([{ symbol: 'AAA', date: '2026-06-05' }]);
+    vi.mocked(finnhub.earningsCalendarRange).mockReset();
+    vi.mocked(finnhub.earningsCalendarRange).mockResolvedValue([{ symbol: 'AAA', date: '2026-06-05' }]);
   });
 
   it('fetches once and serves the memo for repeat callers the same day', async () => {
     const a = await getEarningsWindow();
     const b = await getEarningsWindow();
-    expect(earningsCalendarRange).toHaveBeenCalledTimes(1);
+    expect(finnhub.earningsCalendarRange).toHaveBeenCalledTimes(1);
     expect(a).toBe(b);
   });
 
@@ -27,16 +27,16 @@ describe('earningsCalendar — shared daily pull (Batch X6)', () => {
       getEarningsWindow(),
       getEarningsWindow(),
     ]);
-    expect(earningsCalendarRange).toHaveBeenCalledTimes(1);
+    expect(finnhub.earningsCalendarRange).toHaveBeenCalledTimes(1);
     expect(a).toBe(b);
     expect(b).toBe(c);
   });
 
   it('does not poison the cache on failure — next call retries', async () => {
-    vi.mocked(earningsCalendarRange).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(finnhub.earningsCalendarRange).mockRejectedValueOnce(new Error('boom'));
     await expect(getEarningsWindow()).rejects.toThrow('boom');
     const rows = await getEarningsWindow();
     expect(rows).toHaveLength(1);
-    expect(earningsCalendarRange).toHaveBeenCalledTimes(2);
+    expect(finnhub.earningsCalendarRange).toHaveBeenCalledTimes(2);
   });
 });

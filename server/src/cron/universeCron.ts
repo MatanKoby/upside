@@ -20,7 +20,7 @@
 // because the daily-bar volume-gap pipeline lands in S2.
 
 import { notifyError } from '../services/notify.js';
-import { getSymbolList, getQuote, getProfile2 } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { universeTableModule, type ScoredUniverseRow } from '../adapters/supabase/universeTableModule.js';
 import {
   filterRing1,
@@ -77,7 +77,7 @@ async function nightlyPass(): Promise<void> {
   const t0 = Date.now();
   console.log('[universeCron] starting nightly sweep…');
 
-  const all = await getSymbolList('US').catch((e: Error) => {
+  const all = await finnhub.getSymbolList('US').catch((e: Error) => {
     void notifyError('universeCron.symbolList', `getSymbolList failed: ${e.message}`, e);
     return [];
   });
@@ -107,8 +107,8 @@ async function nightlyPass(): Promise<void> {
     }
     try {
       const [quote, profile] = await Promise.all([
-        getQuote(symbol).catch(() => null),
-        getProfile2(symbol).catch(() => null),
+        finnhub.getQuote(symbol).catch(() => null),
+        finnhub.getProfile2(symbol).catch(() => null),
       ]);
       const price = quote?.c ?? null;
       const marketCapM = profile?.marketCapitalization ?? null;

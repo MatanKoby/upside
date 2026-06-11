@@ -9,7 +9,7 @@
 // when IB is down (weekends included). companyNews is already rate-limited by
 // finnhubQueue, so the per-ticker loop self-paces. Spec: spec/signals/news-signal.md.
 
-import { companyNews } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
@@ -68,7 +68,7 @@ async function tick(): Promise<void> {
 
   for (const { conid, symbol } of targets) {
     try {
-      const articles = await companyNews(symbol, from, asof);
+      const articles = await finnhub.companyNews(symbol, from, asof);
       const s = scoreNews(articles as NewsArticle[]);
       if (s.articleCount === 0) continue; // no recent news → no row (absence = clean)
       await newsSentimentTableModule.save({

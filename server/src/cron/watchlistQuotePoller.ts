@@ -10,7 +10,7 @@
 // path that actually delivered the value.
 
 import { ibStatus, ibSnapshot } from '../services/ibGateway.js';
-import { getQuote } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { activeWatchlistOnlyConids, upsertQuote } from '../services/quotes.js';
 import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { notifyError } from '../services/notify.js';
@@ -58,7 +58,7 @@ async function tick(): Promise<void> {
   // global pacing). Stamp canonical because IB isn't available to win.
   for (const { conid, symbol } of targets) {
     if (!symbol) continue;
-    const q = await getQuote(symbol).catch(() => null);
+    const q = await finnhub.getQuote(symbol).catch(() => null);
     const price = num(q?.c);
     if (price == null || price === 0) continue;
     const todayChangePct = num(q?.dp);

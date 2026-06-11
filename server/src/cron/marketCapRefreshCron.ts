@@ -14,7 +14,7 @@
 // queue needed; runs inline via finnhubQueue's per-call rate limiter.
 
 import { notifyError } from '../services/notify.js';
-import { getProfile2 } from '../services/finnhub.js';
+import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { universeTableModule, type UniverseRow } from '../adapters/supabase/universeTableModule.js';
 
 const CADENCE_MS = 7 * 24 * 60 * 60_000;
@@ -43,7 +43,7 @@ async function tick(): Promise<void> {
   const nowIso = new Date().toISOString();
   for (const t of targets) {
     try {
-      const profile = await getProfile2(t.symbol);
+      const profile = await finnhub.getProfile2(t.symbol);
       if (!profile || typeof profile.marketCapitalization !== 'number') {
         fail++;
         continue;

@@ -52,7 +52,7 @@ export const env = {
 
   finnhubApiKey: optional('FINNHUB_API_KEY'),
   // Global token-bucket cap for Finnhub calls. Finnhub free tier is 60/min;
-  // we leave a 10-call buffer. See server/src/services/finnhubQueue.ts.
+  // we leave a 10-call buffer. See server/src/adapters/finnhub/finnhubQueue.ts.
   finnhubRateLimitPerMin: Number(optional('FINNHUB_RATE_LIMIT_PER_MIN', '50')),
 
   // Polygon free-tier API key (Batch S0.5) — primary daily price+volume
