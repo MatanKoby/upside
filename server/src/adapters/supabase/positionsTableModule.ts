@@ -22,8 +22,8 @@
 // pollers. Same SQL, no behavior change. See docs/arch/target-architecture.md.
 
 import { TableModule } from './TableModule.js';
-import { supabase } from '../services/supabase.js';
-import type { ZoneFields } from '../services/profitZone.js';
+import { supabase } from '../../services/supabase.js';
+import type { ZoneFields } from '../../services/profitZone.js';
 
 // A fully-assembled position as the IB poller builds it each cycle. Snake_case
 // because it mirrors the DB row 1:1 and is the cron's in-memory assembly buffer:

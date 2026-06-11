@@ -21,7 +21,7 @@
 
 import { notifyError } from '../services/notify.js';
 import { getSymbolList, getQuote, getProfile2 } from '../services/finnhub.js';
-import { universeTableModule, type ScoredUniverseRow } from '../db/universeTableModule.js';
+import { universeTableModule, type ScoredUniverseRow } from '../adapters/supabase/universeTableModule.js';
 import {
   filterRing1,
   preFilterByTypeAndMic,

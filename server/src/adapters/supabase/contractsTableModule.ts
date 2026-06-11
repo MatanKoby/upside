@@ -10,7 +10,7 @@
 // See docs/arch/target-architecture.md → Phase 1.
 
 import { TableModule } from './TableModule.js';
-import type { Contract } from '../types/index.js';
+import type { Contract } from '../../types/index.js';
 
 interface ContractRow {
   conid: number | string;

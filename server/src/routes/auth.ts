@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
-import { accessAttemptsTableModule } from '../db/accessAttemptsTableModule.js';
+import { accessAttemptsTableModule } from '../adapters/supabase/accessAttemptsTableModule.js';
 import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
 import { getIbContainerState, startIbContainer, stopIbContainer, restartIbContainer } from '../services/ibContainer.js';
 import { notifyError } from '../services/notify.js';

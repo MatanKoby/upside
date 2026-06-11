@@ -14,7 +14,7 @@
 //     unresolvable — likely delisted or no US STK listing).
 
 import { notifyError } from '../services/notify.js';
-import { universeTableModule } from '../db/universeTableModule.js';
+import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
 import { resolveConid } from '../services/screener/conidResolver.js';
 import {
   enqueue,

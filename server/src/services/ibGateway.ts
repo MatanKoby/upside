@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
 import https from 'node:https';
 import { env } from '../env.js';
-import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
+import { externalApiMetricsTableModule } from '../adapters/supabase/externalApiMetricsTableModule.js';
 import { notifyApiFailure } from './notify.js';
 import type {
   RawIbPosition,

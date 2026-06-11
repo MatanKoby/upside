@@ -7,9 +7,9 @@
 // once ported. Feeds the signal_hit_rate_30d view. Spec:
 // spec/signals/dip-bounce-scorer.md → Forward-tracking.
 
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { signalFiresTableModule, type RecentFireRow } from '../db/signalFiresTableModule.js';
-import { signalOutcomesTableModule, type OutcomeUpsert } from '../db/signalOutcomesTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { signalFiresTableModule, type RecentFireRow } from '../adapters/supabase/signalFiresTableModule.js';
+import { signalOutcomesTableModule, type OutcomeUpsert } from '../adapters/supabase/signalOutcomesTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { OUTCOME_OFFSETS } from '../config/dipBounceScorer.js';
 

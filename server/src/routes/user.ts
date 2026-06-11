@@ -16,7 +16,7 @@ import {
   userPreferencesTableModule,
   type UserPreferences,
   type UserPreferencesPatch,
-} from '../db/userPreferencesTableModule.js';
+} from '../adapters/supabase/userPreferencesTableModule.js';
 import {
   resolveRiskFlagConfig,
   RISK_FLAG_DEFAULTS,

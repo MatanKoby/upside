@@ -7,7 +7,7 @@
 // flag for all positions exactly once. Cheap, single-owner app, so no user
 // filter is needed (an always-true predicate satisfies Supabase's update guard).
 
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { marketPeriodAt, etDateString } from '../utils/marketHours.js';
 import { notifyError } from '../services/notify.js';
 

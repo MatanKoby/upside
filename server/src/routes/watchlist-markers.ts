@@ -7,7 +7,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { watchlistMarkersTableModule } from '../db/watchlistMarkersTableModule.js';
+import { watchlistMarkersTableModule } from '../adapters/supabase/watchlistMarkersTableModule.js';
 
 const router = Router();
 router.use(requireAuth);

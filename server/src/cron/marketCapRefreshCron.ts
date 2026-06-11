@@ -15,7 +15,7 @@
 
 import { notifyError } from '../services/notify.js';
 import { getProfile2 } from '../services/finnhub.js';
-import { universeTableModule, type UniverseRow } from '../db/universeTableModule.js';
+import { universeTableModule, type UniverseRow } from '../adapters/supabase/universeTableModule.js';
 
 const CADENCE_MS = 7 * 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 8 * 60_000;

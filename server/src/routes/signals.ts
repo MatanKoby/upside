@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import { analysesTableModule } from '../db/analysesTableModule.js';
-import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
+import { analysesTableModule } from '../adapters/supabase/analysesTableModule.js';
+import { analysisLocksTableModule } from '../adapters/supabase/analysisLocksTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { runAnalysis } from '../services/signalEngine.js';
 import { getLlmCallsToday } from '../services/redis.js';

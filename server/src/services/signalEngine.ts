@@ -12,13 +12,13 @@
 // fail soft — a malformed LLM response (after one stricter retry) is persisted
 // as a `no_signal` row rather than crashing the api.
 
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
-import { analysesTableModule } from '../db/analysesTableModule.js';
-import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
-import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
-import { contractsTableModule } from '../db/contractsTableModule.js';
-import { signalsTableModule, type SignalInsert } from '../db/signalsTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
+import { analysesTableModule } from '../adapters/supabase/analysesTableModule.js';
+import { analysisLocksTableModule } from '../adapters/supabase/analysisLocksTableModule.js';
+import { userPreferencesTableModule } from '../adapters/supabase/userPreferencesTableModule.js';
+import { contractsTableModule } from '../adapters/supabase/contractsTableModule.js';
+import { signalsTableModule, type SignalInsert } from '../adapters/supabase/signalsTableModule.js';
 import { notifyError } from './notify.js';
 import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
 import { companyNews, earningsCalendar, insiderTransactions, basicFinancials } from './finnhub.js';

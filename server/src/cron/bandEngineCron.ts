@@ -40,8 +40,8 @@ import {
   type AnchorEvent,
 } from '../services/bandEngine/walkingState.js';
 import type { RawIbHistoryBar } from '../types/index.js';
-import { bandStateTableModule } from '../db/bandStateTableModule.js';
-import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
+import { bandStateTableModule } from '../adapters/supabase/bandStateTableModule.js';
+import { intradayStatsTableModule } from '../adapters/supabase/intradayStatsTableModule.js';
 
 const CADENCE_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 7 * 60_000;       // 7 min — lands after intradayStatsCron's first tick

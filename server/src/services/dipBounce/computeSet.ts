@@ -5,9 +5,9 @@
 
 import { activeWatchlistOnlyConids } from '../quotes.js';
 import { latestCuratedAsof } from '../curatedList/asof.js';
-import { curatedListTableModule } from '../../db/curatedListTableModule.js';
-import { universeTableModule } from '../../db/universeTableModule.js';
-import { positionsTableModule } from '../../db/positionsTableModule.js';
+import { curatedListTableModule } from '../../adapters/supabase/curatedListTableModule.js';
+import { universeTableModule } from '../../adapters/supabase/universeTableModule.js';
+import { positionsTableModule } from '../../adapters/supabase/positionsTableModule.js';
 
 export interface ComputeMember {
   conid: number;

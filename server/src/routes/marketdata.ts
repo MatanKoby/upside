@@ -8,7 +8,7 @@ import {
   marketIntradayKey,
   marketFundamentalsKey,
 } from '../services/redis.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';

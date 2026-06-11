@@ -10,8 +10,8 @@
 // firing gate), not here. See spec/signals/curated-list.md → Population & freshness.
 
 import { notifyError } from '../notify.js';
-import { traitScoresTableModule, type TraitKind } from '../../db/traitScoresTableModule.js';
-import { curatedListTableModule } from '../../db/curatedListTableModule.js';
+import { traitScoresTableModule, type TraitKind } from '../../adapters/supabase/traitScoresTableModule.js';
+import { curatedListTableModule } from '../../adapters/supabase/curatedListTableModule.js';
 
 /** Days of slack past which "latest" is treated as stale (covers a weekend). */
 export const STALENESS_CAP_DAYS = 4;

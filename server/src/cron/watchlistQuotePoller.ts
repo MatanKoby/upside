@@ -12,7 +12,7 @@
 import { ibStatus, ibSnapshot } from '../services/ibGateway.js';
 import { getQuote } from '../services/finnhub.js';
 import { activeWatchlistOnlyConids, upsertQuote } from '../services/quotes.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { notifyError } from '../services/notify.js';
 
 const CADENCE_MS = 60_000;

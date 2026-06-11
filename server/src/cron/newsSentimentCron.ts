@@ -13,10 +13,10 @@ import { companyNews } from '../services/finnhub.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { notifyError } from '../services/notify.js';
 import { scoreNews, type NewsArticle } from '../services/news/scoreNews.js';
-import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
-import { curatedListTableModule } from '../db/curatedListTableModule.js';
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { newsSentimentTableModule } from '../adapters/supabase/newsSentimentTableModule.js';
+import { curatedListTableModule } from '../adapters/supabase/curatedListTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { NEWS_LOOKBACK_HOURS } from '../config/news.js';
 
 const CADENCE_MS = 12 * 60 * 60_000; // twice a day — the 48h window changes slowly

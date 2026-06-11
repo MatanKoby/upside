@@ -6,7 +6,7 @@
 // deletes rows older than the 5-minute TTL (comfortably exceeds worst-case LLM
 // response time; see signal-model.md → Concurrency lock).
 
-import { analysisLocksTableModule } from '../db/analysisLocksTableModule.js';
+import { analysisLocksTableModule } from '../adapters/supabase/analysisLocksTableModule.js';
 import { notifyError } from '../services/notify.js';
 
 const STALE_LOCK_SECONDS = 5 * 60;

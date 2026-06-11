@@ -9,7 +9,7 @@
 // time, so a long-running container still gets one sweep per day even if
 // we miss UTC midnight). Deletes rows older than RETENTION_DAYS days.
 
-import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
+import { externalApiMetricsTableModule } from '../adapters/supabase/externalApiMetricsTableModule.js';
 import { notifyError } from '../services/notify.js';
 
 const RETENTION_DAYS = 30;

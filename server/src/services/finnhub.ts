@@ -7,7 +7,7 @@
 
 import axios, { type AxiosInstance } from 'axios';
 import { env } from '../env.js';
-import { externalApiMetricsTableModule } from '../db/externalApiMetricsTableModule.js';
+import { externalApiMetricsTableModule } from '../adapters/supabase/externalApiMetricsTableModule.js';
 import { finnhubQueue } from './finnhubQueue.js';
 import { notifyApiFailure } from './notify.js';
 

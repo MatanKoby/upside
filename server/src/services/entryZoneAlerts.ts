@@ -28,7 +28,7 @@
 // support levels below price, so a crossing always goes down into them).
 
 import { notifyEntryZoneHit, notifyError } from './notify.js';
-import { entryZonesTableModule, type EntryZoneRecord } from '../db/entryZonesTableModule.js';
+import { entryZonesTableModule, type EntryZoneRecord } from '../adapters/supabase/entryZonesTableModule.js';
 
 const COOLDOWN_HOURS = 24;
 const MIN_CONFIDENCE_PCT = 60;        // Filter sub-60% noise (audit, 2026-05-30).

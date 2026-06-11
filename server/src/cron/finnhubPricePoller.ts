@@ -21,7 +21,7 @@ import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import { upsertQuote } from '../services/quotes.js';
-import { positionsTableModule, type PriceFillRow } from '../db/positionsTableModule.js';
+import { positionsTableModule, type PriceFillRow } from '../adapters/supabase/positionsTableModule.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const FRESHNESS_THRESHOLD_MS = 90_000;

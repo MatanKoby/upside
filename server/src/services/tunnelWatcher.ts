@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { env } from '../env.js';
-import { appConfigTableModule } from '../db/appConfigTableModule.js';
+import { appConfigTableModule } from '../adapters/supabase/appConfigTableModule.js';
 import { notifyError } from './notify.js';
 
 // Detects current Cloudflare Quick Tunnel URLs from cloudflared logfiles

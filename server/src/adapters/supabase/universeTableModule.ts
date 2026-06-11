@@ -19,8 +19,8 @@
 // module owns only the I/O. See docs/arch/target-architecture.md → Phase 1.
 
 import { TableModule } from './TableModule.js';
-import { supabase } from '../services/supabase.js';
-import type { FilterResult } from '../services/screener/universeFilter.js';
+import { supabase } from '../../services/supabase.js';
+import type { FilterResult } from '../../services/screener/universeFilter.js';
 
 /** A universe row in the shape the readers consume (camelCase). The selects
  *  all pull the same column set, so every reader gets a uniform row regardless

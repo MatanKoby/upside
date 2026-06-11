@@ -10,7 +10,7 @@
 // Re-entry chop near the threshold within the window is suppressed. Zone-exit
 // never notifies in MVP — exit data is recorded for post-mortem only.
 
-import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
+import { userPreferencesTableModule } from '../adapters/supabase/userPreferencesTableModule.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 
 const ZONE_NOTIFY_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4h

@@ -18,11 +18,11 @@ import { loadDailyBars } from '../dailyBars.js';
 import { loadComputeSet, type ComputeMember } from './computeSet.js';
 import { computeIntradayDipBounceScore } from './intradayScorer.js';
 import { computeSwingDipBounceScore } from './swingScorer.js';
-import { entryZonesTableModule } from '../../db/entryZonesTableModule.js';
-import { bandStateTableModule } from '../../db/bandStateTableModule.js';
-import { intradayStatsTableModule } from '../../db/intradayStatsTableModule.js';
-import { quotesTableModule } from '../../db/quotesTableModule.js';
-import { signalFiresTableModule } from '../../db/signalFiresTableModule.js';
+import { entryZonesTableModule } from '../../adapters/supabase/entryZonesTableModule.js';
+import { bandStateTableModule } from '../../adapters/supabase/bandStateTableModule.js';
+import { intradayStatsTableModule } from '../../adapters/supabase/intradayStatsTableModule.js';
+import { quotesTableModule } from '../../adapters/supabase/quotesTableModule.js';
+import { signalFiresTableModule } from '../../adapters/supabase/signalFiresTableModule.js';
 import {
   INTRADAY_COOLDOWN_HOURS,
   SWING_COOLDOWN_HOURS,

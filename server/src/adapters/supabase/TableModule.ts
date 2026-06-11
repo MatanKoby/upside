@@ -7,7 +7,7 @@
 //
 // Design: Batch ARCH-1. See docs/arch/target-architecture.md → Phase 1.
 
-import { supabase } from '../services/supabase.js';
+import { supabase } from '../../services/supabase.js';
 
 /** Minimal structural shape of the supabase query result we depend on. */
 interface PgResult<T> {

@@ -13,10 +13,10 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { basicFinancials, earningsCalendar } from '../services/finnhub.js';
-import { userPreferencesTableModule } from '../db/userPreferencesTableModule.js';
-import { newsSentimentTableModule } from '../db/newsSentimentTableModule.js';
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { userPreferencesTableModule } from '../adapters/supabase/userPreferencesTableModule.js';
+import { newsSentimentTableModule } from '../adapters/supabase/newsSentimentTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import { buildRiskFlagInputs } from '../services/riskFlags/inputs.js';
 import { evaluateAndStore, riskFlagAsofDate } from '../services/riskFlags/engine.js';

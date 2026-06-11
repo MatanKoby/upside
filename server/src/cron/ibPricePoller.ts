@@ -29,7 +29,7 @@ import {
   currentVwap,
   ibBarToOhlc,
 } from '../services/ibMappers.js';
-import { contractsTableModule } from '../db/contractsTableModule.js';
+import { contractsTableModule } from '../adapters/supabase/contractsTableModule.js';
 import type { Contract } from '../types/index.js';
 import { resolveOwnerUserId, resolveAccountId } from '../services/owner.js';
 import { notifyError, notifyCritical, notifyProfitZoneEntry } from '../services/notify.js';
@@ -38,7 +38,7 @@ import { recordPortfolioValueForMtd } from '../services/mtdCache.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
 import type { RawIbPosition, RawIbSnapshot, RawIbHistory, OhlcBar } from '../types/index.js';
 import { upsertQuote } from '../services/quotes.js';
-import { positionsTableModule, type AssembledPosition } from '../db/positionsTableModule.js';
+import { positionsTableModule, type AssembledPosition } from '../adapters/supabase/positionsTableModule.js';
 
 // Polling cadences, in ms. We always poll at least once when IB is connected;
 // these dictate the gap between successful cycles.

@@ -13,8 +13,8 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeIntradayStats, type IntradayBar } from '../services/intradayStats.js';
-import { universeTableModule } from '../db/universeTableModule.js';
-import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
+import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
+import { intradayStatsTableModule } from '../adapters/supabase/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
 import type { RawIbHistory } from '../types/index.js';
 

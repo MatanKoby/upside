@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { positionsTableModule } from '../db/positionsTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getMtdAnchor } from '../services/mtdCache.js';
 

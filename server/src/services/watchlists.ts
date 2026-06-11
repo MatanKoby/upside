@@ -13,8 +13,8 @@
 // watchlist_lists WHERE active=true to pick its symbol set).
 
 import { ibWatchlists, ibWatchlist } from './ibGateway.js';
-import { watchlistListsTableModule } from '../db/watchlistListsTableModule.js';
-import { watchlistItemsTableModule } from '../db/watchlistItemsTableModule.js';
+import { watchlistListsTableModule } from '../adapters/supabase/watchlistListsTableModule.js';
+import { watchlistItemsTableModule } from '../adapters/supabase/watchlistItemsTableModule.js';
 import { notifyError } from './notify.js';
 import type { RawIbWatchlistInstrument } from '../types/index.js';
 

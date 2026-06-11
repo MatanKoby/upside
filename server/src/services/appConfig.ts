@@ -4,7 +4,7 @@
 // the api owns writes via the service role. Keep secrets OUT of here — values
 // are readable by the browser.
 
-import { appConfigTableModule } from '../db/appConfigTableModule.js';
+import { appConfigTableModule } from '../adapters/supabase/appConfigTableModule.js';
 import { notifyError } from './notify.js';
 
 export async function getAppConfig(key: string): Promise<string | null> {

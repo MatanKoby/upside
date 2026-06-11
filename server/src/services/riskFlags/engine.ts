@@ -5,7 +5,7 @@
 // It loads the prior day's `since` dates, computes, and writes the row (or
 // deletes it when the ticker is clean). Spec: spec/signals/risk-flags.md.
 
-import { riskFlagsTableModule } from '../../db/riskFlagsTableModule.js';
+import { riskFlagsTableModule } from '../../adapters/supabase/riskFlagsTableModule.js';
 import { computeRiskFlags, type RiskFlagInputs, type RiskFlagRow } from './computeRiskFlags.js';
 import type { RiskFlagConfig, RiskFlagKey } from '../../config/riskFlags.js';
 

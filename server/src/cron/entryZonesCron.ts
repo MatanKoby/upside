@@ -13,9 +13,9 @@
 import { ibHistory, ibStatus } from '../services/ibGateway.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeEntryZones, type Horizon, type EntryZone } from '../services/entryZones.js';
-import { quotesTableModule } from '../db/quotesTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
 import { notifyError } from '../services/notify.js';
-import { entryZonesTableModule } from '../db/entryZonesTableModule.js';
+import { entryZonesTableModule } from '../adapters/supabase/entryZonesTableModule.js';
 import type { Bars } from '../services/technicals.js';
 import type { RawIbHistory } from '../types/index.js';
 

@@ -22,8 +22,8 @@ import { atr } from '../services/technicals.js';
 import { loadDailyBars } from '../services/dailyBars.js';
 import { buildCuratedList, type CuratedCandidate } from '../services/curatedList/buildCuratedList.js';
 import { latestTraitAsof } from '../services/curatedList/asof.js';
-import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
-import { curatedListTableModule } from '../db/curatedListTableModule.js';
+import { traitScoresTableModule } from '../adapters/supabase/traitScoresTableModule.js';
+import { curatedListTableModule } from '../adapters/supabase/curatedListTableModule.js';
 import { seedDailyQuotes } from '../services/quotes.js';
 import { MIN_AVG_VOLUME, MIN_DAILY_ATR_PCT, TARGET_SIZE } from '../config/curatedList.js';
 

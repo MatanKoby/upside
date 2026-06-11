@@ -14,9 +14,9 @@
 // now AT or BELOW band_top. We don't re-fire when it dips deeper into the
 // band (the user knows; they have the chip / Discord ping already).
 
-import { quotesTableModule } from '../db/quotesTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
 import { notifyIntradayStatsHit, notifyError } from './notify.js';
-import { intradayStatsTableModule, type IntradayAlertStats } from '../db/intradayStatsTableModule.js';
+import { intradayStatsTableModule, type IntradayAlertStats } from '../adapters/supabase/intradayStatsTableModule.js';
 
 const COOLDOWN_HOURS = 24;
 

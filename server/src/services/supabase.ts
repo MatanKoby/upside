@@ -15,6 +15,6 @@ export function supabase(): SupabaseClient {
 export async function pingSupabase(): Promise<boolean> {
   // Routes through the positions TableModule (the gatekeeper for that table);
   // imported lazily to avoid a load-time cycle (the module's base imports this).
-  const { positionsTableModule } = await import('../db/positionsTableModule.js');
+  const { positionsTableModule } = await import('../adapters/supabase/positionsTableModule.js');
   return positionsTableModule.ping();
 }

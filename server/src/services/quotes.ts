@@ -9,11 +9,11 @@
 // Idempotent UPSERTs keyed by conid. Symbol is also written so FE doesn't have
 // to join contracts to render rows.
 
-import { watchlistListsTableModule } from '../db/watchlistListsTableModule.js';
-import { watchlistItemsTableModule } from '../db/watchlistItemsTableModule.js';
-import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
-import { universeTableModule } from '../db/universeTableModule.js';
-import { quotesTableModule, type DailySeedRow } from '../db/quotesTableModule.js';
+import { watchlistListsTableModule } from '../adapters/supabase/watchlistListsTableModule.js';
+import { watchlistItemsTableModule } from '../adapters/supabase/watchlistItemsTableModule.js';
+import { dailyBarsTableModule } from '../adapters/supabase/dailyBarsTableModule.js';
+import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
+import { quotesTableModule, type DailySeedRow } from '../adapters/supabase/quotesTableModule.js';
 import { notifyError } from './notify.js';
 import { checkMarkersForConid } from './markers.js';
 import { checkEntryZonesForConid } from './entryZoneAlerts.js';

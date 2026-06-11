@@ -7,7 +7,7 @@
 // (weekends, off-hours). See spec/data/sources.md → daily_bars.
 
 import type { DailyOhlcv } from '../types/index.js';
-import { dailyBarsTableModule } from '../db/dailyBarsTableModule.js';
+import { dailyBarsTableModule } from '../adapters/supabase/dailyBarsTableModule.js';
 
 export interface DailyBar {
   date: string; // YYYY-MM-DD

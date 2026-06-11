@@ -10,7 +10,7 @@
 // the I/O. No behavior change. See docs/arch/target-architecture.md → Phase 1.
 
 import { TableModule } from './TableModule.js';
-import type { DailyBarRow } from '../services/dailyBars.js';
+import type { DailyBarRow } from '../../services/dailyBars.js';
 
 /** The OHLCV columns of a daily bar (no derived `t` — the service adds it). */
 export interface DailyBarOhlcv {

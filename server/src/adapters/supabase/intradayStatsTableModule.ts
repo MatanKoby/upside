@@ -9,7 +9,7 @@
 // See docs/arch/target-architecture.md → Phase 1.
 
 import { TableModule } from './TableModule.js';
-import type { IntradayStats } from '../services/intradayStats.js';
+import type { IntradayStats } from '../../services/intradayStats.js';
 
 /** The percentile slice the bulk readers need (camelCase). */
 export interface IntradayPercentiles {

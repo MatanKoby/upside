@@ -13,11 +13,11 @@
 // Cadence: 24h, runs 6 min after boot so it lands after intradayStatsCron's
 // first tick has had a chance to populate fresh data on day-of-cron-deploy.
 
-import { universeTableModule } from '../db/universeTableModule.js';
-import { quotesTableModule } from '../db/quotesTableModule.js';
-import { intradayStatsTableModule } from '../db/intradayStatsTableModule.js';
+import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
+import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
+import { intradayStatsTableModule } from '../adapters/supabase/intradayStatsTableModule.js';
 import { notifyError } from '../services/notify.js';
-import { traitScoresTableModule, type TraitScore } from '../db/traitScoresTableModule.js';
+import { traitScoresTableModule, type TraitScore } from '../adapters/supabase/traitScoresTableModule.js';
 import {
   scoreIntradayRangeTrader,
   type IntradayStatsRow,

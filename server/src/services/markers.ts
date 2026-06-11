@@ -7,7 +7,7 @@
 // are accepted in schema for forward-compatibility but skipped here until
 // their channels land.
 
-import { watchlistMarkersTableModule, type MarkerRow } from '../db/watchlistMarkersTableModule.js';
+import { watchlistMarkersTableModule, type MarkerRow } from '../adapters/supabase/watchlistMarkersTableModule.js';
 import { notifyDipBuyMarkerHit, notifyError } from './notify.js';
 
 function cooldownPassed(cooldownHours: number, lastFiredAt: string | null): boolean {

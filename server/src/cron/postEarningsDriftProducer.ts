@@ -15,8 +15,8 @@
 // Cadence: 24h, 11-min boot delay (after catalystReversalProducer).
 
 import { notifyError, notifyTraitFirstFire } from '../services/notify.js';
-import { traitScoresTableModule } from '../db/traitScoresTableModule.js';
-import { universeTableModule } from '../db/universeTableModule.js';
+import { traitScoresTableModule } from '../adapters/supabase/traitScoresTableModule.js';
+import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
 import { getEarningsWindow } from '../services/earningsCalendar.js';
 import {
   enqueue,

@@ -10,7 +10,7 @@
 // first writes before retention starts trimming.
 
 import { notifyError } from '../services/notify.js';
-import { traitScoresTableModule, type TraitKind } from '../db/traitScoresTableModule.js';
+import { traitScoresTableModule, type TraitKind } from '../adapters/supabase/traitScoresTableModule.js';
 
 const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 7 * 60_000;
