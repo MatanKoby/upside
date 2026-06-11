@@ -162,12 +162,21 @@ single-writer half (`news_sentiment` → `daily_bars`) plus the multi-writer hal
 `quotes`, `positions`, `signal_fires`/`signal_outcomes`, `risk_flags`, `watchlist_*`,
 `analyses`/`analysis_locks`) are all behind named methods, one writer-owner each.
 
-**Out of the original ARCH-3 scope (candidates for a follow-up):** a handful of tables were never in
-the rollout list and still have direct `from(...)` call-sites — `signals` (signalEngine supersede +
-insert), `contracts`, `user_preferences`, `app_config`, `external_api_metrics`, `access_attempts`,
-and the two `screener_jobs` crons (`jobsRetention`/`jobsReaper`) outside the `queue.ts` prototype.
-Folding these in would finish the "every table behind a module" rule, but they're outside the
-14-table ARCH-3 commitment.
+✅ **ARCH-4 — the remaining-tables sweep — is complete.** The stragglers never in the 14-table
+rollout list are now gatekept too, so the "every table behind a module" rule holds with **zero**
+`from(...)` outside a module (grep-enforced):
+- `app_config` → `appConfigTableModule` (`tunnelWatcher` + the `appConfig.ts` kv service route through it).
+- `access_attempts` → `accessAttemptsTableModule` (the Google-auth audit append).
+- `external_api_metrics` → `externalApiMetricsTableModule` (the IB + Finnhub instrumentation writers + the retention sweep).
+- `user_preferences` → `userPreferencesTableModule` (the prefs-route writer + the riskFlagsCron / profitZone / signalEngine readers; camelCase domain type).
+- `contracts` → `contractsTableModule`, speaking the shared camelCase `Contract` (types/index.ts).
+- `signals` → `signalsTableModule` (whole-analysis supersede + the two-shape insert).
+- `screener_jobs` — the two maintenance crons (`jobsReaper` / `jobsRetention`) now call `reapExpiredClaims` / `purgeTerminalOlderThan` on the `queue.ts` prototype, so **all** `screener_jobs` access lives in one place.
+
+Net: `signalEngine` and `ibPricePoller` no longer import `supabase` at all. **24 tables behind
+TableModules (+ the base) + the `queue.ts` prototype = every Supabase table is gatekept.** Phase 1
+is now fully done; the only remaining Phase-1 housekeeping is the mechanical `db/ → adapters/supabase/`
+folder move (deferred — a trivial later relocation). Next: Phase 2 (ports & adapters).
 
 **Definition of done, per table:**
 - No `from('<table>')` anywhere outside its TableModule (grep-enforced).
