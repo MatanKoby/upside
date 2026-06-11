@@ -173,7 +173,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 ### Output
 - A markdown findings doc (committed) ranking each item by impact/risk, plus drafted follow-up batch entries for the ones worth doing. No production code change in this batch.
 - **Review output produced (2026-06-10):** `docs/arch/server-architecture.html` (live-system map) + `docs/arch/target-architecture.md` (target model — ports/adapters, pure core, TableModules, scheduler — + refactor order). Follow-up implementation batches drafted there (ARCH-1 …).
-- **Progress:** ARCH-1…5 shipped — **Phase 1 (TableModules) complete** + **Phase 2 (ports & adapters) begun**: ARCH-5 stood up the `HttpAdapter` base + `adapters/` root, the `polygon`/`yahoo` reference adapters, and the `db/ → adapters/supabase/` relocation (see `BUILD_QUEUE_DONE.md` + `docs/arch/target-architecture.md` → Phase 2). **Next claimable: ARCH-6 = the `discord` adapter** (`notify.ts` → `Notifier` — near-free), then `finnhub` (absorbs the hand-rolled instrumentation into `HttpAdapter`), then `ib` (its own multi-slice sub-batch).
+- **Progress:** ARCH-1…6 shipped — **Phase 1 (TableModules) complete** + **Phase 2 (ports & adapters) underway**: ARCH-5 stood up the `HttpAdapter` base + `adapters/` root + the `polygon`/`yahoo` reference adapters + the `db/ → adapters/supabase/` relocation; ARCH-6 added the `discord` adapter (`notify.ts` → `Notifier`) — see `BUILD_QUEUE_DONE.md` + `docs/arch/target-architecture.md` → Phase 2. **Next claimable: ARCH-7 = the `finnhub` adapter** (`finnhub.ts` + `finnhubQueue.ts` → `FinnhubPort` — the slice that makes `HttpAdapter` absorb the hand-rolled metric/notify/retry instrumentation), then `ib` (its own multi-slice sub-batch, last). `llm` deferred (roadmap Track 4).
 
 ---
 

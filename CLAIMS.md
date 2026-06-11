@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-6 — discord adapter (notify.ts → Notifier)
-- Owner: claude
-- Started: 2026-06-11 15:03
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,38 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-6 — Ports & adapters (Phase 2): discord adapter (2026-06-11)
+- Owner: claude
+- Started: 2026-06-11 15:03
+- Finished: 2026-06-11 17:55
+- Commit: f31b8fe
+
+**What shipped.** `notify.ts` inverted onto a new `adapters/discord/` — the third Phase-2
+vendor slice. `port.ts` defines the `Notifier` interface (`post(channel, payload)` +
+`has(channel)`) over nine logical `DiscordChannel` names; `discordAdapter.ts` is now the SOLE
+importer of the nine `env.discord*WebhookUrl` fields and owns channel→URL resolution (incl.
+the critical→routine fallback), the 5s-timeout `axios.post`, the never-throw swallow, and the
+no-op-when-unconfigured behavior. Discord is a multi-full-URL delivery sink (one webhook URL
+per channel), not a single-base REST API, so the adapter does **not** extend `HttpAdapter` —
+its delivery is an injectable constructor seam (`new DiscordAdapter(fakeDeliver)`) instead.
+`notify.ts` keeps all *policy*: the per-key cooldown state, severity→color, and all 14 alert
+formatters; it now calls `discord.post(channel, ...)` instead of reading webhook URLs +
+posting. `has()` preserves the exact early-bail-before-cooldown semantics of the old
+`webhookFor()`/`!url` guard, so no cooldown state is touched when a channel is unconfigured.
+
+No external caller changed — every consumer still imports the same public `notify*` functions
+(none ever touched the internals or `env.discord*`).
+
+- **Live-flip prereqs:** none. Pure relocation; same channels, payloads, fallback, no-op
+  semantics. `git pull && ./bin/upside rebuild api` is behaviorally identical.
+- **Verification:** typecheck clean; **208/208** vitest green (+4 new `discordAdapter.test.ts`
+  cases: channel delivery, critical fallback, unconfigured no-op, `has()`); grep gate clean
+  (`env.discord*` only under `adapters/discord/`).
+- **Commits:** `f31b8fe` (adapter + notify.ts) · `docs(arch):` ARCH-6 progress note.
+- **Follow-ups deferred:** none for discord. Next Phase-2 slice = `finnhub` (`finnhub.ts` +
+  `finnhubQueue.ts` → `FinnhubPort`; the slice that makes `HttpAdapter` absorb the
+  hand-rolled metric/notify/retry instrumentation), then `ib` (multi-slice sub-batch, last).
 
 ### Batch ARCH-5 — Ports & adapters (Phase 2): polygon + yahoo reference slice (2026-06-11)
 - Owner: claude
