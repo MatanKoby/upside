@@ -8,10 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-4 — remaining-tables TableModule rollout (finish Phase 1)
-- Owner: claude
-- Started: 2026-06-11 03:42
-- Scope: fold the stragglers never in the ARCH-3 rollout list behind TableModules so every table is gatekept — `app_config`, `access_attempts`, `external_api_metrics`, `screener_jobs` (jobsReaper/jobsRetention outside the queue.ts prototype), `user_preferences`, `contracts`, `signals`. Same mechanical pattern as ARCH-1/2/3: one commit per table, grep-gate + server typecheck + 204 tests per slice. No behavior change. Design ref: `docs/arch/target-architecture.md` → "Out of the original ARCH-3 scope".
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -19,6 +16,24 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-4 — remaining-tables TableModule rollout (Phase 1 fully done) (2026-06-11)
+- Owner: claude
+- Started: 2026-06-11 03:42 · Finished: 2026-06-11 05:15
+- Commits: `405942b` app_config · `c096d35` access_attempts · `f51cd24` external_api_metrics · `7fa3a38` screener_jobs (reaper/retention → queue.ts) · `2d970e9` user_preferences · `9e25143` contracts · `d7917a6` signals · `04682fe` arch doc
+- **Why:** finish the "every table behind a module" rule. ARCH-3 closed the 14-table rollout but explicitly carved out a handful of tables that were never in the rollout list and still had direct `from(...)` call-sites (`docs/arch/target-architecture.md` → "Out of the original ARCH-3 scope"). This sweep gatekeeps them too. **No behavior change** — same SQL/rows/conflict keys, relocated behind intention-revealing methods; the I/O + snake↔camel mapping move into each module, business/error policy stays in the callers.
+- **What shipped (one commit per table):**
+  - **`app_config`** → `appConfigTableModule` (`getValue`/`setValue`); the `appConfig.ts` kv service + `tunnelWatcher` route through it, each keeping its own notify-on-fail/return-null leniency around the now-throwing module.
+  - **`access_attempts`** → `accessAttemptsTableModule.record()`; the Google-auth audit append in `routes/auth.ts`, wrapped so a logging failure still never blocks the auth decision.
+  - **`external_api_metrics`** → `externalApiMetricsTableModule` (`record()` + count-returning `purgeOlderThan()`); the IB gateway (`instrumented`/`instrumentedWithRetry`) + Finnhub (`recordMetric`) fire-and-forget writers + `metricsRetention`. `ibGateway.ts` + `finnhub.ts` dropped their `supabase` import.
+  - **`screener_jobs` stragglers** → `reapExpiredClaims()` + `purgeTerminalOlderThan()` added to the `queue.ts` prototype module; `jobsReaper` + `jobsRetention` call them, so **all** screener_jobs access lives in `queue.ts`.
+  - **`user_preferences`** → `userPreferencesTableModule` (`getByUserId`/`getAny`/`upsert`, camelCase `UserPreferences` + `UserPreferencesPatch`); the prefs-route writer (validation/bounds stay in the route) + the riskFlagsCron / profitZone / signalEngine readers. riskFlagsCron + profitZone dropped their `supabase` import.
+  - **`contracts`** → `contractsTableModule` (`getByConid`/`upsert`), speaking the shared camelCase `Contract` (types/index.ts); ibPricePoller's staleness-refresh (its local `ContractsCacheRow` deleted, `assemblePosition` reads camelCase) + signalEngine's lazy fill. **ibPricePoller no longer imports `supabase`.**
+  - **`signals`** → `signalsTableModule` (`supersedePriorForSymbol` + the two-shape `insertSignal`, optional columns emitted only when supplied so a no_signal row omits them exactly as before); signalEngine's `persistAnalysis`. **signalEngine no longer imports `supabase` at all.**
+- **Verification:** per slice — grep gate (no `from('<table>')` outside its module), server typecheck clean, **204/204** tests green. Final sweep: **zero** `from('<table>')` anywhere in `server/src` outside a `*TableModule.ts` / `queue.ts`. No migrations, no env/Discord/schema changes. Every slice pushed to `dev` immediately (Vercel auto-deploy).
+- **Live-flip:** `git pull && ./bin/upside rebuild api`. Behaviorally identical — every route/cron/producer writes and reads the same rows as before.
+- **Net state:** 24 tables behind TableModules (+ the base `TableModule.ts`) + the `queue.ts` prototype for `screener_jobs` = **every Supabase table is gatekept.** Phase 1 of `docs/arch/target-architecture.md` is fully complete.
+- **Follow-ups:** the mechanical `db/ → adapters/supabase/` folder move (trivial later relocation, deferred), then **Phase 2 (ports & adapters)** — wrap each vendor (IB/Finnhub/Polygon/Discord/…) behind a port; **Phase 3** the `schedule()` primitive; **Phase 4** relocate the pure core into `domain/`.
 
 ### Batch ARCH-3 — remaining TableModules rollout (curated_list → analyses) (2026-06-10)
 - Owner: claude
