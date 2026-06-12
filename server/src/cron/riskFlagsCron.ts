@@ -10,7 +10,7 @@
 // only about catching whatever window IB happens to be connected in; the flag
 // values won't change until a new daily bar closes.
 
-import { ibHistory, ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { userPreferencesTableModule } from '../adapters/supabase/userPreferencesTableModule.js';
@@ -70,7 +70,7 @@ function highOf(hist: RawIbHistory | null): number | null {
 }
 
 async function tick(): Promise<void> {
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) return; // IB off → daily bars unavailable
 
   const config = await loadConfig();
@@ -90,7 +90,7 @@ async function tick(): Promise<void> {
 
   for (const { conid, symbol, price } of targets) {
     try {
-      const daily = await ibHistory(conid, '1y', '1d');
+      const daily = await ibGateway.history(conid, '1y', '1d');
       const bars = daily?.data ?? [];
       if (bars.length === 0) continue;
       const [metric, earnings] = await Promise.all([

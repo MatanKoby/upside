@@ -12,7 +12,7 @@
 // once a list is marked `active=true` (the poller queries
 // watchlist_lists WHERE active=true to pick its symbol set).
 
-import { ibWatchlists, ibWatchlist } from './ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { watchlistListsTableModule } from '../adapters/supabase/watchlistListsTableModule.js';
 import { watchlistItemsTableModule } from '../adapters/supabase/watchlistItemsTableModule.js';
 import { notifyError } from './notify.js';
@@ -33,7 +33,7 @@ function pickSymbol(inst: RawIbWatchlistInstrument): string {
 }
 
 export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> {
-  const top = await ibWatchlists();
+  const top = await ibGateway.watchlists();
   if (!top) {
     throw new Error('ib_watchlists_fetch_failed');
   }
@@ -96,7 +96,7 @@ export async function syncWatchlistsFromIb(userId: string): Promise<SyncResult> 
     }
 
     // Fetch this list's instruments and reconcile.
-    const contents = await ibWatchlist(list.id);
+    const contents = await ibGateway.watchlist(list.id);
     const instruments = Array.isArray(contents?.instruments) ? contents!.instruments : [];
 
     const itemsToUpsert = instruments

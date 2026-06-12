@@ -10,7 +10,7 @@
 
 import { env } from '../env.js';
 import { supabase } from './supabase.js';
-import { ibPositions } from './ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 
 let _cachedOwnerUserId: string | null = null;
 let _cachedAccountId: string | null = null;
@@ -46,48 +46,26 @@ export async function resolveOwnerUserId(): Promise<string | null> {
 
 export async function resolveAccountId(): Promise<string | null> {
   if (_cachedAccountId) return _cachedAccountId;
-  // Discover via the first row of /portfolio/<acct>/positions/0 (we don't have
-  // acct yet) — actually we need /iserver/accounts. Use the wrapper.
-  // For simplicity we discover by trying ibPositions with empty string —
-  // doesn't work. Use a dedicated accounts call.
-  //
-  // Implementation note: ibGateway doesn't currently expose /iserver/accounts;
-  // we hit it via the existing client. Inlining a one-shot call here to avoid
-  // bloating ibGateway with another method just for this.
-  try {
-    const axios = (await import('axios')).default;
-    const Agent = (await import('node:https')).Agent;
-    const res = await axios.get<{ accounts?: string[]; selectedAccount?: string }>(
-      `${env.ibGatewayUrl}/v1/api/iserver/accounts`,
-      {
-        timeout: 10_000,
-        httpsAgent: new Agent({ rejectUnauthorized: false }),
-        validateStatus: () => true,
-      },
-    );
-    if (res.status < 200 || res.status >= 300) {
-      console.error('[owner] /iserver/accounts returned', res.status);
-      return null;
-    }
-    const acct = res.data?.selectedAccount ?? res.data?.accounts?.[0] ?? null;
-    if (!acct) {
-      console.error('[owner] no accounts returned');
-      return null;
-    }
-    _cachedAccountId = acct;
-    console.log(`[owner] resolved IB account id: ${acct}`);
-    return _cachedAccountId;
-  } catch (e) {
-    console.error('[owner] account discovery failed:', (e as Error).message);
+  // Account discovery via the gateway's /iserver/accounts (now an adapter
+  // method — the inline axios call that read env.ibGatewayUrl here moved into
+  // IbGatewayAdapter so the gateway has one door). Pick the selected account,
+  // else the first.
+  const { accounts, selectedAccount } = await ibGateway.accounts();
+  const acct = selectedAccount ?? accounts[0] ?? null;
+  if (!acct) {
+    console.error('[owner] no IB account resolved from /iserver/accounts');
     return null;
   }
+  _cachedAccountId = acct;
+  console.log(`[owner] resolved IB account id: ${acct}`);
+  return _cachedAccountId;
 }
 
 // Sanity helper used by pricePoller — confirms positions endpoint is reachable
 // with the resolved account ID. Returns null on failure.
 export async function probePositions(accountId: string): Promise<number | null> {
   try {
-    const rows = await ibPositions(accountId);
+    const rows = await ibGateway.positions(accountId);
     return rows.length;
   } catch {
     return null;

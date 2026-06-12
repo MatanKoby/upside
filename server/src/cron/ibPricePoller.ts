@@ -12,17 +12,8 @@
 //   - no whitelisted Supabase user has signed in yet (sleeps 60s)
 //   - no IB account discoverable (sleeps 30s)
 
-import {
-  ibPositions,
-  ibSnapshot,
-  ibHistory,
-  ibContractInfo,
-  ibStatus,
-  ibTransactions,
-  ibTrades,
-  entryFromTrades,
-  entryFromTransactions,
-} from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
+import { entryFromTrades, entryFromTransactions } from '../adapters/ib/entryDeduction.js';
 import {
   ibPositionToPartial,
   ibContractInfoToContract,
@@ -82,7 +73,7 @@ async function ensureContractCached(conid: number, symbol: string): Promise<Cont
     || (Date.now() - new Date(existing.refreshedAt).getTime()) > CONTRACTS_REFRESH_AGE_MS;
   if (!stale) return existing;
 
-  const raw = await ibContractInfo(conid);
+  const raw = await ibGateway.contractInfo(conid);
   if (!raw) return existing ?? null;
 
   const contract = ibContractInfoToContract(raw);
@@ -98,7 +89,7 @@ async function ensureContractCached(conid: number, symbol: string): Promise<Cont
 // Today's intraday bars for VWAP. Period 1d / bar 5mins gives ~78 bars during
 // regular hours — enough resolution for the running VWAP without hammering IB.
 async function todaysBars(conid: number): Promise<OhlcBar[]> {
-  const raw: RawIbHistory | null = await ibHistory(conid, '1d', '5mins');
+  const raw: RawIbHistory | null = await ibGateway.history(conid, '1d', '5mins');
   if (!raw || !Array.isArray(raw.data)) return [];
   return raw.data.map(ibBarToOhlc);
 }
@@ -146,13 +137,13 @@ async function resolveEntryInfo(
     // Tier 1 — intraday-accurate from the ~7-day trades window. Catches a
     // recent flatten + re-open (sell-to-0 then re-buy) that day-level data
     // cannot see, e.g. the true entry is the re-buy, not the original open.
-    const trades = await ibTrades();
+    const trades = await ibGateway.trades();
     const intraday = entryFromTrades(trades, raw.conid, shares);
     if (intraday) {
       return { firstSeenAt: intraday.toISOString(), firstSeenSource: 'ib_transactions' };
     }
     // Tier 2 — entry predates the trades window: day-level from /pa/transactions.
-    const txs = await ibTransactions(accountId, raw.conid);
+    const txs = await ibGateway.transactions(accountId, raw.conid);
     const dayLevel = entryFromTransactions(txs, shares);
     if (dayLevel) {
       return { firstSeenAt: dayLevel.toISOString(), firstSeenSource: 'ib_transactions' };
@@ -238,7 +229,7 @@ async function assemblePosition(
 }
 
 async function pollCycle(userId: string, accountId: string): Promise<void> {
-  const rawPositions: RawIbPosition[] = await ibPositions(accountId);
+  const rawPositions: RawIbPosition[] = await ibGateway.positions(accountId);
   // IB sometimes returns recently-closed positions with shares=0 for a while
   // after the close. They aren't holdings and they pollute downstream logic
   // (orphan check by symbol wouldn't catch them — same symbol, just no
@@ -263,7 +254,7 @@ async function pollCycle(userId: string, accountId: string): Promise<void> {
   const zoneNotifications: { symbol: string; pnlPct: number; viaGap: boolean }[] = [];
 
   const conids = positions.map((p) => p.conid);
-  const snapshots = await ibSnapshot(conids);
+  const snapshots = await ibGateway.snapshot(conids);
   const snapByConid = new Map<number, RawIbSnapshot>();
   for (const s of snapshots) snapByConid.set(s.conid, s);
 
@@ -401,7 +392,7 @@ async function loop(): Promise<void> {
     // Auth gates the cycle (no point hitting IB without a session). Market
     // state only controls the post-cycle sleep — held positions and IB's
     // last-known snapshot prices are returned regardless of trading hours.
-    const auth = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+    const auth = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
     if (!auth.authenticated || !auth.connected) {
       await sleep(AUTH_BACKOFF_MS);
       continue;

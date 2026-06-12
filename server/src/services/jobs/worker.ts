@@ -209,13 +209,13 @@ export function createWorker(opts: WorkerOptions): Worker {
 
 // Convenience factories for the three standard pools. Boot wiring in
 // index.ts just calls these — gating predicates live colocated here.
-import { ibStatus } from '../ibGateway.js';
+import { ibGateway } from '../../adapters/ib/ibGatewayAdapter.js';
 
 export function createIbWorker(): Worker {
   return createWorker({
     pool: 'ib',
     poolGateOk: async () => {
-      const s = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+      const s = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
       return Boolean(s.authenticated && s.connected);
     },
   });

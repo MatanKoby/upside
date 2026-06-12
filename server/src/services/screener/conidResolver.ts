@@ -1,6 +1,6 @@
 // Real IBKR conid resolver for the screener universe (Batch S1.5).
 //
-// Calls ibSecdefSearch(symbol) and picks the first US STK match. IB's
+// Calls ibGateway.secdefSearch(symbol) and picks the first US STK match. IB's
 // /iserver/secdef/search returns multiple matches per symbol when the
 // ticker exists across exchanges (e.g. MNTS = Momentus Inc on NASDAQ vs
 // Schiehallion Fund on LSE; REPL = Replimune on NASDAQ vs Rudrabhishek
@@ -9,7 +9,7 @@
 //
 // Spec: spec/signals/screener-universe.md → Conid resolution.
 
-import { ibSecdefSearch } from '../ibGateway.js';
+import { ibGateway } from '../../adapters/ib/ibGatewayAdapter.js';
 import { pickUsStockMatch, type PickedConid } from './conidPicker.js';
 
 export { pickUsStockMatch } from './conidPicker.js';
@@ -23,6 +23,6 @@ export type ResolveResult = PickedConid;
  * match — caller decides what to do with an unresolvable symbol.
  */
 export async function resolveConid(symbol: string): Promise<PickedConid | null> {
-  const results = await ibSecdefSearch(symbol);
+  const results = await ibGateway.secdefSearch(symbol);
   return pickUsStockMatch(results);
 }

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { supabase } from '../services/supabase.js';
 import { accessAttemptsTableModule } from '../adapters/supabase/accessAttemptsTableModule.js';
-import { ibTickle, ibStatus, ibLogout } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { getIbContainerState, startIbContainer, stopIbContainer, restartIbContainer } from '../services/ibContainer.js';
 import { notifyError } from '../services/notify.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -26,7 +26,7 @@ router.get('/status', requireAuth, async (_req: Request, res: Response) => {
     res.json({ session: 'stopped', marketPeriod: marketPeriodAt() });
     return;
   }
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   let session: 'connecting' | 'connected' | 'disconnected' | 'expired';
   if (status.authenticated && status.connected) {
     session = 'connected';
@@ -119,12 +119,12 @@ router.post('/ib/restart', requireAuth, async (_req: Request, res: Response) => 
 });
 
 router.post('/ib/tickle', requireAuth, async (_req: Request, res: Response) => {
-  const ok = await ibTickle();
+  const ok = await ibGateway.tickle();
   res.json({ ok });
 });
 
 router.get('/ib/status', requireAuth, async (_req: Request, res: Response) => {
-  const status = await ibStatus();
+  const status = await ibGateway.status();
   res.json({
     session: status.authenticated && status.connected ? 'connected' : 'disconnected',
     authenticated: status.authenticated,
@@ -133,7 +133,7 @@ router.get('/ib/status', requireAuth, async (_req: Request, res: Response) => {
 });
 
 router.post('/ib/logout', requireAuth, async (_req: Request, res: Response) => {
-  await ibLogout();
+  await ibGateway.logout();
   res.json({ ok: true });
 });
 

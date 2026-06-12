@@ -9,7 +9,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { syncWatchlistsFromIb, setListActive } from '../services/watchlists.js';
 import { notifyError } from '../services/notify.js';
 
@@ -24,7 +24,7 @@ router.post('/sync', async (req: Request, res: Response) => {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
     res.status(403).json({ reason: 'ib_required' });
     return;

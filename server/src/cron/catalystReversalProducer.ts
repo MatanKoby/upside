@@ -11,7 +11,7 @@
 //   Stage 1: per-candidate IB snapshot, evaluate vol-multiple + move via
 //     pure evaluateCatalystStage1. Worker action 'eval_catalyst_stage1'
 //     on the `ib` pool returns a CatalystStage1Result via job.result.
-//   Stage 2: per Stage-1 qualifier, ibHistory(1y, 1d), evaluate A ∧ B via
+//   Stage 2: per Stage-1 qualifier, ibGateway.history(1y, 1d), evaluate A ∧ B via
 //     pure evaluateCatalystStage2. Worker action 'eval_catalyst_stage2'
 //     on the `ib` pool returns {score, payload}. Survivors → trait_scores
 //     + universe.auto_promoted=true + notifyTraitFirstFire on first fire.
@@ -40,7 +40,7 @@ import {
 import { makeKey } from '../services/jobs/keys.js';
 import { ibRegistry } from '../services/jobs/actions.js';
 import { gateRegistry, requiresRthOpen } from '../services/jobs/gates.js';
-import { ibSnapshot, ibHistory } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { parseIbNumber } from '../utils/ibNumber.js';
 import {
   evaluateCatalystStage1,
@@ -324,14 +324,14 @@ interface CatalystS1Payload {
 }
 
 // The snapshot fields Stage-1 actually gates on: last price (31), today's open
-// (7295), volume (87), prev close (7296). ibSnapshot warms the poll until all
+// (7295), volume (87), prev close (7296). ibGateway.snapshot warms the poll until all
 // are present (Batch X10.1) so we don't evaluate a half-streamed row.
 const CATALYST_SNAPSHOT_FIELDS = ['31', '7295', '87', '7296'] as const;
 
 ibRegistry['eval_catalyst_stage1'] = async (payloadIn) => {
   const payload = payloadIn as unknown as CatalystS1Payload;
   if (payload.real_conid == null) throw new Error('eval_catalyst_stage1: missing real_conid');
-  const rows = await ibSnapshot([payload.real_conid], CATALYST_SNAPSHOT_FIELDS);
+  const rows = await ibGateway.snapshot([payload.real_conid], CATALYST_SNAPSHOT_FIELDS);
   const row: RawIbSnapshot | undefined = rows[0];
   if (!row) throw new Error(`eval_catalyst_stage1: empty snapshot for ${payload.symbol}`);
   const input: CatalystStage1Input = {
@@ -362,7 +362,7 @@ interface CatalystS2Payload {
 ibRegistry['eval_catalyst_stage2'] = async (payloadIn) => {
   const payload = payloadIn as unknown as CatalystS2Payload;
   if (payload.real_conid == null) throw new Error('eval_catalyst_stage2: missing real_conid');
-  const hist: RawIbHistory | null = await ibHistory(payload.real_conid, '1y', '1d');
+  const hist: RawIbHistory | null = await ibGateway.history(payload.real_conid, '1y', '1d');
   if (!hist?.data || hist.data.length < 200) {
     throw new Error(`eval_catalyst_stage2: insufficient daily bars for ${payload.symbol}`);
   }
@@ -380,7 +380,7 @@ ibRegistry['eval_catalyst_stage2'] = async (payloadIn) => {
 
 // Per-action gates (Batch X10): both catalyst stages need the regular session
 // — Stage 1 reads a live snapshot (IBKR field 7295/today's open only exists
-// intraday) and Stage 2 reads ibHistory (503s off-hours). Claimed off-hours,
+// intraday) and Stage 2 reads ibGateway.history (503s off-hours). Claimed off-hours,
 // they now defer to the next 09:30 ET instead of failing + burning retries.
 gateRegistry['eval_catalyst_stage1'] = requiresRthOpen();
 gateRegistry['eval_catalyst_stage2'] = requiresRthOpen();

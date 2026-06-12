@@ -10,7 +10,7 @@
 // dedups calls when the same conid would be hit twice (currently a no-op,
 // since each conid is fetched once per tick).
 
-import { ibHistory, ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeEntryZones, type Horizon, type EntryZone } from '../services/entryZones.js';
 import { quotesTableModule } from '../adapters/supabase/quotesTableModule.js';
@@ -65,7 +65,7 @@ async function upsertZone(conid: number, horizon: Horizon, zone: EntryZone | nul
 }
 
 async function tick(): Promise<void> {
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
     // No IB → no bars → no engine input. Skip silently; the next tick after
     // reconnect picks things up. (The engine is IB-gated by the same rule
@@ -80,8 +80,8 @@ async function tick(): Promise<void> {
     const currentPrice = await priceForConid(conid);
     if (currentPrice == null) continue;
     try {
-      const daily = await ibHistory(conid, '1y', '1d');
-      const intraday = await ibHistory(conid, '1d', '5min');
+      const daily = await ibGateway.history(conid, '1y', '1d');
+      const intraday = await ibGateway.history(conid, '1d', '5min');
       const dailyBars = toBars(daily);
       const out = computeEntryZones({
         currentPrice,

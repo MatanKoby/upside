@@ -12,7 +12,7 @@
 import { Router, type Request, type Response } from 'express';
 import { env } from '../env.js';
 import { getIbContainerState } from '../services/ibContainer.js';
-import { ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { pingSupabase } from '../services/supabase.js';
 import { pingRedis } from '../services/redis.js';
 import { getLastIbPricePollAt } from '../cron/ibPricePoller.js';
@@ -34,7 +34,7 @@ async function withTimeout<T>(p: Promise<T>, fallback: T, ms = SUBCHECK_TIMEOUT_
 async function checkIb(): Promise<IbState> {
   const containerState = await withTimeout(getIbContainerState(), 'unknown' as const);
   if (containerState !== 'running') return containerState === 'missing' ? 'stopped' : 'stopped';
-  const status = await withTimeout(ibStatus(), { authenticated: false, connected: false });
+  const status = await withTimeout(ibGateway.status(), { authenticated: false, connected: false });
   if (status.authenticated && status.connected) return 'connected';
   return 'disconnected';
 }

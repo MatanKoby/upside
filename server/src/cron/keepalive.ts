@@ -1,4 +1,4 @@
-import { ibTickle } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { pingSupabase } from '../services/supabase.js';
 import { notifyCritical } from '../services/notify.js';
 
@@ -13,7 +13,7 @@ export function startKeepalive(): void {
     tickleTimer = setInterval(() => {
       // Tickle failures are expected when the IBeam container is stopped
       // (on-demand model) — don't notify. Only log silently.
-      ibTickle().catch(() => undefined);
+      ibGateway.tickle().catch(() => undefined);
     }, TICKLE_INTERVAL_MS);
   }
   if (!pingTimer) {

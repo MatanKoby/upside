@@ -22,7 +22,7 @@
 //
 // Spec: spec/signals/band-engine.md.
 
-import { ibHistory, ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import {
   notifyError,
   notifyBandTouchLow,
@@ -394,7 +394,7 @@ async function tickAll(): Promise<void> {
   const period = marketPeriodAt();
   if (period !== 'regular' && period !== 'after-hours') return;
 
-  const ibAuth = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const ibAuth = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!ibAuth.authenticated || !ibAuth.connected) {
     // Bars come from IB. Skip silently; next tick will catch up.
     return;
@@ -422,7 +422,7 @@ async function tickAll(): Promise<void> {
     try {
       // ~60d 5min bars give us today + yesterday close + 30d-aggregated history
       // for vol_regime_shift in one call. Same period as intradayStatsCron uses.
-      const hist = await ibHistory(conid, '2m', '5mins');
+      const hist = await ibGateway.history(conid, '2m', '5mins');
       if (!hist?.data || hist.data.length === 0) {
         fail++;
         continue;

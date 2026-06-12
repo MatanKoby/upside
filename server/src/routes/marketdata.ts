@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { ibSnapshot, ibHistory, ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { ibHistoryToBundle } from '../services/ibMappers.js';
 import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import type { FinnhubMetrics } from '../adapters/finnhub/port.js';
@@ -63,7 +63,7 @@ router.get('/history/:symbol', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'unknown_timeframe', timeframe, supported: Object.keys(TIMEFRAME_MAP) });
     return;
   }
-  const raw = await ibHistory(conid, mapping.period, mapping.bar);
+  const raw = await ibGateway.history(conid, mapping.period, mapping.bar);
   if (!raw) {
     res.status(502).json({ error: 'ib_history_failed', symbol, timeframe });
     return;
@@ -98,7 +98,7 @@ router.get('/sparkline/:symbol', async (req: Request, res: Response) => {
     res.json({ closes: bars.map((b) => b.c) });
     return;
   }
-  const raw = await ibHistory(conid, SPARKLINE_PERIOD, SPARKLINE_BAR);
+  const raw = await ibGateway.history(conid, SPARKLINE_PERIOD, SPARKLINE_BAR);
   if (!raw || !Array.isArray(raw.data)) {
     res.status(502).json({ error: 'ib_history_failed', symbol });
     return;
@@ -223,12 +223,12 @@ async function getIntraday(userId: string, symbol: string): Promise<Intraday> {
   const conid = await resolveConid(userId, symbol);
   let ibRow: RawIbSnapshot | undefined;
   if (conid) {
-    const { authenticated, connected } = await ibStatus().catch(() => ({
+    const { authenticated, connected } = await ibGateway.status().catch(() => ({
       authenticated: false,
       connected: false,
     }));
     if (authenticated && connected) {
-      const snap = await ibSnapshot([conid]).catch(() => [] as RawIbSnapshot[]);
+      const snap = await ibGateway.snapshot([conid]).catch(() => [] as RawIbSnapshot[]);
       ibRow = snap[0];
     }
   }
@@ -314,13 +314,13 @@ async function getVolatility(userId: string, symbol: string): Promise<Volatility
   const conid = await resolveConid(userId, symbol);
   if (!conid) return EMPTY_VOL;
 
-  const { authenticated, connected } = await ibStatus().catch(() => ({
+  const { authenticated, connected } = await ibGateway.status().catch(() => ({
     authenticated: false,
     connected: false,
   }));
   if (!authenticated || !connected) return EMPTY_VOL;
 
-  const hist = await ibHistory(conid, '1y', '1d').catch(() => null);
+  const hist = await ibGateway.history(conid, '1y', '1d').catch(() => null);
   const bars = hist?.data ?? [];
   if (bars.length < 15) return EMPTY_VOL;
 

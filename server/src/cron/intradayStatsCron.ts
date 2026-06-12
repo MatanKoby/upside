@@ -10,7 +10,7 @@
 // then sleeps 24h. Good enough for a single-user MVP; align to a specific
 // hour later if needed.
 
-import { ibHistory, ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { activeWatchlistOnlyConids } from '../services/quotes.js';
 import { computeIntradayStats, type IntradayBar } from '../services/intradayStats.js';
 import { universeTableModule } from '../adapters/supabase/universeTableModule.js';
@@ -61,7 +61,7 @@ async function staggeredUniverseConids(
 }
 
 async function tick(): Promise<void> {
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
     // Bars come from IB only (Track 9 unresolved). Skip silently; the next
     // 24h tick will catch up after the user reconnects.
@@ -82,7 +82,7 @@ async function tick(): Promise<void> {
   for (const { conid, symbol } of targets) {
     try {
       // IB period syntax: '2m' = 2 months (~60 trading days). bars at 5-min.
-      const hist = await ibHistory(conid, '2m', '5mins');
+      const hist = await ibGateway.history(conid, '2m', '5mins');
       const bars = toIntradayBars(hist);
       if (bars.length === 0) {
         failCount++;

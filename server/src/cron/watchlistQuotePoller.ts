@@ -3,13 +3,13 @@
 // gap closer for tickers the user is *watching* but doesn't own.
 //
 // Cadence: 60s always-on (mirrors the Finnhub fallback poller's cadence). When
-// IB is connected, one `ibSnapshot([conids])` call fetches every watchlist-
+// IB is connected, one `ibGateway.snapshot([conids])` call fetches every watchlist-
 // only conid in one round-trip (subscribe-wait-fetch handles the warmup). When
 // IB is off, fall back to per-symbol Finnhub `/quote` via the rate-limited
 // queue. Either way the row in `quotes` gets `canonical_source` set to the
 // path that actually delivered the value.
 
-import { ibStatus, ibSnapshot } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { activeWatchlistOnlyConids, upsertQuote } from '../services/quotes.js';
 import { positionsTableModule } from '../adapters/supabase/positionsTableModule.js';
@@ -32,12 +32,12 @@ async function tick(): Promise<void> {
   const targets = await activeWatchlistOnlyConids(held);
   if (targets.length === 0) return;
 
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   const ibUp = status.authenticated && status.connected;
 
   if (ibUp) {
     const conids = targets.map((t) => t.conid);
-    const snap = await ibSnapshot(conids).catch(() => []);
+    const snap = await ibGateway.snapshot(conids).catch(() => []);
     // Build a quick conid → symbol map from the targets list (the snapshot
     // payload doesn't carry our symbol, just IB's identifiers).
     const symByConid = new Map(targets.map((t) => [t.conid, t.symbol]));

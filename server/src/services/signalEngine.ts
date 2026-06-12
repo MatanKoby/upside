@@ -20,7 +20,7 @@ import { userPreferencesTableModule } from '../adapters/supabase/userPreferences
 import { contractsTableModule } from '../adapters/supabase/contractsTableModule.js';
 import { signalsTableModule, type SignalInsert } from '../adapters/supabase/signalsTableModule.js';
 import { notifyError } from './notify.js';
-import { ibSnapshot, ibHistory, ibContractInfo, ibSecdefSearch } from './ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
 import { buildFeaturePack, type Bars, type FeaturePack } from './technicals.js';
 import { buildRiskFlagInputs } from './riskFlags/inputs.js';
@@ -129,7 +129,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     let conid: number | null = position?.conid != null ? Number(position.conid) : null;
     let companyName: string | null = position?.companyName ?? null;
     if (conid == null) {
-      const results = await ibSecdefSearch(sym);
+      const results = await ibGateway.secdefSearch(sym);
       const stk = results.find((r) => r.sections?.some((s) => s.secType === 'STK')) ?? results[0];
       if (stk) {
         conid = Number(stk.conid);
@@ -144,7 +144,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // --- Ensure contracts cache row (lazy) -------------------------------
     const contractRow = await contractsTableModule.getByConid(conid);
     if (!contractRow) {
-      const info = await ibContractInfo(conid);
+      const info = await ibGateway.contractInfo(conid);
       if (info) {
         companyName = companyName ?? info.company_name ?? null;
         await contractsTableModule.upsert({
@@ -168,7 +168,7 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
     // Price SSOT (Batch X5): the fallback is quotes.canonical_price by conid,
     // not a positions column.
     let currentPrice: number | null = await quotesTableModule.getCanonicalPrice(conid).catch(() => null);
-    const snap = await ibSnapshot([conid]).catch(() => []);
+    const snap = await ibGateway.snapshot([conid]).catch(() => []);
     const live = num(snap[0]?.['31']);
     if (live != null) currentPrice = live;
 
@@ -178,8 +178,8 @@ export async function runAnalysis(opts: RunOpts): Promise<void> {
       isHeld && heldAvgCost > 0 && currentPrice != null ? (currentPrice / heldAvgCost - 1) * 100 : null;
 
     // --- IB history → feature pack (the LLM's grounding) -----------------
-    const daily = await ibHistory(conid, '1y', '1d');
-    const intraday = await ibHistory(conid, '1d', '5min');
+    const daily = await ibGateway.history(conid, '1y', '1d');
+    const intraday = await ibGateway.history(conid, '1d', '5min');
     const avgCost = isHeld ? num(position?.avgCost) : null;
     const dailyBars = toBars(daily);
     const featurePack = buildFeaturePack({

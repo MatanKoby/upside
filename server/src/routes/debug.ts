@@ -14,7 +14,8 @@
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getIbContainerState } from '../services/ibContainer.js';
-import { ibStatus, ibRawGet, ibRawPost, type IbRawResponse } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
+import type { IbRawResponse } from '../adapters/ib/port.js';
 import {
   allowedPathsForError,
   isAllowedIbPath,
@@ -26,7 +27,7 @@ import {
 const router = Router();
 
 // Confirm the IBeam container is running AND the session is authenticated
-// before issuing a call (ibStatus would otherwise fail with a noisy network
+// before issuing a call (ibGateway.status would otherwise fail with a noisy network
 // error). Writes the 503 itself and returns false when not ready.
 async function ensureIbConnected(res: Response): Promise<boolean> {
   const containerState = await getIbContainerState().catch(() => 'missing' as const);
@@ -34,7 +35,7 @@ async function ensureIbConnected(res: Response): Promise<boolean> {
     res.status(503).json({ error: 'ib_not_connected', reason: 'ib_not_connected', containerState });
     return false;
   }
-  const status = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
   if (!status.authenticated || !status.connected) {
     res.status(503).json({
       error: 'ib_not_connected',
@@ -96,7 +97,7 @@ router.get(
         if (typeof v === 'string') forwardedQuery[k] = v;
         else if (Array.isArray(v) && typeof v[0] === 'string') forwardedQuery[k] = v[0];
       }
-      return ibRawGet(path, forwardedQuery);
+      return ibGateway.rawGet(path, forwardedQuery);
     },
   }),
 );
@@ -107,7 +108,7 @@ router.post(
   passthroughHandler({
     isAllowed: isAllowedIbPostPath,
     allowedForError: allowedPostPathsForError,
-    call: (path, req) => ibRawPost(path, req.body ?? {}),
+    call: (path, req) => ibGateway.rawPost(path, req.body ?? {}),
   }),
 );
 

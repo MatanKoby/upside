@@ -29,7 +29,7 @@ import {
 } from '../services/jobs/queue.js';
 import { makeKey } from '../services/jobs/keys.js';
 import { ibRegistry } from '../services/jobs/actions.js';
-import { ibHistory } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import {
   scorePostEarningsDrift,
   findReportDayPop,
@@ -232,7 +232,7 @@ interface PedPayload {
 ibRegistry['eval_post_earnings_drift'] = async (payloadIn) => {
   const payload = payloadIn as unknown as PedPayload;
   if (payload.real_conid == null) throw new Error('eval_post_earnings_drift: missing real_conid');
-  const hist: RawIbHistory | null = await ibHistory(payload.real_conid, '1m', '1d');
+  const hist: RawIbHistory | null = await ibGateway.history(payload.real_conid, '1m', '1d');
   if (!hist?.data || hist.data.length < 2) {
     throw new Error(`eval_post_earnings_drift: insufficient bars for ${payload.symbol}`);
   }

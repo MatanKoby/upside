@@ -7,7 +7,7 @@
 //
 // Conventions:
 // - A 5-min bar has `t` (unix ms), `o`, `h`, `l`, `c`, `v`. Same shape as
-//   ibHistory(conid, '<>d', '5min') bars.
+//   ibGateway.history(conid, '<>d', '5min') bars.
 // - Sessions are bucketed by ET calendar date (open is the first regular-
 //   session bar of that date, close is the last). We don't try to detect
 //   half-day closes — they're rare and a half-day naturally shows up as a

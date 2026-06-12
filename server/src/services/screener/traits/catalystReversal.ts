@@ -9,7 +9,7 @@
 //   Stage 1: IB snapshot per candidate → flag those with ≥3× vol vs
 //            yesterday AND ≥5% gap/intraday move. ~9 min IB/day.
 //            Worker action 'eval_catalyst_stage1' on `ib` pool.
-//   Stage 2: ibHistory(1y, 1d) per Stage-1 hit → evaluate A ∧ B
+//   Stage 2: ibGateway.history(1y, 1d) per Stage-1 hit → evaluate A ∧ B
 //            (beaten-down + confirmed wake-up). ~5–50/day, ~1 min IB.
 //            Worker action 'eval_catalyst_stage2' on `ib` pool.
 //
@@ -112,7 +112,7 @@ export interface DailyBar {
 }
 
 export interface CatalystStage2Input {
-  /** Daily bars from ibHistory(real_conid, '1y', '1d'). Oldest first.
+  /** Daily bars from ibGateway.history(real_conid, '1y', '1d'). Oldest first.
    *  The most recent bar may be today's incomplete bar; consumers should
    *  exclude or trust it consistently — we accept whatever was passed. */
   daily_bars: DailyBar[];

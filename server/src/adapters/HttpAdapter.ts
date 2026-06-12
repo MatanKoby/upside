@@ -36,10 +36,14 @@ export abstract class HttpAdapter {
     protected readonly vendor: string,
     baseUrl: string,
     timeoutMs = 30_000,
+    // Extra axios config merged into the client — e.g. ib's self-signed-cert
+    // httpsAgent. validateStatus stays fixed (adapters map status themselves).
+    clientConfig?: AxiosRequestConfig,
   ) {
     this.http = axios.create({
       baseURL: baseUrl,
       timeout: timeoutMs,
+      ...clientConfig,
       // Adapters inspect the status and map/throw themselves — never throw here.
       validateStatus: () => true,
     });

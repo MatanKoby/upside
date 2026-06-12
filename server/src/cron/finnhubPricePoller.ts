@@ -16,7 +16,7 @@
 // the profit-zone check; the FE recomputes them from `quotes.canonical_price`.
 
 import { finnhub } from '../adapters/finnhub/finnhubAdapter.js';
-import { ibStatus } from '../services/ibGateway.js';
+import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { resolveOwnerUserId } from '../services/owner.js';
 import { notifyError, notifyProfitZoneEntry } from '../services/notify.js';
 import { computeZoneState, getProfitZoneThreshold } from '../services/profitZone.js';
@@ -48,7 +48,7 @@ async function tick(): Promise<void> {
     // IB price "expires" after 90s and we'd overwrite it with Finnhub's delayed
     // quote — e.g. pre-market IB 4.28 vs Finnhub's prior-close 4.18 — causing a
     // visible flicker. Only act as a fallback when IB is actually down.
-    const auth = await ibStatus().catch(() => ({ authenticated: false, connected: false }));
+    const auth = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
     if (auth.authenticated && auth.connected) return;
 
     const threshold = await getProfitZoneThreshold(userId);
