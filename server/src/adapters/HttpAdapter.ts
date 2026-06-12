@@ -13,6 +13,17 @@
 // notifyApiFailure wrapper that finnhub.ts hand-rolled, now shared. Vendors that
 // want a raw, un-audited call (polygon/yahoo, whose callers own their own notify
 // policy) keep using `get()`/`post()` directly and never touch instrumented().
+//
+// ARCH-8 (the ib migration) grew `instrumented()` for the things finnhub didn't
+// exercise but ib needs, each opt-in so finnhub's calls are byte-identical:
+//   - an internal-retry counter — `request` receives a `retry()` it can bump
+//     from inside its own poll loop (ibSnapshot subscribe-then-poll); the final
+//     count rides the metric row + the notify `detail`.
+//   - `detail: "after N retries"` — added to the notify context when retries > 0.
+//   - `skipNotify` — the debug passthrough records a metric but never pings
+//     Discord (its probes are intentional experiments, not errors).
+//   - `rawData` — return the response body even on a non-2xx, so the passthrough
+//     can relay IB's actual error body (its whole purpose) instead of null.
 
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { externalApiMetricsTableModule } from './supabase/externalApiMetricsTableModule.js';
@@ -46,25 +57,36 @@ export abstract class HttpAdapter {
   // (provider = vendor, endpoint = `<vendor>:<category>`), and run the standard
   // Discord failure policy (`<vendor>_api.<category>`, suppressed on success).
   // Returns `data` only on a 2xx — non-2xx maps to `null` so the caller branches
-  // on a single signal. The vendor client is `validateStatus: () => true`, so a
-  // 4xx/5xx arrives here as a status, not a throw.
+  // on a single signal (unless `rawData`). The vendor client is
+  // `validateStatus: () => true`, so a 4xx/5xx arrives here as a status, not a
+  // throw. (A network error / timeout still throws straight through — the metric
+  // row + notify only cover requests that returned a status; the IB connection
+  // state is surfaced separately via /healthz.)
   protected async instrumented<T>(opts: {
     category: string;
-    request: () => Promise<AxiosResponse<T>>;
+    // Receives a `retry()` the request may bump from inside its own poll loop;
+    // calls that don't retry (the common case) just ignore the argument.
+    request: (retry: () => void) => Promise<AxiosResponse<T>>;
     conid?: number | null;
     retries?: number;
+    skipNotify?: boolean;
+    rawData?: boolean;
     notifyContext?: Record<string, unknown>;
   }): Promise<{ status: number; data: T | null }> {
     const start = performance.now();
-    const res = await opts.request();
+    let retries = opts.retries ?? 0;
+    const res = await opts.request(() => { retries++; });
     const durationMs = Math.round(performance.now() - start);
     const succeeded = res.status >= 200 && res.status < 300;
-    this.recordMetric(opts.category, durationMs, res.status, succeeded, opts.conid ?? null, opts.retries ?? 0);
-    notifyApiFailure(`${this.vendor}_api.${opts.category}`, res.status, {
-      ...opts.notifyContext,
-      body: succeeded ? undefined : res.data,
-    });
-    return { status: res.status, data: succeeded ? res.data : null };
+    this.recordMetric(opts.category, durationMs, res.status, succeeded, opts.conid ?? null, retries);
+    if (!opts.skipNotify) {
+      notifyApiFailure(`${this.vendor}_api.${opts.category}`, res.status, {
+        ...opts.notifyContext,
+        ...(retries > 0 ? { detail: `after ${retries} retries` } : {}),
+        body: succeeded ? undefined : res.data,
+      });
+    }
+    return { status: res.status, data: succeeded || opts.rawData ? res.data : null };
   }
 
   // Fire-and-forget audit row — the metric write must never fail the API call.
