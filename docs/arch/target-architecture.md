@@ -17,7 +17,7 @@ system; every step must be safe and reversible.
 | **Ports & adapters** | Integrations (IB, Finnhub, Discord…) sit behind an interface; callers depend on the interface, not the vendor. |
 | **Pure core** | The math (scorers, band engine, risk/sentiment compute) as pure functions — **no DB, no network, no clock**. |
 | **TableModule** | One gatekeeper module per Supabase table; the **only** place that table is read or written. |
-| **Scheduler** | One `schedule({ every, run })` primitive; crons stop hand-rolling `setTimeout`. |
+| **Scheduler** | One `defineCron({ name, intervalMs, gates?, run })` primitive; crons stop hand-rolling `setTimeout`. |
 
 ## Target layout (the destination)
 
@@ -37,8 +37,10 @@ A cron then = four small things in four homes: **when** (`triggers/`) → **what
 ## Refactor order (each is its own Arch sub-batch)
 
 1. ✅ **TableModules** — done (Phase 1). Mechanical, safe, no behavior change.
-2. **Ports & adapters** ← *current.* Wrap each vendor behind a port.
-3. **`schedule()` primitive** — collapse the ~20 `setTimeout` loops.
+2. ✅ **Ports & adapters** — done (Phase 2). Each vendor behind a port.
+3. **`defineCron` primitive** (Phase 3) ← *current.* Collapse the ~24 `setTimeout`
+   loops. Reference set (4 crons) shipped in ARCH-9; bulk rollout of the remaining
+   ~20 = ARCH-10.
 4. **Relocate pure core** into `domain/`.
 5. *(optional)* **Explicit pipeline** for the screener chain (`universe → stats → traits → curated → fires → outcomes`).
 
@@ -325,6 +327,23 @@ No control-flow change; two surfaced audit-only deltas (metric `endpoint` now ve
 `ib:<path>`; the ibTransactions/ibTrades non-2xx warn drops the now-nulled body — it still reaches
 Discord). Typecheck clean; 221/221 (+6); grep gate clean. **Phase 2 complete** (bar the deferred
 `llm`). Next: Phase 3 (`schedule()` primitive) → Phase 4 (pure core into `domain/`).
+
+**Progress (ARCH-9 — `defineCron` reference set shipped 2026-06-12, Phase 3 started):**
+`kernel/scheduler.ts` exports `defineCron({ name, intervalMs, firstRunDelayMs?, gates?, run })
+→ { start, stop }` — the one cron primitive. It is **single-flight by construction**: the next
+tick is scheduled in the `finally` after `run` settles, so a slow body never overlaps itself —
+that recursive `setTimeout` *is* the lock, and there is deliberately **no** `lock` knob (we run
+one api instance; a knob would imply a cross-instance guarantee we don't provide). An uncaught
+throw notifies `${name}.tick` and the loop survives. **Gates** (`cron/gates.ts`: `ibAuthGate`,
+`marketRegularGate`, `marketRegularOrAfterHoursGate`) are an AND-composed "skip this tick" seam,
+kept out of the kernel so the scheduler stays vendor-agnostic. **They are distinct from the job
+queue's per-action preconditions** (`services/jobs/gates.ts` + `requiresRthOpen`): cron gates
+skip a *loop tick*; job gates defer an enqueued *job*. A reference set of 4 crons migrated —
+`lockCleanup` (no gate; `setInterval` → single-flight), `keepalive` (one file → two handles, each
+keeping its own error policy), `riskFlagsCron` (`gates:[ibAuthGate]`, dropping its inline
+`status()` check — the template the other 6 IB crons follow), `catalystReversalProducer` (two
+loops → two handles; its job-layer gates untouched). `index.ts` unchanged (`startXxx()` kept).
+Typecheck clean; 235/235 (+14). **Bulk rollout of the remaining ~20 crons = ARCH-10.**
 
 ## Strategy
 
