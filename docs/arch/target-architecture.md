@@ -251,10 +251,7 @@ Then `universeQuoteProducer` imports `{ polygon }` and calls `polygon.groupedDai
 1. ✅ **`polygon` + `yahoo`** (ARCH-5) — the reference; built `HttpAdapter` + the `adapters/` root + the supabase folder move.
 2. ✅ **`discord`** (ARCH-6) — `notify.ts` → `Notifier`; the adapter owns channel→webhook-URL resolution + delivery, `notify.ts` keeps cooldown + the 14 formatters.
 3. ✅ **`finnhub`** (ARCH-7) — `FinnhubPort` + the `finnhub` singleton; the queue (`finnhubQueue.ts`) moved in as the adapter's rate-limit quirk, and the hand-rolled instrumentation landed on `HttpAdapter.instrumented()`.
-4. **`ib`** (ARCH-8) — the **gateway HTTP half only**, as one sub-batch in two commits, deliberately last:
-   - **8a** grows `HttpAdapter.instrumented()` for IB's extra needs that finnhub didn't exercise — an internal-retry counter (`ibSnapshot` bumps it from inside its loop), the `debug-passthrough:` notify-skip, and the `detail: "after N retries"` field — plus base tests. Small, isolated, no IB code yet; finishes shaping the base.
-   - **8b** stands up `IbGatewayPort` + `IbGatewayAdapter extends HttpAdapter` owning the client (`env.ibGatewayUrl` base + the self-signed `httpsAgent` quirk + the 100ms `rateLimit`), all ~18 HTTP calls (auth/session `ibTickle`/`ibStatus`/`ibLogout` kept **un-instrumented** exactly as today; the snapshot retry path; the raw passthrough `ibRawGet`/`ibRawPost`); the pure `entryFrom*` helpers move to a pure module. Rewires the 15 callers to the `ibGateway` singleton; deletes `services/ibGateway.ts`. **Grep gate flips green here** (`env.ibGatewayUrl` only under `adapters/ib/`).
-   - **Carved out (decided 2026-06-11):** `ibContainer.ts` (the `docker start/stop/restart` lifecycle) **stays a plain service** — it has no env secret and nothing to grep-gate, so only the test-seam payoff would apply; revisit *only* if Batch 13.3's `ibReconciler` lands and wants to fake Docker in tests. `ibMappers.ts` + `ibPassthroughAllowlist.ts` also **stay put** — pure raw→domain mapping + allowlist data, not vendor access (a Phase-4 `domain/` move at earliest).
+4. ✅ **`ib`** (ARCH-8) — the gateway HTTP half: `IbGatewayPort` + `IbGatewayAdapter extends HttpAdapter` (sole `env.ibGatewayUrl` reader; owns the client, self-signed `httpsAgent`, 100ms rate limit, all ~18 calls + the snapshot retry + the debug passthrough); the pure `entryFrom*` helpers split to `adapters/ib/entryDeduction.ts`; 20 callers rewired, `services/ibGateway.ts` deleted. 8a grew `HttpAdapter.instrumented()` (retry counter, `detail`, `skipNotify`, `rawData`). `ibContainer`/`ibMappers`/`ibPassthroughAllowlist` stay put.
 - **Deferred:** `llm` (Analyze-flow is roadmap Track 4 — `spec/roadmap.md`); `yahoo` rides slice 1 but stays minimal.
 
 **Grep-gate anchors:** `api.polygon.io` / `env.polygonApiKey` · `query1.finance.yahoo.com` ·
@@ -306,9 +303,28 @@ finnhub-specific. polygon/yahoo keep calling raw `get()` (their callers own thei
 and never touch `instrumented()`. All 9 callers rewired from free functions to the `finnhub`
 singleton; the two externally-used vendor types (`FinnhubMetrics`, `FinnhubEarningsRow`) moved to
 the port. No behavior change; grep gate clean (`finnhub.io` / `env.finnhubApiKey` / `finnhubQueue`
-only under `adapters/finnhub/`); 215/215 (+7 adapter tests). **Next: `ib` — its own multi-slice
-sub-batch (the monster: app-owned gateway lifecycle, 503-off-hours), deliberately last.** `llm`
-deferred (roadmap Track 4).**
+only under `adapters/finnhub/`); 215/215 (+7 adapter tests). `llm` deferred (roadmap Track 4).**
+
+**Progress (ARCH-8 — ib shipped 2026-06-12, the last Phase-2 slice):** `services/ibGateway.ts`
+inverted into `adapters/ib/` in two commits. **8a** grew `HttpAdapter.instrumented()` for the
+things finnhub didn't exercise, each opt-in so the finnhub path stays byte-identical: a
+caller-bumpable retry counter (`request` receives a `retry()` for ibSnapshot's subscribe-then-poll
+loop), `detail: "after N retries"`, `skipNotify` (the debug passthrough records a metric but never
+pings Discord), and `rawData` (return the body even on a non-2xx so the passthrough relays IB's
+actual error) — +6 base tests. **8b** stood up `IbGatewayPort` (16 vendor-shaped methods + the
+`RawIbTransaction`/`RawIbTrade`/`IbRawResponse` wire types) + `IbGatewayAdapter` (SOLE
+`env.ibGatewayUrl` reader; owns the client + self-signed `httpsAgent` via a new `HttpAdapter`
+`clientConfig` ctor arg + the 100ms rate limit + all ~18 calls + the snapshot retry + the raw
+passthrough); auth/session calls stay un-instrumented as before. The pure `entryFrom*` deduction
+moved to `adapters/ib/entryDeduction.ts`. **20** callers rewired to the `ibGateway` singleton (the
+brief's "15" undercounted — `services/*` import via `./ibGateway.js`), incl. `owner.ts`'s inline
+`/iserver/accounts` call folded into `ibGateway.accounts()` — the one other `env.ibGatewayUrl`
+reader, so the **grep gate flips green** (`env.ibGatewayUrl` only under `adapters/ib/`).
+`services/ibGateway.ts` deleted; `ibContainer`/`ibMappers`/`ibPassthroughAllowlist` stay put.
+No control-flow change; two surfaced audit-only deltas (metric `endpoint` now vendor-namespaced
+`ib:<path>`; the ibTransactions/ibTrades non-2xx warn drops the now-nulled body — it still reaches
+Discord). Typecheck clean; 221/221 (+6); grep gate clean. **Phase 2 complete** (bar the deferred
+`llm`). Next: Phase 3 (`schedule()` primitive) → Phase 4 (pure core into `domain/`).
 
 ## Strategy
 
