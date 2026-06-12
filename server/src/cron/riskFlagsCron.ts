@@ -22,8 +22,11 @@ import { buildRiskFlagInputs } from '../services/riskFlags/inputs.js';
 import { evaluateAndStore, riskFlagAsofDate } from '../services/riskFlags/engine.js';
 import { resolveRiskFlagConfig, type RiskFlagConfig } from '../config/riskFlags.js';
 import type { RawIbHistory } from '../types/index.js';
+import { defineCron } from '../kernel/scheduler.js';
+import { ibAuthGate } from './gates.js';
 
 const CADENCE_MS = 60 * 60_000;
+const FIRST_RUN_DELAY_MS = 45_000;
 
 function num(v: unknown): number | null {
   const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -70,9 +73,8 @@ function highOf(hist: RawIbHistory | null): number | null {
 }
 
 async function tick(): Promise<void> {
-  const status = await ibGateway.status().catch(() => ({ authenticated: false, connected: false }));
-  if (!status.authenticated || !status.connected) return; // IB off → daily bars unavailable
-
+  // IB-auth gating moved to defineCron's `ibAuthGate` (Batch ARCH-9) — by the
+  // time we get here IB is authenticated + connected, so daily bars are live.
   const config = await loadConfig();
   const asof = riskFlagAsofDate();
   const targets = await workingSet();
@@ -114,15 +116,15 @@ async function tick(): Promise<void> {
   }
 }
 
+const cron = defineCron({
+  name: 'riskFlagsCron',
+  intervalMs: CADENCE_MS,
+  firstRunDelayMs: FIRST_RUN_DELAY_MS,
+  gates: [ibAuthGate],
+  run: tick,
+});
+
 export function startRiskFlagsCron(): void {
+  cron.start();
   console.log('[riskFlagsCron] starting, 60min cadence (IB-gated)');
-  const loop = async (): Promise<void> => {
-    try {
-      await tick();
-    } catch (e) {
-      void notifyError('riskFlagsCron.tick', (e as Error).message, e);
-    }
-    setTimeout(loop, CADENCE_MS).unref();
-  };
-  setTimeout(loop, 45_000).unref();
 }

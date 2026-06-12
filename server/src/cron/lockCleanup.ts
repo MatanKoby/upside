@@ -5,14 +5,17 @@
 // orphaned and would disable the Analyze button forever — so this sweeper
 // deletes rows older than the 5-minute TTL (comfortably exceeds worst-case LLM
 // response time; see signal-model.md → Concurrency lock).
+//
+// Batch ARCH-9: the hand-rolled setInterval is now a defineCron — no gates, and
+// firstRunDelayMs = interval to preserve the setInterval semantics (first sweep
+// at +60s, not at boot).
 
 import { analysisLocksTableModule } from '../adapters/supabase/analysisLocksTableModule.js';
 import { notifyError } from '../services/notify.js';
+import { defineCron } from '../kernel/scheduler.js';
 
 const STALE_LOCK_SECONDS = 5 * 60;
 const CLEANUP_INTERVAL_MS = 60_000;
-
-let timer: NodeJS.Timeout | null = null;
 
 async function cleanupStaleLocks(): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_LOCK_SECONDS * 1000).toISOString();
@@ -23,17 +26,14 @@ async function cleanupStaleLocks(): Promise<void> {
   }
 }
 
-export function startLockCleanup(): void {
-  if (timer) return;
-  timer = setInterval(() => {
-    void cleanupStaleLocks();
-  }, CLEANUP_INTERVAL_MS);
-  console.log('[lockCleanup] stale-lock cleanup started (interval 60s, TTL 5min)');
-}
+const cron = defineCron({
+  name: 'lockCleanup',
+  intervalMs: CLEANUP_INTERVAL_MS,
+  firstRunDelayMs: CLEANUP_INTERVAL_MS,
+  run: cleanupStaleLocks,
+});
 
-export function stopLockCleanup(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+export function startLockCleanup(): void {
+  cron.start();
+  console.log('[lockCleanup] stale-lock cleanup started (interval 60s, TTL 5min)');
 }

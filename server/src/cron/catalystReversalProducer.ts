@@ -42,6 +42,7 @@ import { ibRegistry } from '../services/jobs/actions.js';
 import { gateRegistry, requiresRthOpen } from '../services/jobs/gates.js';
 import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { parseIbNumber } from '../utils/ibNumber.js';
+import { defineCron } from '../kernel/scheduler.js';
 import {
   evaluateCatalystStage1,
   evaluateCatalystStage2,
@@ -290,26 +291,29 @@ async function loadAutoPromotedCarryovers(): Promise<UniverseTarget[]> {
   }
 }
 
+// Batch ARCH-9: the two hand-rolled loops become two defineCron handles. No
+// cron-level gates — the produce loop's candidate deps persist in the DB and the
+// advance loop is DB-only; the *job*-level RTH gating below (gateRegistry +
+// requiresRthOpen) is a separate system that gates the enqueued jobs, not these
+// loops. The loop-error notify key picks up the base's `.tick` suffix
+// (`catalystReversalProducer.produce.tick` / `.advance.tick`).
+const produceCron = defineCron({
+  name: 'catalystReversalProducer.produce',
+  intervalMs: CADENCE_MS,
+  firstRunDelayMs: FIRST_RUN_DELAY_MS,
+  run: produceTick,
+});
+const advanceCron = defineCron({
+  name: 'catalystReversalProducer.advance',
+  intervalMs: ADVANCE_CADENCE_MS,
+  firstRunDelayMs: ADVANCE_FIRST_DELAY_MS,
+  run: advanceTick,
+});
+
 export function startCatalystReversalProducer(): void {
+  produceCron.start();
+  advanceCron.start();
   console.log('[catalystReversalProducer] starting: produce 24h, advance ~2min');
-  const produceLoop = async () => {
-    try {
-      await produceTick();
-    } catch (e) {
-      void notifyError('catalystReversalProducer.produce', (e as Error).message, e);
-    }
-    setTimeout(produceLoop, CADENCE_MS).unref();
-  };
-  const advanceLoop = async () => {
-    try {
-      await advanceTick();
-    } catch (e) {
-      void notifyError('catalystReversalProducer.advance', (e as Error).message, e);
-    }
-    setTimeout(advanceLoop, ADVANCE_CADENCE_MS).unref();
-  };
-  setTimeout(produceLoop, FIRST_RUN_DELAY_MS).unref();
-  setTimeout(advanceLoop, ADVANCE_FIRST_DELAY_MS).unref();
 }
 
 // ---------------------------------------------------------------------------
