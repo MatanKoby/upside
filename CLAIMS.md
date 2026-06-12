@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-9 — Scheduler primitive (Phase 3): defineCron base for the ~24 crons
-- Owner: claude
-- Started: 2026-06-12 07:08
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,42 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-9 — Scheduler primitive (Phase 3): defineCron reference set (2026-06-12)
+- Owner: claude
+- Started: 2026-06-12 07:08
+- Finished: 2026-06-12 09:15
+- Commits: `a059742` (9a primitive + gates + tests) · `5e8781b` (9b 4 reference crons) · `a98816f` (arch doc)
+
+**What shipped.** Phase-3 first slice — the one cron primitive + a 4-cron reference
+migration, phased ahead of the bulk rollout (ARCH-10).
+
+- **9a (`a059742`)** `kernel/scheduler.ts` —
+  `defineCron({ name, intervalMs, firstRunDelayMs?, gates?, run }) → { start, stop }`.
+  **Single-flight by construction**: the next tick is scheduled in the `finally` after
+  `run` settles, so a slow body never overlaps itself — the recursive `setTimeout` *is*
+  the lock. **No `lock` knob** (we run one api instance; a knob would imply a
+  cross-instance guarantee we don't provide). An uncaught throw notifies
+  `${name}.tick` and the loop survives. `cron/gates.ts` holds the concrete AND-composed
+  tick gates (`ibAuthGate`, `marketRegularGate`, `marketRegularOrAfterHoursGate`) so the
+  kernel stays vendor-agnostic. **Cron gates ≠ job gates** — these skip a *loop tick*;
+  `services/jobs/gates.ts` / `requiresRthOpen` defer an enqueued *job* (the X10
+  precondition system). +14 tests (8 scheduler, 6 gates).
+- **9b (`5e8781b`)** migrated 4 crons spanning the shapes: `lockCleanup` (no gate;
+  `setInterval`→single-flight), `keepalive` (1 file→2 handles, each keeping its own error
+  policy — tickle swallows, supabasePing keeps `notifyCritical`), `riskFlagsCron`
+  (`gates:[ibAuthGate]`, dropping its inline `status()` check — the template the other 6
+  IB crons follow), `catalystReversalProducer` (2 loops→2 handles; its job-layer
+  `requiresRthOpen` gates untouched). `index.ts` unchanged (`startXxx()` kept).
+
+**Verification:** typecheck clean (incl. scripts tsconfig); 235/235 (+14). No migration,
+no live-flip prereqs. Audit-only delta: catalyst loop-error notify keys gain `.tick`
+(`catalystReversalProducer.produce` → `.produce.tick`) — benign label, Discord routing
+unaffected.
+
+**Follow-up — ARCH-10:** migrate the remaining ~20 crons onto `defineCron`. The 7 IB
+crons use `gates:[ibAuthGate]`; `bandEngineCron`/`ibPricePoller` add a market gate; the
+retention/cleanup crons are no-gate. The reference set is the template.
 
 ### Batch ARCH-8 — Ports & adapters (Phase 2): ib gateway adapter (HTTP half) (2026-06-12)
 - Owner: claude
