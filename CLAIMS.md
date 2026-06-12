@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-9 — Scheduler primitive (Phase 3): defineCron base for the ~24 crons
+- Owner: claude
+- Started: 2026-06-12 07:08
 
 ## Known issues (deferred fixes)
 
