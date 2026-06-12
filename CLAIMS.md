@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-8 — Ports & adapters (Phase 2): ib gateway adapter (HTTP half)
-- Owner: claude
-- Started: 2026-06-12 06:08
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,67 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-8 — Ports & adapters (Phase 2): ib gateway adapter (HTTP half) (2026-06-12)
+- Owner: claude
+- Started: 2026-06-12 06:08
+- Finished: 2026-06-12 06:36
+- Commits: `9d3c2f0` (8a base growth) · `96509a8` (8b adapter + 20-caller rewire + delete) · `d0a6fb5` (arch doc)
+
+**What shipped.** The last (and largest) Phase-2 vendor slice — `services/ibGateway.ts`
+inverted into `adapters/ib/`, in two commits, so the gateway has one door.
+
+- **8a (`9d3c2f0`)** grew `HttpAdapter.instrumented()` for the things finnhub didn't exercise,
+  each an **opt-in** flag so the finnhub/polygon/yahoo paths stay byte-identical: a
+  caller-bumpable retry counter (`request` now receives a `retry()` it can bump from inside its
+  own poll loop — ibSnapshot's subscribe-then-poll), `detail: "after N retries"` on the notify,
+  `skipNotify` (the debug passthrough records a metric but never pings Discord), and `rawData`
+  (return the response body even on a non-2xx so the passthrough relays IB's actual error body
+  instead of null). +6 base tests (`HttpAdapter.test.ts` — retry counter, detail, skipNotify,
+  rawData, vendor-namespaced endpoint). This folded the old `instrumented`/`instrumentedWithRetry`
+  pair into the one shared base method.
+- **8b (`96509a8`)** stood up `adapters/ib/port.ts` (`IbGatewayPort` — 16 vendor-shaped methods
+  + the `RawIbTransaction`/`RawIbTrade`/`IbRawResponse` wire types it owned) + `ibGatewayAdapter.ts`
+  (`IbGatewayAdapter extends HttpAdapter` — now the SOLE `env.ibGatewayUrl` reader / sole path to
+  the gateway; owns the client + the self-signed `httpsAgent` (via a new optional `HttpAdapter`
+  `clientConfig` ctor arg) + the 100ms rate limit + all ~18 calls + the snapshot retry loop + the
+  raw passthrough). Auth/session calls (`tickle`/`status`/`logout`/`accounts`/`contractInfo`/
+  `secdefSearch`) stay **un-instrumented** exactly as before. The pure entry-date deduction split
+  to `adapters/ib/entryDeduction.ts`. **20** callers rewired from free functions to the `ibGateway`
+  singleton (the brief's "15" undercounted — `services/*` import via `./ibGateway.js`), method names
+  dropping the redundant `ib` prefix (`ibStatus()` → `ibGateway.status()`). `services/ibGateway.ts`
+  deleted. **`ibContainer`/`ibMappers`/`ibPassthroughAllowlist` stay put** (lifecycle + pure
+  mapping/allowlist — no env secret to gate).
+- **The hidden 16th-door:** `services/owner.ts` hand-rolled its own `/iserver/accounts` axios call
+  reading `env.ibGatewayUrl` (a TODO from before the wrapper existed). Folded into
+  `ibGateway.accounts()`, so it's no longer a second vendor door — **that's what flips the grep gate
+  green.**
+
+**Grep gate:** `env.ibGatewayUrl` is now read only under `adapters/ib/` (the env.ts *definition* and
+a few prose comments aside). No leftover `services/ibGateway` imports; no bare `ibXxx(` calls outside
+the adapter.
+
+**No behavior change in control flow** — same endpoints, params, field mapping, queueing, lifecycle.
+**Two surfaced audit-only deltas** (not silent): (1) `external_api_metrics.endpoint` is now
+vendor-namespaced `ib:<path>` (was the bare `<path>`), matching finnhub's `finnhub:<cat>` — nothing
+reads that string programmatically (only the healthcheck skill *displays* it). (2) The
+`ibTransactions`/`ibTrades` non-2xx warn logs drop the response body (the base nulls data on
+non-2xx) — the error body still reaches Discord via the shared notify. **One semantic narrowing
+(surfaced):** the old helpers recorded a status-0 metric + notify on a *thrown* request (network
+error / timeout) via try/finally; the base does not. Control flow is unchanged (the throw still
+propagates to the caller); the lost status-0 row is redundant with /healthz's IB connection state
+and dropping the notify removes off-hours gateway-down noise.
+
+- **Live-flip prereqs:** none. Pure relocation. `git pull && ./bin/upside rebuild api` is
+  behaviorally identical — same IB calls, same metrics/notify policy, same gateway lifecycle.
+- **Verification:** typecheck clean (incl. scripts tsconfig); **221/221** vitest green (+6 base
+  tests; finnhub's 7 unchanged → byte-identical). Grep gate clean. No migration, no env/Discord/
+  schema change.
+- **Follow-ups deferred:** **Phase 2 is now complete** (bar `llm`, parked in roadmap Track 4).
+  Next on `docs/arch/target-architecture.md`: **Phase 3** (the `schedule()` cron primitive — the
+  24 hand-rolled `start*()` crons behind one `defineCron`, also Batch ARCH item 1) → **Phase 4**
+  (relocate the pure core into `domain/`; `ibMappers`/`entryDeduction`/`ibPassthroughAllowlist`
+  would move there). `ibContainer` test-seam revisit only if Batch 13.3's `ibReconciler` lands.
 
 ### Batch ARCH-7 — Ports & adapters (Phase 2): finnhub adapter (2026-06-11)
 - Owner: claude
