@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-8 — Ports & adapters (Phase 2): ib gateway adapter (HTTP half)
+- Owner: claude
+- Started: 2026-06-12 06:08
 
 ## Known issues (deferred fixes)
 
