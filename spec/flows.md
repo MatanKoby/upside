@@ -184,7 +184,7 @@ Sister to Marker Hit Flow — pings only on band touches, not engine state chang
 3. Each IB-fed cron carries a **data-freshness gate**: a trigger is a cheap no-op when the feed is already fresh, a full rebuild when it's stale. That per-cron freshness check *is* the "is this data stale?" decision — kept local to the cron that owns the data, no central registry.
 4. Triggers are **staggered** to avoid a burst of IB history calls on reconnect (a single tick has been observed issuing 35 history requests in a minute).
 
-Scope = **IB-dependent** producers only: `ibPricePoller` catch-up (already restarted at Connect step 9), `intradayStatsCron`, the band engine, entry-zone bar refresh. **Not** `curatedListCron` / `daily_bars` — those are Polygon-fed and rebuild independently of IB (see `signals/curated-list.md` → Refresh cadence), so a reconnect must not kick them.
+Scope = **IB-dependent** producers, registered via `cron/ibReconnect.ts`. Wired now: `postEarningsDriftProducer` (the swing-list feed — its `eval_*` jobs stall while IB is down) and `catalystReversalProducer.produce` (the both-lists catalyst feed). The registry is extensible — `intradayStatsCron`, the band engine, and entry-zone bar refresh fold in as they migrate onto `defineCron`; `ibPricePoller` is already restarted at Connect step 9. **Not** `curatedListCron` / `daily_bars` — those are Polygon-fed and rebuild independently of IB (see `signals/curated-list.md` → Refresh cadence), so a reconnect must not kick them.
 
 ## Data Flow — IB API → Backend
 
