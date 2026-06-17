@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch ARCH-10 — IB-reconnect staleness catch-up + curated_list bigint-ADV fix
+- Owner: claude
+- Started: 2026-06-17 09:46
 
 ## Known issues (deferred fixes)
 
