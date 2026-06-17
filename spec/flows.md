@@ -177,6 +177,15 @@ Sister to Marker Hit Flow — pings only on band touches, not engine state chang
 
 **External session kill** (user logs into TWS directly elsewhere): same as nightly logout — next poll detects auth error.
 
+**Reconnect → staleness catch-up (all connect paths).** Every return to `authenticated + connected` — explicit Connect (above), recovery from the nightly forced logout, or from an external session kill — fires a one-shot catch-up so IB-dependent producers refresh **immediately** instead of waiting out their 12–24h boot-relative cadence:
+
+1. The backend owns the edge via the **keepalive tickle** (the 30s IB heartbeat — see `architecture.md` → Three Loops): it tracks the last auth state and emits a single `ib-reconnected` signal on a `false→true` flip. Edge-triggered, so a steady — or briefly-flapping-while-connected — session costs nothing, and it covers *every* connect path, not just the FE-driven Connect.
+2. The signal calls `trigger()` on each registered IB-dependent cron — a method on the `defineCron` handle (the ARCH-9 scheduler primitive) that runs the body once now, through the same gates + single-flight loop, **without** disturbing the periodic timer.
+3. Each IB-fed cron carries a **data-freshness gate**: a trigger is a cheap no-op when the feed is already fresh, a full rebuild when it's stale. That per-cron freshness check *is* the "is this data stale?" decision — kept local to the cron that owns the data, no central registry.
+4. Triggers are **staggered** to avoid a burst of IB history calls on reconnect (a single tick has been observed issuing 35 history requests in a minute).
+
+Scope = **IB-dependent** producers only: `ibPricePoller` catch-up (already restarted at Connect step 9), `intradayStatsCron`, the band engine, entry-zone bar refresh. **Not** `curatedListCron` / `daily_bars` — those are Polygon-fed and rebuild independently of IB (see `signals/curated-list.md` → Refresh cadence), so a reconnect must not kick them.
+
 ## Data Flow — IB API → Backend
 
 The Node.js app communicates with IB Client Portal Gateway via internal hostname `ib-gateway:5000`. Key endpoints used:

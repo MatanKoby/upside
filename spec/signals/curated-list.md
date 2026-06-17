@@ -133,6 +133,8 @@ Realtime enabled (Screener FE + Watchlist chips subscribe).
 
 Stale rows (older than 7 days) dropped by daily retention task.
 
+`avg_daily_volume` is `bigint` (whole shares) — the bar-derived **median** ADV must be **rounded** before persist. An even-count volume window yields a `.5` median; passed through unrounded it throws `invalid input syntax for type bigint` on upsert, which aborts the *entire* rebuild tick. This was the X3→X4 regression that silently froze the list for ~8 days (June 2026): the cron ran on cadence but every tick threw at the write.
+
 ## Consumers
 
 - **`dip-bounce-scorer.md`** — runs both scorers on every poll write to
