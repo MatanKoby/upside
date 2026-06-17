@@ -8,7 +8,9 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-_(none)_
+### Batch X12 — Virtual-list explainability (entry temperature + factor flags + why-sheet)
+- Owner: claude
+- Started: 2026-06-17 11:30
 
 ## Known issues (deferred fixes)
 
