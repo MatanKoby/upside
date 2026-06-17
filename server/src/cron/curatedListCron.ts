@@ -78,7 +78,11 @@ async function dailyMetrics(conid: number): Promise<{ atrPct: number | null; med
     .slice(-30)
     .map((b) => b.v)
     .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
-  const medAdv = vols.length > 0 ? median(vols) : null;
+  // Round to whole shares: `avg_daily_volume` is a bigint column, and median()
+  // returns a .5 fractional on even-count windows — passed through unrounded it
+  // throws `invalid input syntax for type bigint` on upsert, aborting the whole
+  // rebuild (see spec/signals/curated-list.md → Persistence).
+  const medAdv = vols.length > 0 ? Math.round(median(vols)) : null;
   return { atrPct, medAdv };
 }
 

@@ -48,7 +48,9 @@ class CuratedListTableModule extends TableModule {
         asof_date: asofDate,
         rank: r.rank,
         intraday_range_trader_score: r.intradayRangeTraderScore,
-        avg_daily_volume: r.avgDailyVolume,
+        // `avg_daily_volume` is bigint — coerce to whole shares here (sole writer)
+        // so a fractional median ADV can never throw on upsert and abort the write.
+        avg_daily_volume: r.avgDailyVolume == null ? null : Math.round(r.avgDailyVolume),
         daily_atr_pct: r.dailyAtrPct,
         computed_at: computedAt,
       }));
