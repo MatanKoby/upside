@@ -22,6 +22,17 @@ export const ibAuthGate: Gate = async () => {
   }
 };
 
+/**
+ * Skip the tick when the feed is already fresh. `isFresh` returns true when the
+ * cron's own data is current; the gate then returns false (skip). Pairs with
+ * `CronHandle.trigger()` + the IB-reconnect catch-up: a reconnect triggers every
+ * registered IB cron, but only the *stale* ones actually run their body — the
+ * staleness decision lives here, local to each cron, with no central registry.
+ */
+export function freshnessGate(isFresh: () => boolean | Promise<boolean>): Gate {
+  return async () => !(await isFresh());
+}
+
 /** Skip the tick outside the regular 09:30–16:00 ET session. */
 export const marketRegularGate: Gate = () => marketPeriodAt() === 'regular';
 

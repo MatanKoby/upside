@@ -9,7 +9,7 @@ vi.mock('../adapters/ib/ibGatewayAdapter.js', () => ({
 }));
 vi.mock('../utils/marketHours.js', () => ({ marketPeriodAt: vi.fn() }));
 
-import { ibAuthGate, marketRegularGate, marketRegularOrAfterHoursGate } from './gates.js';
+import { ibAuthGate, marketRegularGate, marketRegularOrAfterHoursGate, freshnessGate } from './gates.js';
 import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { marketPeriodAt } from '../utils/marketHours.js';
 
@@ -58,5 +58,16 @@ describe('market gates', () => {
       mockPeriod.mockReturnValue(p);
       expect(marketRegularOrAfterHoursGate()).toBe(false);
     }
+  });
+});
+
+describe('freshnessGate (Batch ARCH-10)', () => {
+  it('skips (false) when fresh, runs (true) when stale', async () => {
+    expect(await freshnessGate(() => true)()).toBe(false); // fresh ⇒ skip the tick
+    expect(await freshnessGate(() => false)()).toBe(true); // stale ⇒ run
+  });
+  it('awaits an async freshness check', async () => {
+    expect(await freshnessGate(async () => true)()).toBe(false);
+    expect(await freshnessGate(async () => false)()).toBe(true);
   });
 });

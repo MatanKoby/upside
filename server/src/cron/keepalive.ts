@@ -14,6 +14,7 @@ import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { pingSupabase } from '../services/supabase.js';
 import { notifyCritical } from '../services/notify.js';
 import { defineCron } from '../kernel/scheduler.js';
+import { detectIbReconnect } from './ibReconnect.js';
 
 const TICKLE_INTERVAL_MS = 30_000;
 const SUPABASE_PING_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -24,6 +25,9 @@ const tickleCron = defineCron({
   firstRunDelayMs: TICKLE_INTERVAL_MS,
   run: async () => {
     await ibGateway.tickle().catch(() => undefined);
+    // Reuse the 30s IB heartbeat to detect a reconnect edge and fire the
+    // staleness catch-up (Batch ARCH-10). Swallows its own errors.
+    await detectIbReconnect().catch(() => undefined);
   },
 });
 

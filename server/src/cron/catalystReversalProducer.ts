@@ -43,6 +43,7 @@ import { gateRegistry, requiresRthOpen } from '../services/jobs/gates.js';
 import { ibGateway } from '../adapters/ib/ibGatewayAdapter.js';
 import { parseIbNumber } from '../utils/ibNumber.js';
 import { defineCron } from '../kernel/scheduler.js';
+import { onIbReconnect } from './ibReconnect.js';
 import {
   evaluateCatalystStage1,
   evaluateCatalystStage2,
@@ -313,6 +314,9 @@ const advanceCron = defineCron({
 export function startCatalystReversalProducer(): void {
   produceCron.start();
   advanceCron.start();
+  // Re-enqueue catalyst snapshots on IB reconnect (both-lists feed); the ~2min
+  // advance loop drains them into trait_scores (Batch ARCH-10).
+  onIbReconnect(produceCron);
   console.log('[catalystReversalProducer] starting: produce 24h, advance ~2min');
 }
 

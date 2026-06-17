@@ -128,4 +128,65 @@ describe('defineCron', () => {
     expect(run).toHaveBeenCalledTimes(1);
     cron.stop();
   });
+
+  // trigger() — the IB-reconnect catch-up seam (Batch ARCH-10).
+  it('trigger() runs the body once, now — before the first scheduled tick', async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const cron = defineCron({ name: 'c', intervalMs: 1000, firstRunDelayMs: 1000, run });
+    cron.start();
+    cron.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(1); // fired immediately, not after firstRunDelay
+    cron.stop();
+  });
+
+  it('trigger() does not disturb the periodic cadence', async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const cron = defineCron({ name: 'c', intervalMs: 1000, firstRunDelayMs: 1000, run });
+    cron.start();
+    await vi.advanceTimersByTimeAsync(500); // halfway to the first tick
+    cron.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(1); // the trigger ran
+    await vi.advanceTimersByTimeAsync(500); // reach firstRunDelay — timer was NOT reset
+    expect(run).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).toHaveBeenCalledTimes(3); // cadence continues on its original clock
+    cron.stop();
+  });
+
+  it('trigger() respects gates (skips when a gate is false)', async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const cron = defineCron({ name: 'c', intervalMs: 1000, firstRunDelayMs: 1000, gates: [() => false], run });
+    cron.start();
+    cron.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).not.toHaveBeenCalled();
+    cron.stop();
+  });
+
+  it('trigger() is a no-op while a tick is in flight (single-flight)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    let release: () => void = () => {};
+    const run = vi.fn().mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      active--;
+    });
+    const cron = defineCron({ name: 'c', intervalMs: 1000, firstRunDelayMs: 10, run });
+    cron.start();
+    await vi.advanceTimersByTimeAsync(10); // first tick starts, then blocks
+    cron.trigger();
+    cron.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(1); // both triggers were no-ops — the in-flight body covers them
+    expect(maxActive).toBe(1);
+    release();
+    cron.stop();
+    release();
+  });
 });

@@ -35,6 +35,9 @@ import {
   findReportDayPop,
 } from '../services/screener/traits/postEarningsDrift.js';
 import type { RawIbHistory } from '../types/index.js';
+import { defineCron } from '../kernel/scheduler.js';
+import { freshnessGate } from './gates.js';
+import { onIbReconnect } from './ibReconnect.js';
 
 const CADENCE_MS = 24 * 60 * 60_000;
 const FIRST_RUN_DELAY_MS = 11 * 60_000;
@@ -204,17 +207,24 @@ async function tick(): Promise<void> {
   );
 }
 
+// Batch ARCH-10: hand-rolled loop → defineCron. The freshness gate skips a tick
+// once today's scores exist, so an IB-reconnect trigger is a no-op when fresh
+// and a full produce+drain when stale (e.g. eval jobs that completed while IB
+// was down but haven't been drained into trait_scores yet).
+const cron = defineCron({
+  name: 'postEarningsDriftProducer',
+  intervalMs: CADENCE_MS,
+  firstRunDelayMs: FIRST_RUN_DELAY_MS,
+  gates: [
+    freshnessGate(async () => (await traitScoresTableModule.latestAsof(['post_earnings_drift'])) === todayIsoDate()),
+  ],
+  run: tick,
+});
+
 export function startPostEarningsDriftProducer(): void {
-  console.log('[postEarningsDriftProducer] starting, 24h cadence');
-  const loop = async () => {
-    try {
-      await tick();
-    } catch (e) {
-      void notifyError('postEarningsDriftProducer.loop', (e as Error).message, e);
-    }
-    setTimeout(loop, CADENCE_MS).unref();
-  };
-  setTimeout(loop, FIRST_RUN_DELAY_MS).unref();
+  cron.start();
+  onIbReconnect(cron); // catch up the swing-list feed the moment IB returns
+  console.log('[postEarningsDriftProducer] starting, 24h cadence + IB-reconnect trigger');
 }
 
 // ---------------------------------------------------------------------------

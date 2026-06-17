@@ -34,6 +34,14 @@ export interface CronDef {
 export interface CronHandle {
   start(): void;
   stop(): void;
+  /**
+   * Run the body once *now* — through the same gates + single-flight as a
+   * periodic tick — without disturbing the cadence timer. A no-op if a tick is
+   * already in flight. The IB-reconnect catch-up calls this (see
+   * `cron/ibReconnect.ts`) so a stale feed rebuilds the moment IB returns
+   * instead of waiting out its 12–24h cadence.
+   */
+  trigger(): void;
 }
 
 async function allPass(gates: Gate[] | undefined): Promise<boolean> {
@@ -47,21 +55,34 @@ async function allPass(gates: Gate[] | undefined): Promise<boolean> {
 export function defineCron(def: CronDef): CronHandle {
   let timer: NodeJS.Timeout | null = null;
   let started = false;
+  let running = false; // one body at a time — the periodic loop ∥ trigger()
 
   const schedule = (delayMs: number): void => {
     timer = setTimeout(loop, delayMs);
     timer.unref();
   };
 
-  async function loop(): Promise<void> {
+  // One gated, error-trapped run of the body. The `running` guard makes the
+  // body single-flight across BOTH the periodic loop and an off-cadence
+  // trigger(): if one is mid-flight the other is a no-op — the in-flight run
+  // already covers this tick.
+  async function runOnce(): Promise<void> {
+    if (running) return;
+    running = true;
     try {
       if (await allPass(def.gates)) await def.run();
     } catch (e) {
       void notifyError(`${def.name}.tick`, (e as Error).message ?? 'unknown', e);
     } finally {
-      // Single-flight: the next tick is scheduled only after this one settles.
-      if (started) schedule(def.intervalMs);
+      running = false;
     }
+  }
+
+  async function loop(): Promise<void> {
+    await runOnce();
+    // The next tick is scheduled only after this one settles — keeps the
+    // periodic cadence single-flight even if a body runs longer than intervalMs.
+    if (started) schedule(def.intervalMs);
   }
 
   return {
@@ -76,6 +97,9 @@ export function defineCron(def: CronDef): CronHandle {
         clearTimeout(timer);
         timer = null;
       }
+    },
+    trigger(): void {
+      void runOnce(); // run now, gated + single-flight; leaves the timer alone
     },
   };
 }
