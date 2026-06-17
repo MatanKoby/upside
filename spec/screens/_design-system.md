@@ -22,6 +22,8 @@ Single component, internal branching on a few conditionals (P&L tint vs. none, w
 
 **Signal pills carry the immediate action.** Pill format `[<type> · <quality>% · <motivation> · $<price>]` (leg 1 of the playbook). Pill row policy: never truncate a signal pill — info badges truncate to "+N" first.
 
+**Long-press the ticker symbol → Robinhood (Batch X13).** On every TickerCard surface (Portfolio held cards, Watchlist imported rows, the Intraday/Swing virtual rows), a long-press (touch) / right-click (desktop) **on the symbol text** opens `https://robinhood.com/stocks/<symbol-lowercased>/` in a new tab. Scoped to the symbol element only: on watchlist rows the *row-level* long-press still opens the add-marker sheet (`watchlist.md` → Gestures), so the symbol's handler stops propagation; a plain tap on the symbol still navigates to TickerDetail. Implementation note: a long-press isn't a "click," so `window.open` may be popup-blocked on iOS — open via an `<a target="_blank" rel="noopener">` clicked synchronously inside the gesture handler.
+
 ## Primitives catalog (`client/src/components/primitives/`)
 
 Atomic UI renderers. Each takes a `size: 'sm' | 'md' | 'lg'` prop so it can scale across card / TickerDetail header / future contexts. Implementation may start with only `sm` and add larger sizes when a real consumer needs them.

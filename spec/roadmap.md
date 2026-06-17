@@ -298,6 +298,14 @@ Writes to a new `news_events` table: `(conid, source, headline, url, polarity, c
 
 If volume-gap-only catches everything we care about, RSS is dead weight. The trigger is empirical, not calendar-based.
 
+### Breakout (momentum) detection — the "race-car" list
+
+The Intraday/Swing virtual lists score **mean-reversion dip entries** (buy a favorable-R:R pullback — see `../signals/dip-bounce-scorer.md` + `../screens/watchlist.md` → entry temperature). The orthogonal opportunity is a **breakout**: a name pushing through resistance on expanding volume, where the edge is *momentum*, not reversion. High-upside ("race-car") but hard — its value is entirely gated on **catching it in time for the move to still matter**, which a daily-grain pool rebuild can't do.
+
+Forward-spec when it lands: a separate `breakout` trait (range-compression → expansion + volume thrust + new-high confirmation over intraday bars), surfaced as its own list or a 🏎️/⚡ temperature distinct from the 🔥 dip read (the two are different trade types and shouldn't share a verdict). Likely needs near-real-time bar evaluation, not the curated daily sweep.
+
+**Revisit when** (both): the dip-bounce lists are proven and in steady use, **and** we can point to ≥1 breakout the user wanted that the dip-oriented lists structurally can't surface. Until then, dip-entry is the user-stated higher-conviction half; breakout is deferred, not dropped.
+
 ### Mid-day broad-pool discovery sweep
 
 Currently dynamic universe inclusion runs only at 15:30 IDT (pre-market). A mid-day broad-pool sweep would scan the ~10k Ring-0 pool every 30 min during regular session for tickers reacting to mid-day news / surprise halts / lifted halts.

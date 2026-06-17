@@ -48,6 +48,12 @@ Each row shows a `why` chip per qualifying reason (`dip` / `catalyst` /
 throwaway way as the scorer weights below; don't hard-code them in the rank
 function.
 
+The rows also carry a **live entry-temperature** verdict (🔥/🟡/🧊) — the
+FE-side "is this a good buy *this moment*" read off the same band buy-level this
+scorer uses, gated by the same fresh-price rule. Definition + the tailwind/headwind
+factor flags + the per-row why-sheet live in `../screens/watchlist.md` →
+Reading a row.
+
 ## Intraday scorer
 
 Pure function `computeIntradayDipBounceScore(conid, asof_ts) →

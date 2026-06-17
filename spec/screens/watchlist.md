@@ -64,7 +64,24 @@ A name can carry multiple chips and appear on both lists. The list rank is a **c
 
 **Row extras (vs imported rows):** a **rolling 30-day hit-rate** column (forward-tracker, `../signals/dip-bounce-scorer.md`) + a **walking-band chip** (`../signals/band-engine.md`, session_regime + vol-scalar; tap → next low/high bands). Otherwise the identical `TickerCard` to imported rows (price, danger badge, marker / entry-zone / intraday-stats chips).
 
-**Affordances:** long-press → **Add to one of my watchlists** (writes a `watchlist_items` row) or **Set marker** (prefilled at the band p50). Same sheet pattern as imported rows.
+### Reading a row — entry temperature, factor flags & the why-sheet (Batch X12)
+
+The leaderboard's job is to answer **"what's a good buy *right now*,"** not just "what's in the pool." Three legible layers, all **FE-derived** from data `useVirtualList` already pulls (no engine/schema work):
+
+- **Entry temperature** — a live verdict recomputed every quote tick from current price vs the walking band (`../signals/band-engine.md`), the live-fire flag, and risk flags (`../signals/risk-flags.md`):
+  - 🔥 **hot** — price at/below the band buy level (`current_low_band`) *or* a live dip-bounce fire, **and** no CRITICAL risk flag. A favorable risk:reward dip entry *this moment* (mean-reversion — **not** breakout; breakout is a different, harder signal, roadmapped at `../roadmap.md` → Track 10 → Breakout detection).
+  - 🟡 **near** — price in the lower band channel, approaching the buy level.
+  - 🧊 **ice / stay away** — a CRITICAL risk flag, or price extended up near `current_high_band` (no dip to buy).
+  - (cool — no icon — not a buy now, not dangerous; sits lower.)
+  - **Fresh-price honesty:** a stale/seeded off-hours price (`../signals/curated-list.md` → Population & freshness) can populate a row but can never read 🔥 — temperature requires a fresh canonical price, the same gate as `../signals/dip-bounce-scorer.md` → Fresh-price firing gate.
+
+- **Factor flags** — a 🟢 *N tailwinds* / 🔴 *M headwinds* count rolling up every for/against signal on the row: tailwinds (qualifying reason chip(s), price in the buy band, bullish news `../signals/news-signal.md`, good rolling hit-rate, mean-reversion regime, a live fire) vs. headwinds (each active risk flag, bearish news, low hit-rate, price extended vs band, bearish-trend regime). The **badge is the count; the why-sheet itemizes them.** The taxonomy is FE-side presentation (tunable), not a server engine.
+
+- **The "why" sheet** — a one-tap **ⓘ** per row opens a sheet that leads with the temperature verdict in plain language with this row's values ("🔥 Hot — $4.18 at buy band $4.16 · mean-reversion · vol 1.5×" / "🧊 Stay away — CRITICAL: pump risk"), then lists the 🟢 tailwinds and 🔴 headwinds, then rank context (#k of N + the biggest rank driver). It **replaces the hover-only chip `title` tooltips** — dead on a touch phone — and folds the Glossary's definitions inline against live values. The static Glossary (`?`-icon) stays as the general reference; this is the contextual per-row one.
+
+**Sort & surfacing.** Rows sort by **temperature tier first** (🔥 → 🟡 → cool → 🧊), the composite score (above) as the within-tier tiebreaker — best buys-right-now lead. A default-on **"🔥 hot & near only"** filter keeps the screen to actionable rows; when nothing qualifies it shows an honest *"no hot setups right now — N cooling"* state (never a blank that reads as broken), and a toggle reveals the full ranked list.
+
+**Affordances:** long-press → **Add to one of my watchlists** (writes a `watchlist_items` row) or **Set marker** (prefilled at the band p50). Same sheet pattern as imported rows. Long-press **the ticker symbol** specifically → open Robinhood (`_design-system.md` → Long-press the ticker symbol → Robinhood) — scoped to the symbol so it doesn't collide with the row's add-marker long-press.
 
 ## Gestures
 

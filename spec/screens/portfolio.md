@@ -47,6 +47,8 @@ Each card represents one held position. See `_design-system.md` → TickerCard f
 
 Cards without any signal, badge, or risk flag have no signal row — clean, compact.
 
+**Ticker symbol gesture** — long-press / right-click the symbol text → opens Robinhood for that ticker in a new tab (`_design-system.md` → Long-press the ticker symbol → Robinhood). A plain tap on the card still opens TickerDetail.
+
 ## Bottom Navigation Bar
 
 Three tabs (watchlist pivot, 2026-05-28):
