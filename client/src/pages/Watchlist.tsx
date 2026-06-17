@@ -12,6 +12,8 @@ import { Glossary } from '../components/Watchlist/Glossary';
 import { PriceFlicker } from '../components/common/PriceFlicker';
 import { DangerBadge } from '../components/primitives/DangerBadge';
 import { useAllRiskFlags } from '../hooks/useRiskFlags';
+import { useLongPress } from '../hooks/useLongPress';
+import { openRobinhood } from '../utils/robinhood';
 import type { RiskFlagRow } from '../utils/riskFlags';
 import { apiFetch } from '../services/supabase';
 import { formatCurrency, formatSignedPercent } from '../utils/formatters';
@@ -394,6 +396,7 @@ function ItemRow({
 }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
+  const symbolPress = useLongPress(() => openRobinhood(item.symbol));
 
   const start = () => {
     longPressFired.current = false;
@@ -433,7 +436,9 @@ function ItemRow({
     >
       <div className="watchlist-item-main">
         <div className="watchlist-item-left">
-          <span className="watchlist-item-sym">{item.symbol}</span>
+          <span className="watchlist-item-sym ticker-symbol-pressable" title="Long-press → Robinhood" {...symbolPress}>
+            {item.symbol}
+          </span>
           {item.company_name && (
             <span className="watchlist-item-co" title={item.company_name}>
               {item.company_name}

@@ -1712,3 +1712,12 @@
 .why-factor-label { color: var(--text-primary); }
 .why-factor-detail { color: var(--text-tertiary); }
 .why-rank-line { margin: 0; font-size: var(--fs-11); color: var(--text-secondary); }
+
+/* Long-pressable ticker symbol → Robinhood (Batch X13). Suppress the iOS native
+   long-press callout / text selection so our gesture owns the press. */
+.ticker-symbol-pressable {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+}

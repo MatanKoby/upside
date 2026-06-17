@@ -4,6 +4,8 @@ import type { VirtualRow } from '../../hooks/useVirtualList';
 import type { ReasonChip } from '../../config/virtualList';
 import type { RiskFlagRow } from '../../utils/riskFlags';
 import { type EntryTemp, TEMP_META } from '../../utils/entryTemperature';
+import { useLongPress } from '../../hooks/useLongPress';
+import { openRobinhood } from '../../utils/robinhood';
 import { MiniSparkline } from './MiniSparkline';
 import { PriceFlicker } from '../common/PriceFlicker';
 import { DangerBadge } from '../primitives/DangerBadge';
@@ -84,6 +86,8 @@ export function VirtualListRow({
     onLongPress();
   };
 
+  const symbolPress = useLongPress(() => openRobinhood(row.symbol));
+
   const band = row.band;
   const volScalar = band?.volScalar ?? null;
 
@@ -105,7 +109,11 @@ export function VirtualListRow({
               {TEMP_META[temp].glyph}
             </span>
           )}
-          <span className="watchlist-item-sym">
+          <span
+            className="watchlist-item-sym ticker-symbol-pressable"
+            title="Long-press → Robinhood"
+            {...symbolPress}
+          >
             {row.justFired && (
               <IconBolt size={13} stroke={2} className="virtual-fired-icon" aria-label="just fired" />
             )}

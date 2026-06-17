@@ -6,6 +6,8 @@ import { PriceFlicker } from '../common/PriceFlicker';
 import { SignalPill } from '../primitives/SignalPill';
 import { DangerBadge } from '../primitives/DangerBadge';
 import { useSparkline } from '../../hooks/useSparkline';
+import { useLongPress } from '../../hooks/useLongPress';
+import { openRobinhood } from '../../utils/robinhood';
 import type { ActiveSignal } from '../../hooks/useSignals';
 import type { RiskFlagRow } from '../../utils/riskFlags';
 import {
@@ -53,6 +55,7 @@ export function PositionCard({
   };
 
   const goToDetail = () => navigate(`/ticker/${position.symbol}`);
+  const symbolPress = useLongPress(() => openRobinhood(position.symbol));
 
   const actionable = signals.filter((s) => s.type !== 'no_signal');
   const inZone = position.zoneEnteredAt != null;
@@ -62,7 +65,9 @@ export function PositionCard({
       <button className="position-card-body" onClick={goToDetail} type="button">
         <div className="position-card-row">
           <div className="position-card-left">
-            <div className="ticker">{position.symbol}</div>
+            <div className="ticker ticker-symbol-pressable" title="Long-press → Robinhood" {...symbolPress}>
+              {position.symbol}
+            </div>
             <div className="company">{position.name}</div>
           </div>
           <div className="position-card-center">
