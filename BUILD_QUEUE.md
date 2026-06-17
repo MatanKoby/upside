@@ -15,7 +15,52 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch ARCH-10** (fix the live `curated_list` freeze — an ~8-day outage of the virtual lists — and ship the IB-reconnect staleness-catch-up trigger) · **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
+
+---
+
+## Batch ARCH-10: IB-reconnect staleness catch-up + curated_list bigint-ADV freeze fix
+
+**Depends on:** ARCH-9 (the `defineCron` scheduler primitive — shipped).
+**Spec:** `spec/flows.md` → Connect/Disconnect Flow → *Reconnect → staleness catch-up*; `spec/signals/curated-list.md` → Persistence.
+
+Two parts. Part 1 is a small, independently-shippable bug fix for a **live outage**; Part 2 is the reconnect trigger the rest of the spec describes. They co-ship because both are "make stale data refresh," but Part 1 has no dependency on Part 2 — land it first.
+
+### Part 1 — `curated_list` freeze fix (the live outage)
+
+`curatedListCron.tick` has thrown on **every** run for ~8 days: `dailyMetrics` computes `medAdv = median(vols)`, which is `.5`-fractional for an even-count volume window, and that flows unrounded into the **`bigint`** `avg_daily_volume` column → `invalid input syntax for type bigint: "1485209.5"` → upsert throws → the whole rebuild aborts → no rows written. The X9 staleness badge correctly surfaced "as of <old date>" the whole time; the write was simply broken. This is **IB-independent** (curated is Polygon-fed since X4).
+
+- **Fix:** round the median ADV to whole shares before persist (in `dailyMetrics` where `medAdv` is computed; ADV = integer shares semantically). Optionally also coerce at the `curatedListTableModule.replaceForDate` boundary as a belt-and-suspenders guard against any other fractional volume source.
+- **Verify:** after one tick, `select max(asof_date) from curated_list` = today and the row count is non-zero; no further `invalid input syntax for type bigint` in `#upside-errors`. Backfill is automatic — the next cadence tick (or a Part-2 reconnect trigger, though curated is *not* IB-triggered) rebuilds.
+
+### Part 2 — IB-reconnect staleness catch-up
+
+On every return to `authenticated + connected`, immediately refresh the **IB-dependent** producers instead of waiting out their 12–24h boot-relative cadence.
+
+1. **`trigger()` on the `defineCron` handle** (`server/src/kernel/scheduler.ts`) — runs the body once now, through the same gates + single-flight `loop()`, **without** rescheduling/disturbing the periodic timer; a no-op if a tick is already in flight (single-flight). Unit-test on fake timers (`scheduler.test.ts`): body runs once on trigger, periodic cadence intact, no overlap.
+2. **`freshnessGate(check)` factory** (`server/src/cron/gates.ts`) — a composable `Gate` that skips the tick when the feed is already fresh. Each IB-fed producer adopts it, so a reconnect trigger is a cheap no-op when fresh and a full rebuild when stale. This is the "check stale data" step, owned per-cron (no central staleness registry).
+3. **Reconnect edge detection** in `keepalive.tickle` (the 30s IB heartbeat) — remember the last `authenticated && connected`; on a `false→true` flip, invoke a reconnect handler. Edge-triggered (covers explicit Connect, nightly-relogin recovery, and external-kill recovery; steady/flapping-while-connected costs nothing).
+4. **Reconnect handler** — `.trigger()` each registered IB-dependent cron, **staggered** (small offset between triggers) to avoid a burst of IB history calls (a single tick has issued 35 in a minute).
+5. **Register the IB-dependent producers**: `ibPricePoller` catch-up (already restarted at Connect step 9), `intradayStatsCron`, the band engine, entry-zone bar refresh. Migrate any of these still on a hand-rolled `setTimeout` loop onto `defineCron` so they expose `.trigger()` and adopt `freshnessGate`.
+
+**Decisions resolved (the three forks):** blast radius = IB-dependent crons only; thundering herd = staggered triggers; freshness = per-cron gate, no central registry.
+
+### Explicitly out of scope
+- `curatedListCron` / `daily_bars` ingestion are **Polygon-fed** → **not** registered for the reconnect trigger (curated gets only the Part-1 fix). A reconnect must not kick them.
+- The FE staleness "as of <date>" badge (X9) — already correct, no change.
+- The `post_earnings_drift` 24h-cadence staleness (separate; if it has its own failure, file a follow-up — don't fold it in here).
+
+### Files this batch creates/edits
+- `server/src/cron/curatedListCron.ts` (round ADV) — and/or `server/src/services/curatedList/buildCuratedList.ts` / `adapters/supabase/curatedListTableModule.ts` for the persist-boundary guard.
+- `server/src/kernel/scheduler.ts` + `scheduler.test.ts` (`trigger()`).
+- `server/src/cron/gates.ts` (`freshnessGate`).
+- `server/src/cron/keepalive.ts` (edge detect + reconnect handler) — or a small new `server/src/cron/ibReconnect.ts` wiring module.
+- The IB-dependent producer files that register / migrate onto `defineCron`.
+
+### Verification
+- **Part 1:** as above (curated rebuilds today; no bigint throw).
+- **Part 2 (unit):** `trigger()` fake-timer test; `freshnessGate` skips-when-fresh test; reconnect handler fires once on the `false→true` edge, no-ops while steady-connected.
+- **Part 2 (live):** disconnect then reconnect IB → registered producers' `computed_at` jumps within seconds (staggered) **without** waiting the full cadence; fresh feeds are skipped; no IB-history burst beyond the stagger budget; no errors in `#upside-errors`.
 
 ---
 
