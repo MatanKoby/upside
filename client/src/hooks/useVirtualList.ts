@@ -60,6 +60,7 @@ export interface VirtualRow {
   hitRate: { pct: number; sample: number } | null; // null = no graded fires in 30d
   news: VirtualNews | null; // today's news sentiment (Batch X7), null = no news
   score: number; // composite rank value (descending)
+  rankDrivers: { label: string; value: number }[]; // positive rank terms, desc (Batch X12) — why it ranks here
 }
 
 function num(v: unknown): number | null {
@@ -329,25 +330,28 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
         const news = newsByConid.get(conid) ?? null;
         const newsTerm = (news?.score ?? 0) * NEWS_RANK_SCALE; // good lifts / bad sinks
 
-        let score: number;
+        // Decompose the composite into named, weighted terms so the row can
+        // explain *why* it ranks where it does (Batch X12 why-sheet). The score
+        // is the sum of the terms — identical to the prior closed-form.
+        const terms: { label: string; value: number }[] = [];
         if (kind === 'intraday') {
           const w = INTRADAY_WEIGHTS;
-          score =
-            w.character * a.character +
-            w.catalyst * a.catalyst +
-            w.fired * (justFired ? 100 : 0) +
-            w.hitRate * hr +
-            w.news * newsTerm;
+          terms.push({ label: 'Dip character', value: w.character * a.character });
+          terms.push({ label: 'Catalyst', value: w.catalyst * a.catalyst });
+          terms.push({ label: 'Just fired', value: w.fired * (justFired ? 100 : 0) });
+          terms.push({ label: 'Hit-rate', value: w.hitRate * hr });
+          terms.push({ label: 'News', value: w.news * newsTerm });
         } else {
           const w = SWING_WEIGHTS;
-          score =
-            w.postEarnings * a.postEarnings +
-            w.catalyst * a.catalyst +
-            w.character * a.character +
-            w.fired * (justFired ? 100 : 0) +
-            w.hitRate * hr +
-            w.news * newsTerm;
+          terms.push({ label: 'Post-earnings drift', value: w.postEarnings * a.postEarnings });
+          terms.push({ label: 'Catalyst', value: w.catalyst * a.catalyst });
+          terms.push({ label: 'Dip character', value: w.character * a.character });
+          terms.push({ label: 'Just fired', value: w.fired * (justFired ? 100 : 0) });
+          terms.push({ label: 'Hit-rate', value: w.hitRate * hr });
+          terms.push({ label: 'News', value: w.news * newsTerm });
         }
+        const score = terms.reduce((s, t) => s + t.value, 0);
+        const rankDrivers = terms.filter((t) => t.value > 0).sort((p, q) => q.value - p.value);
 
         out.push({
           conid,
@@ -366,6 +370,7 @@ export function useVirtualList(kind: VirtualKind): { rows: VirtualRow[]; loading
           hitRate,
           news,
           score,
+          rankDrivers,
         });
       }
 

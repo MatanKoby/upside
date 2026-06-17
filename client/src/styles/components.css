@@ -1646,4 +1646,69 @@
 .virtual-row .reason-chip,
 .virtual-row .band-chip,
 .virtual-row .news-chip,
-.virtual-row .hit-rate { white-space: nowrap; }
+.virtual-row .hit-rate,
+.virtual-row .factor-flags { white-space: nowrap; }
+
+/* ── Entry temperature + factor flags + why-sheet (Batch X12) ───────────── */
+
+/* 🔥/🟡/🧊 temperature glyph — leads the row so the best buys-now pop. */
+.temp-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-right: 4px; font-size: 13px; line-height: 1; vertical-align: -1px;
+}
+.temp-badge-hot { filter: saturate(1.15); }
+
+/* 🟢 N tailwinds / 🔴 M headwinds tally — counts only; the why-sheet itemises. */
+.factor-flags { display: inline-flex; align-items: center; gap: 3px; }
+.factor-flag {
+  display: inline-flex; align-items: center; gap: 1px;
+  font-size: 10px; line-height: 1.2; font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* ⓘ why button — opens the per-row explanation sheet. */
+.why-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px; margin-left: 1px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-tertiary); border-radius: var(--radius-pill);
+}
+.why-btn:hover { color: var(--text-secondary); background: var(--bg-elevated); }
+
+/* Hot-first filter bar above the leaderboard. */
+.virtual-filter-bar {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-8);
+}
+.virtual-filter-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: var(--radius-pill);
+  font-size: var(--fs-11); cursor: pointer;
+  background: var(--bg-elevated); color: var(--text-secondary);
+  border: 0.5px solid var(--border);
+}
+.virtual-filter-toggle.is-active {
+  background: var(--pill-buy-bg); color: var(--pill-buy-text);
+  border-color: transparent; font-weight: var(--fw-medium);
+}
+.virtual-filter-count { font-size: 10px; color: var(--text-tertiary); }
+
+/* Per-row "why" sheet — reuses .sheet-backdrop / .sheet. */
+.why-sheet-sub { color: var(--text-tertiary); font-weight: 400; }
+.why-verdict {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8); border-radius: var(--radius-md, 8px);
+  background: var(--bg-elevated); border-left: 3px solid var(--border);
+}
+.why-verdict-hot  { border-left-color: var(--pill-buy-text); }
+.why-verdict-near { border-left-color: var(--pill-watch-text); }
+.why-verdict-ice  { border-left-color: var(--pill-sell-text); }
+.why-verdict-cool { border-left-color: var(--border); }
+.why-verdict-glyph { font-size: 22px; line-height: 1; }
+.why-verdict-label { font-size: var(--fs-13, 13px); font-weight: var(--fw-medium); }
+.why-verdict-reason { font-size: var(--fs-11); color: var(--text-secondary); }
+.why-factor-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.why-factor-list li { font-size: var(--fs-11); }
+.why-factor-label { color: var(--text-primary); }
+.why-factor-detail { color: var(--text-tertiary); }
+.why-rank-line { margin: 0; font-size: var(--fs-11); color: var(--text-secondary); }

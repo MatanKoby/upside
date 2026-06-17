@@ -1,8 +1,9 @@
 import { useRef } from 'react';
-import { IconBolt } from '@tabler/icons-react';
+import { IconBolt, IconInfoCircle } from '@tabler/icons-react';
 import type { VirtualRow } from '../../hooks/useVirtualList';
 import type { ReasonChip } from '../../config/virtualList';
 import type { RiskFlagRow } from '../../utils/riskFlags';
+import { type EntryTemp, TEMP_META } from '../../utils/entryTemperature';
 import { MiniSparkline } from './MiniSparkline';
 import { PriceFlicker } from '../common/PriceFlicker';
 import { DangerBadge } from '../primitives/DangerBadge';
@@ -39,13 +40,21 @@ function bandChipTitle(band: NonNullable<VirtualRow['band']>): string {
 export function VirtualListRow({
   row,
   risk,
+  temp,
+  tailwindCount,
+  headwindCount,
   onTap,
   onLongPress,
+  onWhy,
 }: {
   row: VirtualRow;
   risk: RiskFlagRow | null;
+  temp: EntryTemp;
+  tailwindCount: number;
+  headwindCount: number;
   onTap: () => void;
   onLongPress: () => void;
+  onWhy: () => void;
 }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
@@ -91,6 +100,11 @@ export function VirtualListRow({
     >
       <div className="watchlist-item-main">
         <div className="watchlist-item-left">
+          {TEMP_META[temp].glyph && (
+            <span className={`temp-badge temp-badge-${temp}`} title={TEMP_META[temp].label} aria-label={TEMP_META[temp].label}>
+              {TEMP_META[temp].glyph}
+            </span>
+          )}
           <span className="watchlist-item-sym">
             {row.justFired && (
               <IconBolt size={13} stroke={2} className="virtual-fired-icon" aria-label="just fired" />
@@ -120,6 +134,20 @@ export function VirtualListRow({
           )}
           <NewsChip news={row.news} />
           <HitRate hitRate={row.hitRate} />
+          <FactorFlags tailwinds={tailwindCount} headwinds={headwindCount} />
+          <button
+            type="button"
+            className="why-btn"
+            title="Why this row"
+            aria-label="Why this row"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onWhy();
+            }}
+          >
+            <IconInfoCircle size={14} stroke={1.75} />
+          </button>
         </div>
       </div>
       <div className="watchlist-item-right">
@@ -152,6 +180,28 @@ function NewsChip({ news }: { news: VirtualRow['news'] }) {
       title={news.headline ?? `News skews ${news.label} (${news.score.toFixed(2)})`}
     >
       news {arrow}
+    </span>
+  );
+}
+
+// Factor-flag counts (Batch X12) — a 🟢 tailwind / 🔴 headwind tally rolling up
+// every for/against signal on the row. The full itemised list lives in the
+// why-sheet (the ⓘ); this is just the at-a-glance balance. Renders nothing when
+// the row has no classified factors either way.
+function FactorFlags({ tailwinds, headwinds }: { tailwinds: number; headwinds: number }) {
+  if (tailwinds === 0 && headwinds === 0) return null;
+  return (
+    <span className="factor-flags">
+      {tailwinds > 0 && (
+        <span className="factor-flag factor-flag-tail" title={`${tailwinds} tailwind${tailwinds === 1 ? '' : 's'}`}>
+          🟢{tailwinds}
+        </span>
+      )}
+      {headwinds > 0 && (
+        <span className="factor-flag factor-flag-head" title={`${headwinds} headwind${headwinds === 1 ? '' : 's'}`}>
+          🔴{headwinds}
+        </span>
+      )}
     </span>
   );
 }

@@ -58,3 +58,13 @@ export const HIT_RATE_DEF = {
   intraday_dip_bounce: { offset: '+2h', thresholdPct: 1 },
   swing_dip_bounce: { offset: '+3d', thresholdPct: 5 },
 } as const;
+
+// Entry-temperature thresholds (Batch X12) — position within the walking-band
+// channel [low_band, high_band]: 0 at the buy band, 1 at the sell band. See
+// spec/screens/watchlist.md → Reading a row. Tunable; FE-side presentation only.
+export const NEAR_BAND_FRAC = 0.33; // band position ≤ this → 🟡 near (approaching the buy band)
+export const EXTENDED_BAND_FRAC = 0.8; // band position ≥ this → 🧊 extended (no dip left to buy)
+
+// Rolling-30d hit-rate tiers that promote/demote a row in the factor-flag tally.
+export const GOOD_HIT_PCT = 55; // ≥ → a 🟢 tailwind
+export const LOW_HIT_PCT = 40; // < → a 🔴 headwind
