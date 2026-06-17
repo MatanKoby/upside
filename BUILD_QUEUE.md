@@ -15,30 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X13** (ticker→Robinhood long-press; small) · **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
-
----
-
-## Batch X13: Ticker symbol → Robinhood long-press
-
-**Depends on:** none outstanding. **FE-only**, small. Design: `spec/screens/_design-system.md` → Long-press the ticker symbol → Robinhood. Shares `VirtualListRow.tsx` / `pages/Watchlist.tsx` with X12 — **don't run in parallel** (sequence after or before X12).
-
-**Why:** the user wants to jump from a ticker to Robinhood fast. Long-press the **symbol** → `https://robinhood.com/stocks/<symbol-lowercased>/` in a new tab, on all three card surfaces.
-
-### Deliverables
-1. **URL builder** (`client/src/utils/robinhood.ts`, new + test) — `robinhoodUrl(symbol)` → lowercased path; handle dotted classes (`BRK.B`) sanely.
-2. **Reliable new-tab open** — open via an `<a target="_blank" rel="noopener">` clicked synchronously inside the gesture handler (long-press isn't a "click" → `window.open` is popup-blocked on iOS).
-3. **Symbol-scoped long-press** — attach a long-press (touch) / right-click (desktop) handler to the **symbol element** in `VirtualListRow.tsx`, the imported `ItemRow` (`pages/Watchlist.tsx`), and `PositionCard.tsx`. `stopPropagation` so on watchlist rows the row-level add-marker long-press still works; a plain tap on the symbol still → TickerDetail. *(Optional cleanup: extract the duplicated long-press timer logic into a shared `useLongPress` hook.)*
-
-### Files this batch creates/edits
-- `client/src/utils/robinhood.ts` (new + `.test.ts`), `client/src/components/Watchlist/VirtualListRow.tsx`, `client/src/pages/Watchlist.tsx` (`ItemRow`), `client/src/components/PortfolioHome/PositionCard.tsx`, optionally `client/src/hooks/useLongPress.ts` (new).
-
-### Does NOT touch
-- Any server/schema. The add-marker / tap-to-detail behaviors (only *adds* the symbol-scoped gesture).
-
-### Verification
-- URL-builder unit test. `tsc --noEmit` + vitest green.
-- User-driven: long-press a symbol on each surface (virtual row, imported row, portfolio card) on a phone → Robinhood opens in a new tab; row long-press still opens the marker sheet; tap still opens detail.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 

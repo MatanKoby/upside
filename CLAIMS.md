@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X13 — Ticker symbol → Robinhood long-press
-- Owner: claude
-- Started: 2026-06-17 15:10
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,19 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X13 — Ticker symbol → Robinhood long-press (2026-06-17)
+- Owner: claude
+- Started: 2026-06-17 15:10
+- Finished: 2026-06-17 15:53
+- Commit: `4885c83`
+
+**What shipped.** Long-press (touch) / right-click (desktop) the **ticker symbol** on any TickerCard surface → opens `https://robinhood.com/stocks/<symbol-lowercased>/` in a new tab.
+- **`client/src/utils/robinhood.ts` (new)** — `robinhoodUrl()` (lowercased, `encodeURIComponent`-guarded; dotted classes like BRK.B resolve) + `openRobinhood()` that clicks a synchronously-created `<a target=_blank rel=noopener>` — a long-press isn't a "click" so `window.open` is popup-blocked on iOS.
+- **`client/src/hooks/useLongPress.ts` (new)** — symbol-scoped press handler: `stopPropagation` on pointerdown/up keeps the *row's* long-press (add-marker) from starting; the trailing click is swallowed **only when the long-press fired**, so a plain tap on the symbol still bubbles to the row (tap → TickerDetail). `onContextMenu` covers desktop right-click.
+- Wired the symbol element on `VirtualListRow`, the imported `ItemRow` (`pages/Watchlist.tsx`), and `PositionCard`. `.ticker-symbol-pressable` sets `-webkit-touch-callout/user-select: none` so iOS doesn't hijack the press with its native text-selection callout.
+
+`tsc --noEmit` + `vite build` green. **Verification owed:** user-driven — long-press a symbol on each surface (phone) → Robinhood opens; row long-press still opens the marker sheet; tap still opens detail. Design: `spec/screens/_design-system.md` → Long-press the ticker symbol → Robinhood.
 
 ### Batch X12 — Virtual-list explainability (entry temperature + factor flags + why-sheet) (2026-06-17)
 - Owner: claude
