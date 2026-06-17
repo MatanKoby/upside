@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch ARCH-10 — IB-reconnect staleness catch-up + curated_list bigint-ADV fix
-- Owner: claude
-- Started: 2026-06-17 09:46
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,48 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch ARCH-10 — IB-reconnect staleness catch-up + curated_list bigint-ADV freeze fix (2026-06-17)
+- Owner: claude
+- Started: 2026-06-17 09:46
+- Finished: 2026-06-17 10:04
+- Commits: `d708014` (Part 1 curated fix) · `ab23c29` (Part 2 reconnect trigger) · `444b94f` (spec reconcile)
+
+**What shipped.**
+
+**Part 1 — curated_list freeze fix (live outage).** `curatedListCron` had thrown on
+every tick for ~8 days: `dailyMetrics` median ADV is `.5`-fractional on even-count
+windows and hit the `bigint` `avg_daily_volume` column → `invalid input syntax for
+type bigint` → the upsert aborted the whole rebuild (also killing the downstream
+retention + quote-seed steps). Fixed by `Math.round` at the source (`dailyMetrics`)
+**and** at the sole-writer boundary (`curatedListTableModule.replaceForDate`).
+IB-independent (curated is Polygon-fed) — so the reconnect trigger does NOT touch it.
+
+**Part 2 — IB-reconnect staleness catch-up.**
+- `kernel/scheduler.ts`: `CronHandle.trigger()` — runs the body once now via a
+  `running`-guarded `runOnce` (single-flight across the periodic loop ∥ trigger),
+  without disturbing the cadence timer.
+- `cron/gates.ts`: `freshnessGate(isFresh)` — skip when fresh, so a trigger is a
+  no-op when fresh / a rebuild when stale (per-cron staleness, no central registry).
+- `cron/ibReconnect.ts` (new): registry (`onIbReconnect`) + staggered `fireIbReconnect`
+  (3s spacing) + `detectIbReconnect` edge detector, driven off the keepalive 30s
+  tickle → covers every connect path (Connect, nightly re-login, external-kill).
+- Wired: `postEarningsDriftProducer` migrated onto `defineCron` w/ freshnessGate +
+  registered (swing-list feed); `catalystReversalProducer.produce` registered.
+
+**Verification.** Typecheck clean (incl. scripts tsconfig); 245/245 (+10: scheduler
+trigger ×4, freshnessGate ×2, ibReconnect ×4).
+
+**Live prereq — needs a VPS deploy** (backend is manual-deploy per `architecture.md`):
+`git pull && docker compose up -d --build api`. Post-deploy verify: `select
+max(asof_date) from curated_list` = today + no `invalid input syntax for type bigint`
+in #upside-errors; disconnect/reconnect IB → post_earnings_drift / catalyst
+trait_scores `computed_at` jumps within seconds.
+
+**Deferred (surfaced, not silent).** Broader IB-cron migration+registration —
+`intradayStatsCron`, `bandEngineCron`, entry-zone bar refresh — onto `defineCron`
+for reconnect (the ARCH-9 "remaining ~20 crons" follow-up). `ibPricePoller` already
+restarts via the Connect flow (step 9), so left out. Worth its own follow-up batch.
 
 ### Batch ARCH-9 — Scheduler primitive (Phase 3): defineCron reference set (2026-06-12)
 - Owner: claude
