@@ -15,34 +15,7 @@ Agent work tracking: `CLAIMS.md` (managed by coding agents)
 
 ## Un-done batches
 
-> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X12** (virtual-list explainability — 🔥/🧊 entry temperature + 🟢/🔴 factor flags + per-row why-sheet + hot-first sort; user-requested 2026-06-17) · **Batch X13** (ticker→Robinhood long-press; small, shares row files with X12 so don't run them in parallel) · **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
-
----
-
-## Batch X12: Virtual-list explainability — entry temperature + factor flags + why-sheet
-
-**Depends on:** the live Intraday/Swing virtual lists (shipped, X1–X11). **FE-only** — no schema/engine/server work; everything derives from data `useVirtualList` already pulls. Full design: `spec/screens/watchlist.md` → Reading a row. Shares row files with X13 — **don't run the two in parallel.**
-
-**Why:** the lists rank best-first but surface none of it — the user can't tell which rows are good buys *right now* or what the terse chips mean (their explanations sit in hover `title`s, dead on touch). Make "is this a buy this moment" + "why" legible.
-
-### Deliverables
-
-1. **Entry-temperature util** (`client/src/utils/entryTemperature.ts`, new, + test) — pure `(quote, band, justFired, risk) → { temp: 'hot'|'near'|'cool'|'ice'; reason: string }`. 🔥 hot = price ≤ `current_low_band` *or* a live fire, **and** no CRITICAL risk; 🟡 near = lower band channel; 🧊 ice = CRITICAL risk *or* price extended near `current_high_band`. **Fresh-price gate:** a stale/seeded price (non-fresh `canonical_source`/age) can never be 🔥 (mirror `dip-bounce-scorer.md` → Fresh-price firing gate). Thresholds as named constants in `config/virtualList.ts`.
-2. **Factor-flag util** (same file or sibling, + test) — classify the row's signals into `tailwinds[]` / `headwinds[]` (each `{ label, value }`): reasons, band position, news lean, hit-rate, regime, each active risk flag. Badge counts = list lengths.
-3. **Rank-contribution surfacing** — extend `useVirtualList` to also return each row's per-term weighted contributions (it already computes the terms for `score`; stop discarding them) so the why-sheet can name the biggest rank driver.
-4. **Row badges** (`VirtualListRow.tsx`) — render the 🔥/🟡/🧊 temperature glyph + 🟢 *N* / 🔴 *M* flag counts + a one-tap **ⓘ**; keep the existing chips.
-5. **Why-sheet** (`client/src/components/Watchlist/WhySheet.tsx`, new) — sheet (reuse the MarkerSheet backdrop pattern) leading with the temperature verdict in plain language + this row's values, then 🟢 tailwinds / 🔴 headwinds itemized, then rank context (#k of N + biggest driver). The contextual complement to the static Glossary (which stays).
-6. **Sort & filter** (`VirtualList.tsx`) — sort by temperature tier first (🔥→🟡→cool→🧊), composite as within-tier tiebreaker. Default-on **"🔥 hot & near only"** toggle; honest *"no hot setups right now — N cooling"* empty state (never a blank); toggle reveals the full ranked list.
-
-### Files this batch creates/edits
-- `client/src/utils/entryTemperature.ts` (new + `.test.ts`), `client/src/config/virtualList.ts` (thresholds), `client/src/hooks/useVirtualList.ts` (return term contributions), `client/src/components/Watchlist/VirtualListRow.tsx`, `client/src/components/Watchlist/VirtualList.tsx`, `client/src/components/Watchlist/WhySheet.tsx` (new), `client/src/styles/*` (badges/sheet).
-
-### Does NOT touch
-- Any server/cron/schema. Imported-list rows (`ItemRow`) — temperature is virtual-list-only for v1. The Glossary.
-
-### Verification
-- Unit tests for the temperature + factor-flag utils (boundary cases: at band, extended, CRITICAL-overrides-hot, stale-price-never-hot). `tsc --noEmit` + vitest green.
-- User-driven UI check (`feedback_user_drives_ui_testing`): on a populated list, 🔥 rows lead, the ⓘ sheet reads clearly, the hot/near filter + empty state behave.
+> **Pick-order pointer for "continue".**  **Remaining un-done**, rough priority: **Batch X13** (ticker→Robinhood long-press; small) · **Batch X10.3** `[TIMED — US RTH]` (verify the catalyst pipeline end-to-end after the X10.x deploy; only meaningful 16:30–23:00 IDT with IB connected) · **Batch X8** (signal lab — measure/tune/explain the live engine signals) · **Batch 13.9** (Finnhub cadence tuning — unblocked, all live callers exist) · **Batch C remainder** (per-marker cooldown UI, `at_or_above` channel routing, stats-alert second trigger) · **Batch ARCH** (architecture review + research sweep — incl. a job/task trigger + precondition coverage audit) · **Batch 16** (UI/UX polish + a11y — now incl. the shared global app header; push moved to roadmap). **Blocked / deferred:** 13.3 (waiting on IBKR support reply re secondary-user market-data cost). When the user types "continue" after a context clear, **ask** which un-done batch to claim.
 
 ---
 

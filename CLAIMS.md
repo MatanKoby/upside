@@ -8,9 +8,7 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 
 ## In progress
 
-### Batch X12 — Virtual-list explainability (entry temperature + factor flags + why-sheet)
-- Owner: claude
-- Started: 2026-06-17 11:30
+_(none)_
 
 ## Known issues (deferred fixes)
 
@@ -18,6 +16,22 @@ See `AGENTS.md` for the full claim / finish / handoff / reclaim protocols.
 - **TickerDetail Indicators section empty** — `useTickerDetail` hardcodes `indicators: []`; the data exists on `analyses.indicator_snapshot` but isn't surfaced. Wants a future batch to render the latest analysis's indicators (incl. a pre-Analyze empty state). Spec: `screens/_design-system.md` → Indicators note.
 
 ## Completed
+
+### Batch X12 — Virtual-list explainability (entry temperature + factor flags + why-sheet) (2026-06-17)
+- Owner: claude
+- Started: 2026-06-17 11:30
+- Finished: 2026-06-17 15:08
+- Commit: `8681e20` (work) · `b221636` (spec) · queue `meta` pushed prior
+
+**What shipped.** Make the Intraday/Swing virtual lists answer "what's a good buy *right now*," all **FE-derived** (no schema/engine/server work) from data `useVirtualList` already pulls.
+
+- **`client/src/utils/entryTemperature.ts` (new)** — pure `entryTemperature(rowSignals)` → 🔥 hot (price ≤ `current_low_band` *or* a live fire, **and** no CRITICAL risk; gated on a fresh `canonical_source`, never a seeded `daily` price) · 🟡 near (lower band channel) · 🧊 ice (CRITICAL risk *or* extended ≥ `EXTENDED_BAND_FRAC` of the channel) · cool (default). Plus `factorFlags()` classifying every signal into 🟢 tailwinds / 🔴 headwinds (reasons, band position, news lean, hit-rate, regime, each risk flag). `TEMP_ORDER` + `TEMP_META` exported. Thresholds (`NEAR_BAND_FRAC` 0.33, `EXTENDED_BAND_FRAC` 0.8, `GOOD_HIT_PCT` 55, `LOW_HIT_PCT` 40) in `config/virtualList.ts` — tunable.
+- **`useVirtualList`** — decompose the composite into named `rankDrivers` (the per-term weighted contributions, desc); `score` is now their sum (identical math), so the why-sheet can name the biggest rank driver.
+- **`VirtualListRow`** — temperature glyph leads the symbol; 🟢N/🔴M factor tally + a ⓘ in the chip cluster (ⓘ stops pointer+click propagation so it doesn't trip the row long-press / tap-to-detail).
+- **`WhySheet` (new)** — one-tap per-row sheet: verdict (plain language + this row's values) → itemised 🟢 tailwinds / 🔴 headwinds → rank context. Replaces the touch-dead hover `title` tooltips; complements the static Glossary.
+- **`VirtualList`** — temperature-first sort (composite as the stable within-tier tiebreaker) + default-on "🔥 hot & near only" filter with an honest *"no hot setups right now — N cooling"* state + a "show all" escape.
+
+`tsc --noEmit` + `vite build` green. **Verification still owed:** user-driven UI eyeball on the Vercel preview (most vivid during US RTH with IB connected — needs fresh price + a live walking band to light up 🔥). **Test-infra gap (surfaced, not dropped):** the client has no vitest runner (server-only) and isn't an npm workspace, so the temperature/factor utils — written test-ready — have no unit tests yet; verified via typecheck + build per the project's user-drives-UI norm. Standing up client vitest is its own decision (Batch 16 lists a client test scaffold). Design: `spec/screens/watchlist.md` → Reading a row.
 
 ### Batch ARCH-10 — IB-reconnect staleness catch-up + curated_list bigint-ADV freeze fix (2026-06-17)
 - Owner: claude
